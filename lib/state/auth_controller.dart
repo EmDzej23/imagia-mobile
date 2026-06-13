@@ -6,6 +6,7 @@ import '../api/auth_api.dart';
 import '../api/checkout_api.dart';
 import '../api/user_api.dart';
 import '../core/config.dart';
+import '../services/push_service.dart';
 import '../services/token_storage.dart';
 
 // ── Core service providers ──────────────────────────────────────────────────
@@ -88,6 +89,8 @@ class AuthController extends Notifier<AuthState> {
     final res = await _user.getUser();
     if (res.isOk && res.data != null) {
       state = AuthState.signedIn(res.data!);
+      // Register this device for render-done push notifications.
+      PushService.instance.registerToken(ref.read(apiClientProvider));
     } else {
       await _tokens.clear();
       state = const AuthState.signedOut();

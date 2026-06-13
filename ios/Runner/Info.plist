@@ -24,8 +24,16 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Imagia needs camera access to take a photo for your mosaic.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Imagia needs permission to save your finished mosaic to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Imagia needs access to your photos to choose a base image and tile photos for your mosaic.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -49,6 +57,10 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -66,13 +78,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Imagia needs access to your photos to choose a base image and tile photos for your mosaic.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Imagia needs permission to save your finished mosaic to your photo library.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Imagia needs camera access to take a photo for your mosaic.</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 </dict>
 </plist>

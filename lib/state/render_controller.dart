@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/render_api.dart';
+import '../services/notifications.dart';
 import 'auth_controller.dart';
 import 'studio_controller.dart';
 
@@ -56,6 +57,10 @@ class RenderController extends Notifier<RenderUiState> {
     final base = studio.base;
     if (plan == null || base == null) return;
 
+    // Ask for notification permission now, in context, so we can alert the user
+    // when the (possibly long) render finishes — even if they background the app.
+    NotificationService.instance.requestPermission();
+
     state = const RenderUiState(
         phase: RenderPhase.rendering, message: 'Rendering your mosaic…');
 
@@ -74,7 +79,8 @@ class RenderController extends Notifier<RenderUiState> {
     }
 
     state = state.copyWith(phase: RenderPhase.completed, result: res.data);
-    // A token was consumed — refresh the balance.
+    // Notify (deep-links to the preview) + refresh the consumed token balance.
+    NotificationService.instance.showRenderDone(fileName: res.data!.fileName);
     ref.read(authControllerProvider.notifier).refreshUser();
   }
 

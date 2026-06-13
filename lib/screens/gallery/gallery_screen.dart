@@ -43,11 +43,6 @@ class GalleryScreen extends ConsumerWidget {
               ),
             ),
           IconButton(
-            tooltip: 'Preview latest mosaic',
-            icon: const Icon(Icons.zoom_in),
-            onPressed: () => context.push('/preview'),
-          ),
-          IconButton(
             tooltip: 'Downloads',
             icon: const Icon(Icons.download_outlined),
             onPressed: () => context.push('/downloads'),
@@ -108,8 +103,15 @@ class _ProjectCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return GestureDetector(
       onTap: () {
+        final studio = ref.read(studioControllerProvider);
         ref.read(renderControllerProvider.notifier).reset();
-        ref.read(studioControllerProvider.notifier).loadProject(project.id);
+        // If this project is already open in the studio, jump straight back in
+        // without re-restoring (re-fetching + re-analyzing all its tiles).
+        final alreadyOpen =
+            studio.currentProjectId == project.id && studio.base != null;
+        if (!alreadyOpen) {
+          ref.read(studioControllerProvider.notifier).loadProject(project.id);
+        }
         context.push('/create/studio');
       },
       onLongPress: () => _confirmDelete(context, ref),

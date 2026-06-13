@@ -34,9 +34,9 @@ class MosaicPreviewScreen extends ConsumerStatefulWidget {
 class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
   bool _saving = false;
 
-  /// Display resolution for the zoomable view — high enough to make individual
-  /// tiles visible when zoomed, low enough to stay within memory on a phone.
-  static const _displayMaxSize = 3000;
+  /// Display resolution for the zoomable view — high enough to read individual
+  /// tiles when zoomed deep into the mosaic.
+  static const _displayMaxSize = 10000;
 
   String _imageUrl(String token) =>
       '${AppConfig.apiBaseUrl}/api/mosaic-image/$token?maxSize=$_displayMaxSize';

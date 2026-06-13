@@ -12,6 +12,7 @@ import '../mosaic/shared.dart';
 import '../mosaic/types.dart';
 import '../services/image_service.dart';
 import 'auth_controller.dart';
+import 'library_providers.dart';
 
 const int _maxTiles = 500;
 
@@ -146,12 +147,16 @@ final studioControllerProvider =
 class StudioController extends Notifier<StudioState> {
   final _picker = ImagePicker();
   Timer? _debounce;
+  Timer? _autoSave;
   int _planToken = 0;
   int _restoreToken = 0;
 
   @override
   StudioState build() {
-    ref.onDispose(() => _debounce?.cancel());
+    ref.onDispose(() {
+      _debounce?.cancel();
+      _autoSave?.cancel();
+    });
     return StudioState(settings: defaultSettings());
   }
 
@@ -307,9 +312,50 @@ class StudioController extends Notifier<StudioState> {
       );
       if (token != _planToken) return; // superseded by a newer build
       state = state.copyWith(plan: plan, isPlanning: false);
+      _scheduleAutoSave();
     } catch (e) {
       if (token != _planToken) return;
       state = state.copyWith(isPlanning: false, error: e.toString());
+    }
+  }
+
+  /// Persists the project a short while after the latest plan build, so the
+  /// user's work is saved automatically without a manual Save action. Coalesces
+  /// rapid rebuilds (slider drags) into one write.
+  void _scheduleAutoSave() {
+    _autoSave?.cancel();
+    _autoSave = Timer(const Duration(milliseconds: 2000), _autoSaveProject);
+  }
+
+  Future<void> _autoSaveProject() async {
+    if (!state.canPlan) return;
+    final base = state.base;
+    final tiles =
+        state.tiles.map((t) => ProjectTileRef(t.blobUrl, t.filename)).toList();
+    final api = ref.read(projectsApiProvider);
+    final id = state.currentProjectId;
+    try {
+      if (id != null) {
+        // Update in place — omit name so the user's project name is preserved.
+        await api.update(id,
+            baseImageUrl: base?.blobUrl,
+            baseImageName: base?.name,
+            tiles: tiles,
+            settings: state.settings);
+      } else {
+        final res = await api.create(
+            name: base?.name ?? 'My mosaic',
+            baseImageUrl: base?.blobUrl,
+            baseImageName: base?.name,
+            tiles: tiles,
+            settings: state.settings);
+        if (res.isOk && res.data != null && res.data!.isNotEmpty) {
+          state = state.copyWith(currentProjectId: res.data);
+        }
+      }
+      ref.invalidate(projectsListProvider);
+    } catch (_) {
+      // Auto-save is best-effort; ignore transient failures.
     }
   }
 

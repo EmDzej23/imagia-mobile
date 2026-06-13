@@ -1,8 +1,11 @@
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../state/video_controller.dart';
 import '../../theme/app_colors.dart';
@@ -80,22 +83,19 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
             ),
             const SizedBox(height: AppSpacing.x4),
 
-            // Caption only matters for the reel poster.
-            if (_style == VideoStyle.reelPoster) ...[
-              Text('Caption (optional)', style: AppTypography.label),
-              const SizedBox(height: AppSpacing.x2),
-              TextField(
-                controller: _caption,
-                enabled: !video.isBusy,
-                style: AppTypography.body,
-                decoration: const InputDecoration(
-                  hintText: 'A mosaic of 500 photos',
-                  filled: true,
-                  fillColor: AppColors.surface,
-                ),
+            Text('Caption (optional)', style: AppTypography.label),
+            const SizedBox(height: AppSpacing.x2),
+            TextField(
+              controller: _caption,
+              enabled: !video.isBusy,
+              style: AppTypography.body,
+              decoration: const InputDecoration(
+                hintText: 'A mosaic of 500 photos',
+                filled: true,
+                fillColor: AppColors.surface,
               ),
-              const SizedBox(height: AppSpacing.x4),
-            ],
+            ),
+            const SizedBox(height: AppSpacing.x4),
 
             Row(
               children: [
@@ -139,8 +139,15 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
         final path = video.path!;
         return Column(
           children: [
-            const Icon(Icons.check_circle, color: AppColors.success, size: 56),
-            const SizedBox(height: AppSpacing.x3),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.5),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(AppRadius.card),
+                child: _VideoPreviewPlayer(key: ValueKey(path), path: path),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.x4),
             Text('Your video is ready', style: AppTypography.title),
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(
@@ -190,5 +197,62 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
               style: _style, hd: _hd, caption: _caption.text.trim()),
         );
     }
+  }
+}
+
+/// Auto-playing, looping preview of the generated video.
+class _VideoPreviewPlayer extends StatefulWidget {
+  const _VideoPreviewPlayer({super.key, required this.path});
+  final String path;
+
+  @override
+  State<_VideoPreviewPlayer> createState() => _VideoPreviewPlayerState();
+}
+
+class _VideoPreviewPlayerState extends State<_VideoPreviewPlayer> {
+  late final VideoPlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(File(widget.path))
+      ..setLooping(true)
+      ..setVolume(1)
+      ..initialize().then((_) {
+        if (mounted) {
+          _controller.play();
+          setState(() {});
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_controller.value.isInitialized) {
+      return const AspectRatio(
+        aspectRatio: 9 / 16,
+        child: ColoredBox(
+          color: AppColors.surface,
+          child: Center(
+            child: CircularProgressIndicator(color: AppColors.accent),
+          ),
+        ),
+      );
+    }
+    return GestureDetector(
+      onTap: () => setState(() => _controller.value.isPlaying
+          ? _controller.pause()
+          : _controller.play()),
+      child: AspectRatio(
+        aspectRatio: _controller.value.aspectRatio,
+        child: VideoPlayer(_controller),
+      ),
+    );
   }
 }

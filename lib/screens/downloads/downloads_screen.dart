@@ -83,10 +83,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                   itemBuilder: (context, i) {
                     final d = list[i];
                     final busy = _busyId == d.id;
-                    return InkWell(
-                      onTap: () => context.push('/preview', extra: d),
-                      borderRadius: BorderRadius.circular(AppRadius.card),
-                      child: Container(
+                    return Container(
                       padding: const EdgeInsets.all(AppSpacing.x3),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
@@ -95,7 +92,30 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.image, color: AppColors.textMuted),
+                          ClipRRect(
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.chip),
+                            child: Image.network(
+                              '${AppConfig.apiBaseUrl}/api/mosaic-image/${d.downloadToken}?maxSize=200',
+                              width: 48,
+                              height: 48,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => const SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: Icon(Icons.image,
+                                    color: AppColors.textMuted),
+                              ),
+                              loadingBuilder: (_, child, progress) =>
+                                  progress == null
+                                      ? child
+                                      : const SizedBox(
+                                          width: 48,
+                                          height: 48,
+                                          child: ColoredBox(
+                                              color: AppColors.surfaceRaised)),
+                            ),
+                          ),
                           const SizedBox(width: AppSpacing.x3),
                           Expanded(
                             child: Text(d.fileName,
@@ -112,6 +132,14 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                             )
                           else ...[
                             IconButton(
+                              tooltip: 'Preview',
+                              icon: const Icon(Icons.zoom_in,
+                                  color: AppColors.textSecondary),
+                              onPressed: () =>
+                                  context.push('/preview', extra: d),
+                            ),
+                            IconButton(
+                              tooltip: 'Save to Photos',
                               icon: const Icon(Icons.download,
                                   color: AppColors.textSecondary),
                               onPressed: () => _run(d, (f) async {
@@ -124,16 +152,16 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                               }),
                             ),
                             IconButton(
+                              tooltip: 'Share',
                               icon: const Icon(Icons.ios_share,
                                   color: AppColors.textSecondary),
                               onPressed: () => _run(
                                   d,
-                                  (f) => SharePlus.instance
-                                      .share(ShareParams(files: [XFile(f.path)]))),
+                                  (f) => SharePlus.instance.share(
+                                      ShareParams(files: [XFile(f.path)]))),
                             ),
                           ],
                         ],
-                      ),
                       ),
                     );
                   },

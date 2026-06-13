@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../mosaic/preview_painter.dart';
 import '../../mosaic/types.dart';
-import '../../state/library_providers.dart';
 import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
 import '../../state/video_controller.dart';
@@ -61,6 +60,59 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   void _removeTile(String id) {
     _controller.removeTile(id);
     _controller.buildPlan();
+  }
+
+  void _onExport(BuildContext context, bool canRender) {
+    if (canRender) {
+      ref.read(renderControllerProvider.notifier).reset();
+      context.push('/create/export');
+      return;
+    }
+    // No tokens — explain and offer to buy.
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceRaised,
+        title: Text('You’re out of tokens', style: AppTypography.title),
+        content: Text(
+          'A full-quality export costs 1 token. Building and previewing your '
+          'mosaic is free — you only spend a token when you export.',
+          style: AppTypography.body,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Not now')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              context.push('/account');
+            },
+            child: const Text('Buy tokens'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTokenInfo(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surfaceRaised,
+        title: Text('Export & tokens', style: AppTypography.title),
+        content: Text(
+          'Each full-quality export renders your mosaic at high resolution on '
+          'our servers and costs 1 token. Designing, previewing, and creating '
+          'videos are all free — tokens are only used at export.',
+          style: AppTypography.body,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
+        ],
+      ),
+    );
   }
 
   /// Loupe popup: a magnified window of the mosaic centered on the tapped point.
@@ -122,17 +174,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     void update(MosaicSettings s) => _controller.updateSettings(s);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Studio'),
-        actions: [
-          IconButton(
-            tooltip: 'Save project',
-            icon: const Icon(Icons.bookmark_border),
-            onPressed:
-                studio.canPlan ? () => _saveProject(context, ref) : null,
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Studio')),
       body: SafeArea(
         child: Column(
           children: [
@@ -288,19 +330,24 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                           update(settings.copyWith(autoContrast: v)),
                     ),
                     const SizedBox(height: AppSpacing.x4),
-                    PrimaryButton(
-                      label:
-                          canRender ? 'Export full quality' : 'Buy a token to export',
-                      onPressed: studio.plan == null
-                          ? null
-                          : () {
-                              if (!canRender) {
-                                context.push('/account');
-                                return;
-                              }
-                              ref.read(renderControllerProvider.notifier).reset();
-                              context.push('/create/export');
-                            },
+                    Row(
+                      children: [
+                        Expanded(
+                          child: PrimaryButton(
+                            label: 'Export full quality (1)',
+                            onPressed: studio.plan == null
+                                ? null
+                                : () => _onExport(context, canRender),
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.x2),
+                        IconButton(
+                          tooltip: 'About export & tokens',
+                          icon: const Icon(Icons.info_outline,
+                              color: AppColors.textSecondary),
+                          onPressed: () => _showTokenInfo(context),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: AppSpacing.x3),
                     SecondaryButton(
@@ -323,38 +370,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     );
   }
 
-  Future<void> _saveProject(BuildContext context, WidgetRef ref) async {
-    final nameController = TextEditingController(
-        text: ref.read(studioControllerProvider).base?.name ?? 'My mosaic');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surfaceRaised,
-        title: Text('Save project', style: AppTypography.title),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          style: AppTypography.body,
-          decoration: const InputDecoration(hintText: 'Project name'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(context, nameController.text.trim()),
-              child: const Text('Save')),
-        ],
-      ),
-    );
-    if (name == null || name.isEmpty) return;
-    final id = await _controller.saveProject(name);
-    if (id != null) ref.invalidate(projectsListProvider);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(id != null ? 'Project saved' : 'Save failed')));
-    }
-  }
 }
 
 /// Base-photo + tile management strip shown at the top of the controls panel.

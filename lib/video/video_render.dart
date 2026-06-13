@@ -446,6 +446,16 @@ void drawVideoFrame(
   var fx = anim.focusX ?? screenCX;
   var fy = anim.focusY ?? screenCY;
 
+  // Zoom-out: pan the focus from the subject back to the frame centre as the
+  // camera pulls out, so the (letterboxed 9:16) mosaic ends perfectly centred
+  // rather than offset on the subject tile.
+  if (anim.style.isZoomout) {
+    const initial = 10.0;
+    final blend = ((initial - zoom) / (initial - 1.0)).clamp(0.0, 1.0);
+    fx = fx + (screenCX - fx) * blend;
+    fy = fy + (screenCY - fy) * blend;
+  }
+
   const driftStart = 0.82;
   if (!anim.style.isZoomout && zoom <= 1.01 && progress > driftStart) {
     final dt = (progress - driftStart) / (1.0 - driftStart);
@@ -505,6 +515,9 @@ void drawVideoFrame(
   }
 
   canvas.restore();
+  if (anim.caption != null && anim.caption!.isNotEmpty) {
+    _drawCaption(canvas, vw, vh, anim.caption!);
+  }
   _drawFadeOut(canvas, vw, vh, progress);
 }
 

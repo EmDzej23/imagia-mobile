@@ -18,7 +18,7 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1600),
+    duration: const Duration(milliseconds: 2400),
   )..forward();
 
   late final Animation<double> _logoFade = _interval(0.0, 0.5);

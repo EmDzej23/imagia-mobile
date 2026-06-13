@@ -66,7 +66,7 @@ class AuthController extends Notifier<AuthState> {
     // Run the real work concurrently with a minimum delay so the animated
     // splash gets to play before we navigate.
     final minSplash =
-        Future<void>.delayed(const Duration(milliseconds: 1500));
+        Future<void>.delayed(const Duration(milliseconds: 3500));
     final token = await _tokens.read();
     if (token == null) {
       await minSplash;

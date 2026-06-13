@@ -15,6 +15,17 @@ class TileLibraryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Surface upload/ingest failures so they're not silently swallowed.
+    ref.listen(studioControllerProvider.select((s) => s.error), (_, err) {
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(err),
+          backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 8),
+        ));
+      }
+    });
+
     final studio = ref.watch(studioControllerProvider);
     final controller = ref.read(studioControllerProvider.notifier);
     final tiles = studio.tiles;

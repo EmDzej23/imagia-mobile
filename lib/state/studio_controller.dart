@@ -235,6 +235,7 @@ class StudioController extends Notifier<StudioState> {
     // fanning out is far faster than a sequential loop).
     final results = List<TileAsset?>.filled(picked.length, null);
     var done = 0;
+    String? firstError;
 
     Future<void> ingestOne(int i) async {
       final file = picked[i];
@@ -242,21 +243,27 @@ class StudioController extends Notifier<StudioState> {
       try {
         final original = await file.readAsBytes();
         final compressed = await _images.compressTile(original);
+        if (compressed.isEmpty) {
+          firstError ??= 'Could not read image (unsupported format?)';
+          return;
+        }
         final filename = '$id.jpg';
         final upload = await _tilesApi.uploadTile(compressed, id, filename);
-        if (upload.isOk && upload.data != null) {
-          final analyzed =
-              await analyzeTileWithThumbnail(id, filename, compressed);
-          results[i] = TileAsset(
-            id: id,
-            descriptor: analyzed.descriptor,
-            thumbnail: analyzed.thumbnail,
-            blobUrl: upload.data!.blobUrl,
-            filename: filename,
-          );
+        if (!upload.isOk || upload.data == null) {
+          firstError ??= upload.error ?? 'Upload failed';
+          return;
         }
-      } catch (_) {
-        // Skip a failed tile; keep ingesting the rest.
+        final analyzed =
+            await analyzeTileWithThumbnail(id, filename, compressed);
+        results[i] = TileAsset(
+          id: id,
+          descriptor: analyzed.descriptor,
+          thumbnail: analyzed.thumbnail,
+          blobUrl: upload.data!.blobUrl,
+          filename: filename,
+        );
+      } catch (e) {
+        firstError ??= e.toString();
       }
       done++;
       state = state.copyWith(uploadDone: done);
@@ -267,8 +274,13 @@ class StudioController extends Notifier<StudioState> {
           picked.length, _uploadConcurrency, () => false, ingestOne);
     } finally {
       final added = results.whereType<TileAsset>().toList();
+      // Surface a failure only when nothing got added — otherwise a few skipped
+      // tiles shouldn't show an error.
       state = state.copyWith(
-          tiles: [...state.tiles, ...added], isUploadingTiles: false);
+        tiles: [...state.tiles, ...added],
+        isUploadingTiles: false,
+        error: added.isEmpty ? (firstError ?? 'No tiles were added.') : null,
+      );
     }
   }
 

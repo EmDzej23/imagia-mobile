@@ -72,5 +72,7 @@
 	<string>Imagia needs permission to save your finished mosaic to your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Imagia needs camera access to take a photo for your mosaic.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

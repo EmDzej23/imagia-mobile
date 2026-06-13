@@ -14,16 +14,18 @@ import '../services/image_service.dart';
 import 'auth_controller.dart';
 import 'library_providers.dart';
 
-const int _maxTiles = 500;
+const int _maxTiles = 2000;
 
-/// Upload compresses large originals, so cap concurrency to bound peak memory.
-const int _uploadConcurrency = 8;
+/// Upload is network-bound, so fan out widely; compression is serialized
+/// inside [ImageService] (the native codec isn't reentrant) and overlaps with
+/// the in-flight uploads, so a high worker count mostly buys network parallelism.
+const int _uploadConcurrency = 16;
 
 /// Restore fetches tiles via the server batch endpoint: [_restoreBatchSize]
 /// tiles per request (the server's max), [_restoreBatchConcurrency] requests in
 /// flight. One batched request replaces dozens of per-tile round-trips.
 const int _restoreBatchSize = 60;
-const int _restoreBatchConcurrency = 4;
+const int _restoreBatchConcurrency = 6;
 
 class BaseImage {
   BaseImage({
@@ -220,8 +222,19 @@ class StudioController extends Notifier<StudioState> {
 
   Future<void> pickTileImages() async {
     final remaining = _maxTiles - state.tiles.length;
-    if (remaining <= 0) return;
-    final List<XFile> files = await _picker.pickMultiImage();
+    if (remaining <= 0) {
+      state = state.copyWith(
+          error: 'You\'ve reached the $_maxTiles-tile limit. '
+              'Remove some tiles to add more.');
+      return;
+    }
+    final List<XFile> files;
+    try {
+      files = await _picker.pickMultiImage();
+    } catch (e) {
+      state = state.copyWith(error: 'Could not open the photo library: $e');
+      return;
+    }
     if (files.isEmpty) return;
 
     final picked = files.take(remaining).toList();
@@ -281,6 +294,86 @@ class StudioController extends Notifier<StudioState> {
         isUploadingTiles: false,
         error: added.isEmpty ? (firstError ?? 'No tiles were added.') : null,
       );
+    }
+  }
+
+  /// Imports a free sample pack (server-hosted blobs). These already exist on
+  /// the server, so — like a project restore — we only fetch thumbnails to
+  /// analyze locally and reuse each blob URL; nothing is re-uploaded.
+  Future<void> loadSampleTiles(String folder) async {
+    final remaining = _maxTiles - state.tiles.length;
+    if (remaining <= 0) {
+      state = state.copyWith(
+          error: 'You\'ve reached the $_maxTiles-tile limit. '
+              'Remove some tiles to add more.');
+      return;
+    }
+    state = state.copyWith(
+        isUploadingTiles: true, uploadDone: 0, uploadTotal: 0, error: null);
+    try {
+      final listRes = await _tilesApi.sampleTiles(folder);
+      if (!listRes.isOk || listRes.data == null) {
+        state = state.copyWith(
+            isUploadingTiles: false,
+            error: listRes.error ?? 'Could not load samples.');
+        return;
+      }
+      var samples = listRes.data!;
+      if (samples.isEmpty) {
+        state = state.copyWith(
+            isUploadingTiles: false, error: 'No sample tiles found.');
+        return;
+      }
+      if (samples.length > remaining) samples = samples.sublist(0, remaining);
+      state = state.copyWith(uploadTotal: samples.length);
+
+      final results = List<TileAsset?>.filled(samples.length, null);
+      var done = 0;
+
+      final batches = <List<int>>[];
+      for (var s = 0; s < samples.length; s += _restoreBatchSize) {
+        final e = (s + _restoreBatchSize).clamp(0, samples.length);
+        batches.add([for (var i = s; i < e; i++) i]);
+      }
+
+      Future<void> fetchBatch(int b) async {
+        final idxs = batches[b];
+        final urls = [for (final i in idxs) samples[i].blobUrl];
+        final bytesByUrl = await _tilesApi.tileThumbBatch(urls, maxSize: 256);
+        for (final i in idxs) {
+          final sample = samples[i];
+          final bytes = bytesByUrl[sample.blobUrl];
+          if (bytes != null) {
+            try {
+              final id = 'tile-sample-${_ts()}-$i';
+              final fileName = sample.pathname.split('/').last;
+              final analyzed =
+                  await analyzeTileWithThumbnail(id, fileName, bytes);
+              results[i] = TileAsset(
+                id: id,
+                descriptor: analyzed.descriptor,
+                thumbnail: analyzed.thumbnail,
+                blobUrl: sample.blobUrl,
+                filename: fileName,
+              );
+            } catch (_) {}
+          }
+          done++;
+          state = state.copyWith(uploadDone: done);
+        }
+      }
+
+      await _runPool(
+          batches.length, _restoreBatchConcurrency, () => false, fetchBatch);
+
+      final added = results.whereType<TileAsset>().toList();
+      state = state.copyWith(
+        tiles: [...state.tiles, ...added],
+        isUploadingTiles: false,
+        error: added.isEmpty ? 'No sample tiles were added.' : null,
+      );
+    } catch (e) {
+      state = state.copyWith(isUploadingTiles: false, error: e.toString());
     }
   }
 

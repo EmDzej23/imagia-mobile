@@ -8,6 +8,7 @@ import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_progress_bar.dart';
 import '../../widgets/primary_button.dart';
+import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/secondary_button.dart';
 
 class TileLibraryScreen extends ConsumerWidget {
@@ -70,13 +71,19 @@ class TileLibraryScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Adding ${studio.uploadDone}/${studio.uploadTotal}…',
+                    Text(
+                        studio.uploadDone == 0
+                            ? 'Preparing photos…'
+                            : 'Adding ${studio.uploadDone}/${studio.uploadTotal}…',
                         style: AppTypography.caption),
                     const SizedBox(height: AppSpacing.x2),
-                    AppProgressBar(
-                        percent: studio.uploadTotal == 0
-                            ? 0
-                            : studio.uploadDone / studio.uploadTotal * 100),
+                    // Indeterminate "loader" until the first tile lands, then
+                    // switch to a real progress bar.
+                    studio.uploadDone == 0
+                        ? const AppIndeterminateBar()
+                        : AppProgressBar(
+                            percent:
+                                studio.uploadDone / studio.uploadTotal * 100),
                   ],
                 ),
               ),
@@ -134,6 +141,19 @@ class TileLibraryScreen extends ConsumerWidget {
                     onPressed: studio.isUploadingTiles
                         ? null
                         : controller.pickTileImages,
+                  ),
+                  const SizedBox(height: AppSpacing.x2),
+                  SecondaryButton(
+                    label: 'Free sample photos',
+                    icon: Icons.auto_awesome_outlined,
+                    onPressed: studio.isUploadingTiles
+                        ? null
+                        : () async {
+                            final folder = await showSamplePackPicker(context);
+                            if (folder != null) {
+                              controller.loadSampleTiles(folder);
+                            }
+                          },
                   ),
                   const SizedBox(height: AppSpacing.x3),
                   PrimaryButton(

@@ -12,6 +12,14 @@ class TileUploadResult {
   final String pathname;
 }
 
+/// A free sample tile already hosted on the server — imported by reusing its
+/// existing [blobUrl] (no upload needed), like a project restore.
+class SampleTile {
+  SampleTile(this.blobUrl, this.pathname);
+  final String blobUrl;
+  final String pathname;
+}
+
 /// Tile + base image uploads (multipart) to Vercel Blob via the server.
 /// Mirrors the RN reference `lib/api/tiles.ts`.
 class TilesApi {
@@ -40,6 +48,22 @@ class TilesApi {
           d['tileId'] as String, d['blobUrl'] as String, d['pathname'] as String),
       res.status,
     );
+  }
+
+  /// Lists a free sample tile pack (server-hosted blobs, up to 500). The blobs
+  /// already exist, so callers reuse [SampleTile.blobUrl] directly at render
+  /// time — no per-tile upload.
+  Future<ApiResult<List<SampleTile>>> sampleTiles(String folder) async {
+    final res = await _client.get<Map<String, dynamic>>('/api/sample-tiles',
+        query: {'folder': folder});
+    if (!res.isOk || res.data == null) {
+      return ApiResult.fail(res.error ?? 'Could not load samples.', res.status);
+    }
+    final tiles = (res.data!['tiles'] as List? ?? const [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .map((m) => SampleTile(m['blobUrl'] as String, m['pathname'] as String))
+        .toList();
+    return ApiResult.ok(tiles, res.status);
   }
 
   /// Max URLs the server accepts per `/api/tile-thumb-batch` request.

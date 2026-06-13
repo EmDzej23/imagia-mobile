@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,7 +12,9 @@ import '../../state/video_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/app_progress_bar.dart';
 import '../../widgets/labeled_slider.dart';
+import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/secondary_button.dart';
 import '../../widgets/segmented_selector.dart';
@@ -23,15 +27,49 @@ class StudioScreen extends ConsumerStatefulWidget {
 }
 
 class _StudioScreenState extends ConsumerState<StudioScreen> {
-  // Cached in initState so dispose() doesn't touch `ref` (unsafe once the
-  // widget is being unmounted). The notifier is long-lived, so holding it is
-  // safe.
-  late final StudioController _controller =
-      ref.read(studioControllerProvider.notifier);
+  // Assigned eagerly in initState so dispose() never touches `ref` (unsafe once
+  // the widget is being unmounted). Must NOT be a `late` lazy initializer —
+  // that defers the `ref.read` to first access, which can be dispose() itself
+  // if the screen is torn down before any build/handler reads it. The notifier
+  // is long-lived, so holding the reference is safe.
+  late StudioController _controller;
+
+  // Horizontal tiles strip — scrolled to a tile when it's tapped in the loupe.
+  final ScrollController _tilesScroll = ScrollController();
+  String? _highlightedTileId;
+  Timer? _highlightTimer;
+
+  // Tiles strip geometry (must match the ListView item + separator below).
+  static const double _tileExtent = 56;
+  static const double _tileGap = AppSpacing.x2;
+
+  /// Scrolls the tiles strip so [tileId] is visible and briefly highlights it.
+  void _revealTile(String tileId) {
+    final tiles = ref.read(studioControllerProvider).tiles;
+    final index = tiles.indexWhere((t) => t.id == tileId);
+    if (index < 0) return;
+
+    if (_tilesScroll.hasClients) {
+      final itemStart = index * (_tileExtent + _tileGap);
+      final viewport = _tilesScroll.position.viewportDimension;
+      // Center the tile in the viewport where possible.
+      final target = (itemStart - (viewport - _tileExtent) / 2)
+          .clamp(0.0, _tilesScroll.position.maxScrollExtent);
+      _tilesScroll.animateTo(target,
+          duration: const Duration(milliseconds: 320), curve: Curves.easeOut);
+    }
+
+    setState(() => _highlightedTileId = tileId);
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _highlightedTileId = null);
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    _controller = ref.read(studioControllerProvider.notifier);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final studio = ref.read(studioControllerProvider);
       if (studio.plan == null && studio.canPlan && !studio.isPlanning) {
@@ -44,6 +82,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   void dispose() {
     // Leaving the studio (e.g. back to gallery) drops any in-flight restore.
     _controller.cancelRestore();
+    _highlightTimer?.cancel();
+    _tilesScroll.dispose();
     super.dispose();
   }
 
@@ -54,6 +94,13 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
 
   Future<void> _addTiles() async {
     await _controller.pickTileImages();
+    _controller.buildPlan();
+  }
+
+  Future<void> _loadSamples() async {
+    final folder = await showSamplePackPicker(context);
+    if (folder == null) return;
+    await _controller.loadSampleTiles(folder);
     _controller.buildPlan();
   }
 
@@ -115,6 +162,19 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     );
   }
 
+  /// The placement (tile cell) covering base-space point ([x], [y]), or null.
+  SlimPlacement? _placementAt(SlimMosaicPlan plan, double x, double y) {
+    for (final p in plan.placements) {
+      if (x >= p.x &&
+          x < p.x + p.width &&
+          y >= p.y &&
+          y < p.y + p.height) {
+        return p;
+      }
+    }
+    return null;
+  }
+
   /// Loupe popup: a magnified window of the mosaic centered on the tapped point.
   void _showLoupe(SlimMosaicPlan plan, double bx, double by) {
     final widths = plan.placements.map((p) => p.width).toList()..sort();
@@ -128,35 +188,52 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       context: context,
       barrierColor: Colors.black87,
       builder: (ctx) {
-        final side = MediaQuery.of(ctx).size.width.clamp(0, 360) * 0.9;
+        final side =
+            (MediaQuery.of(ctx).size.width.clamp(0, 360) * 0.9).toDouble();
+        // Tap anywhere outside the loupe closes it.
         return GestureDetector(
           onTap: () => Navigator.pop(ctx),
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: side,
-                  height: side,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: Border.all(color: AppColors.primaryBright, width: 2),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: CustomPaint(
-                    painter: MosaicZoomPainter(
-                      plan: plan,
-                      tileImages: studio.tileImages,
-                      baseImage: studio.base?.overlay,
-                      tintStrength: studio.settings.tintStrength,
-                      focusX: bx,
-                      focusY: by,
-                      windowSize: windowSize,
+                // Tap a tile inside the loupe → close, then reveal it in the
+                // tiles strip. Inverts the painter's base→screen mapping.
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) {
+                    final s = side / windowSize;
+                    final baseX = bx + (d.localPosition.dx - side / 2) / s;
+                    final baseY = by + (d.localPosition.dy - side / 2) / s;
+                    final hit = _placementAt(plan, baseX, baseY);
+                    Navigator.pop(ctx);
+                    if (hit != null) _revealTile(hit.tileId);
+                  },
+                  child: Container(
+                    width: side,
+                    height: side,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.card),
+                      border:
+                          Border.all(color: AppColors.primaryBright, width: 2),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: CustomPaint(
+                      painter: MosaicZoomPainter(
+                        plan: plan,
+                        tileImages: studio.tileImages,
+                        baseImage: studio.base?.overlay,
+                        tintStrength: studio.settings.tintStrength,
+                        focusX: bx,
+                        focusY: by,
+                        windowSize: windowSize,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.x3),
-                Text('Tap to close', style: AppTypography.caption),
+                Text('Tap a tile to find it · tap outside to close',
+                    style: AppTypography.caption),
               ],
             ),
           ),
@@ -167,6 +244,17 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Surface upload/picker/restore failures instead of swallowing them.
+    ref.listen(studioControllerProvider.select((s) => s.error), (_, err) {
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(err),
+          backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 8),
+        ));
+      }
+    });
+
     final studio = ref.watch(studioControllerProvider);
     final canRender = ref.watch(canRenderProvider);
     final settings = studio.settings;
@@ -178,6 +266,15 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // ── Busy banner (restore / tile upload) — visible immediately ──
+            if (studio.isRestoring || studio.isUploadingTiles)
+              _BusyBanner(
+                label: studio.isRestoring
+                    ? 'Restoring project…'
+                    : 'Adding photos…',
+                done: studio.uploadDone,
+                total: studio.uploadTotal,
+              ),
             // ── Preview (top ~60%) — tap to zoom ──
             Expanded(
               flex: 6,
@@ -267,7 +364,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                       studio: studio,
                       onChangeBase: _changeBase,
                       onAddTiles: _addTiles,
+                      onLoadSamples: _loadSamples,
                       onRemoveTile: _removeTile,
+                      tilesScroll: _tilesScroll,
+                      highlightedTileId: _highlightedTileId,
                     ),
                     const Divider(
                         color: AppColors.border, height: AppSpacing.x6),
@@ -378,13 +478,19 @@ class _SourceAndTiles extends StatelessWidget {
     required this.studio,
     required this.onChangeBase,
     required this.onAddTiles,
+    required this.onLoadSamples,
     required this.onRemoveTile,
+    required this.tilesScroll,
+    required this.highlightedTileId,
   });
 
   final StudioState studio;
   final VoidCallback onChangeBase;
   final VoidCallback onAddTiles;
+  final VoidCallback onLoadSamples;
   final void Function(String id) onRemoveTile;
+  final ScrollController tilesScroll;
+  final String? highlightedTileId;
 
   @override
   Widget build(BuildContext context) {
@@ -419,6 +525,11 @@ class _SourceAndTiles extends StatelessWidget {
                 style: AppTypography.label),
             const Spacer(),
             TextButton.icon(
+              onPressed: studio.isUploadingTiles ? null : onLoadSamples,
+              icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+              label: const Text('Samples'),
+            ),
+            TextButton.icon(
               onPressed: studio.isUploadingTiles ? null : onAddTiles,
               icon: const Icon(Icons.add, size: 18),
               label: const Text('Add'),
@@ -437,12 +548,14 @@ class _SourceAndTiles extends StatelessWidget {
                       style: AppTypography.caption),
                 )
               : ListView.separated(
+                  controller: tilesScroll,
                   scrollDirection: Axis.horizontal,
                   itemCount: studio.tiles.length,
                   separatorBuilder: (_, _) =>
                       const SizedBox(width: AppSpacing.x2),
                   itemBuilder: (context, i) {
                     final tile = studio.tiles[i];
+                    final highlighted = tile.id == highlightedTileId;
                     return Stack(
                       children: [
                         ClipRRect(
@@ -452,6 +565,23 @@ class _SourceAndTiles extends StatelessWidget {
                               width: 56,
                               height: 56,
                               fit: BoxFit.cover),
+                        ),
+                        // Highlight ring (overlay — doesn't affect item size).
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: AnimatedOpacity(
+                              opacity: highlighted ? 1 : 0,
+                              duration: const Duration(milliseconds: 200),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.chip),
+                                  border: Border.all(
+                                      color: AppColors.accent, width: 2),
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                         Positioned(
                           top: 0,
@@ -474,6 +604,41 @@ class _SourceAndTiles extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+}
+
+/// Thin progress banner under the app bar while restoring a project or adding
+/// tiles. Shows an indeterminate bar until [total] is known, then a count.
+class _BusyBanner extends StatelessWidget {
+  const _BusyBanner({
+    required this.label,
+    required this.done,
+    required this.total,
+  });
+
+  final String label;
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    // Show an animated loader until the first item lands, then a real bar.
+    final hasProgress = done > 0 && total > 0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.screen, AppSpacing.x3, AppSpacing.screen, AppSpacing.x2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(hasProgress ? '$label $done/$total' : label,
+              style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.x2),
+          hasProgress
+              ? AppProgressBar(percent: done / total * 100)
+              : const AppIndeterminateBar(),
+        ],
+      ),
     );
   }
 }

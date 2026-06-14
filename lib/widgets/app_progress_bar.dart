@@ -12,13 +12,25 @@ class AppProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final value = (percent / 100).clamp(0.0, 1.0);
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadius.chip),
-      child: LinearProgressIndicator(
-        value: (percent / 100).clamp(0, 1),
-        minHeight: 6,
-        backgroundColor: AppColors.border,
-        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+      child: SizedBox(
+        height: 6,
+        child: LayoutBuilder(
+          builder: (context, c) => Stack(
+            children: [
+              const Positioned.fill(
+                  child: ColoredBox(color: AppColors.border)),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOut,
+                width: c.maxWidth * value,
+                decoration: const BoxDecoration(gradient: AppGradients.brand),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

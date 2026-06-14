@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../services/app_prefs.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -9,6 +10,7 @@ import '../../theme/app_typography.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/secondary_button.dart';
+import '../onboarding/onboarding_screen.dart';
 
 class SignInScreen extends ConsumerStatefulWidget {
   const SignInScreen({super.key});
@@ -22,6 +24,24 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   final _password = TextEditingController();
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // First-run onboarding — sign-in is where new (signed-out) users land.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOnboard());
+  }
+
+  Future<void> _maybeOnboard() async {
+    final prefs = ref.read(appPrefsProvider);
+    if (await prefs.onboardingSeen()) return;
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => const OnboardingScreen(),
+    ));
+    await prefs.setOnboardingSeen();
+  }
 
   @override
   void dispose() {

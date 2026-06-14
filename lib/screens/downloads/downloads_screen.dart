@@ -15,6 +15,7 @@ import '../../state/library_providers.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/shimmer.dart';
 
 class DownloadsScreen extends ConsumerStatefulWidget {
   const DownloadsScreen({super.key});
@@ -65,8 +66,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
         color: AppColors.accent,
         onRefresh: () async => ref.invalidate(downloadsListProvider),
         child: downloads.when(
-          loading: () => const Center(
-              child: CircularProgressIndicator(color: AppColors.accent)),
+          loading: () => const DownloadsListSkeleton(),
           error: (e, _) => Center(
               child: Text('Could not load downloads.\n$e',
                   textAlign: TextAlign.center, style: AppTypography.caption)),

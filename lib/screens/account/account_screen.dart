@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/checkout_api.dart';
-import '../../core/config.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/secondary_button.dart';
 import '../legal/help_screen.dart';
-import '../legal/web_page_screen.dart';
+import '../legal/legal_screen.dart';
 import 'checkout_webview_screen.dart';
 
 class AccountScreen extends ConsumerStatefulWidget {
@@ -88,10 +87,15 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                           borderRadius: BorderRadius.circular(AppRadius.chip),
                           border: Border.all(color: AppColors.border),
                         ),
-                        child: Text(
-                          '${user?.tokenBalance ?? 0} token${(user?.tokenBalance ?? 0) == 1 ? '' : 's'}',
-                          style: AppTypography.number(AppTypography.label)
-                              .copyWith(color: AppColors.accent),
+                        child: TweenAnimationBuilder<int>(
+                          tween: IntTween(begin: 0, end: user?.tokenBalance ?? 0),
+                          duration: const Duration(milliseconds: 600),
+                          curve: Curves.easeOut,
+                          builder: (_, value, _) => Text(
+                            '$value token${value == 1 ? '' : 's'}',
+                            style: AppTypography.number(AppTypography.label)
+                                .copyWith(color: AppColors.accent),
+                          ),
                         ),
                       ),
                       const Spacer(),
@@ -133,24 +137,14 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
               icon: Icons.privacy_tip_outlined,
               label: 'Privacy Policy',
               onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const WebPageScreen(
-                    title: 'Privacy Policy',
-                    url: '${AppConfig.apiBaseUrl}/privacy',
-                  ),
-                ),
+                MaterialPageRoute(builder: (_) => LegalScreen.privacy()),
               ),
             ),
             _LinkTile(
               icon: Icons.description_outlined,
               label: 'Terms of Service',
               onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const WebPageScreen(
-                    title: 'Terms of Service',
-                    url: '${AppConfig.apiBaseUrl}/terms',
-                  ),
-                ),
+                MaterialPageRoute(builder: (_) => LegalScreen.terms()),
               ),
             ),
             const SizedBox(height: AppSpacing.x6),

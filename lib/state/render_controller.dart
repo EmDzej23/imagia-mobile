@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/render_api.dart';
+import '../services/haptics.dart';
 import '../services/notifications.dart';
 import 'auth_controller.dart';
 import 'studio_controller.dart';
@@ -79,7 +80,8 @@ class RenderController extends Notifier<RenderUiState> {
     }
 
     state = state.copyWith(phase: RenderPhase.completed, result: res.data);
-    // Notify (deep-links to the preview) + refresh the consumed token balance.
+    // Celebrate, notify (deep-links to the preview) + refresh the token balance.
+    Haptics.success();
     NotificationService.instance.showRenderDone(fileName: res.data!.fileName);
     ref.read(authControllerProvider.notifier).refreshUser();
   }

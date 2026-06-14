@@ -39,4 +39,38 @@ abstract final class AppColors {
 
   /// Confirmation, success toasts.
   static const success = Color(0xFF7FA88B);
+
+  // ── Brand gradient (indigo → violet) ──────────────────────────────────────
+  // The signature accent: used on primary actions, the FAB and progress.
+  static const gradientStart = Color(0xFF3D5394);
+  static const gradientEnd = Color(0xFF7A4FC2);
+}
+
+/// Brand visual effects (gradients, glows) layered on top of [AppColors].
+abstract final class AppGradients {
+  /// Primary indigo→violet sweep for filled actions and progress.
+  static const brand = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [AppColors.gradientStart, AppColors.gradientEnd],
+  );
+
+  /// Soft elevation shadow — depth without hard borders.
+  static List<BoxShadow> elevation({double opacity = 0.35, double blur = 18}) =>
+      [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: opacity),
+          blurRadius: blur,
+          offset: Offset(0, blur * 0.4),
+        ),
+      ];
+
+  /// Colored glow used to make the FAB / hero actions feel alive.
+  static List<BoxShadow> glow(Color color, {double opacity = 0.45}) => [
+        BoxShadow(
+          color: color.withValues(alpha: opacity),
+          blurRadius: 24,
+          offset: const Offset(0, 8),
+        ),
+      ];
 }

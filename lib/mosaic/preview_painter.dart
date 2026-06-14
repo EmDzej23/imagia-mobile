@@ -1,8 +1,19 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import 'types.dart';
+
+/// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
+/// tile-reveal order so the mosaic "assembles" rather than wiping in.
+double _hash01(int n) {
+  var x = (n * 2654435761) & 0xFFFFFFFF;
+  x ^= x >> 15;
+  x = (x * 2246822519) & 0xFFFFFFFF;
+  x ^= x >> 13;
+  return (x & 0xFFFFFF) / 0x1000000;
+}
 
 /// Geometry of the "contain" fit used to place the mosaic inside a canvas.
 typedef MosaicFit = ({double scale, double ox, double oy, double drawW, double drawH});
@@ -44,6 +55,7 @@ class MosaicPreviewPainter extends CustomPainter {
     required this.tileImages,
     this.baseImage,
     double? tintStrength,
+    this.appear = 1.0,
   }) : tintStrength = tintStrength ?? plan.tintStrength;
 
   final SlimMosaicPlan plan;
@@ -54,11 +66,19 @@ class MosaicPreviewPainter extends CustomPainter {
   /// slider repaints instantly without rebuilding the (matching) plan.
   final double tintStrength;
 
+  /// Reveal progress 0→1. At 1 the steady-state fast path runs (no per-tile
+  /// transform); below 1 tiles fade + scale + drift into place, staggered.
+  final double appear;
+
+  /// Fraction of the timeline a single tile's animation occupies.
+  static const double _tileWindow = 0.5;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (plan.baseWidth <= 0 || plan.baseHeight <= 0) return;
     final fit = computeMosaicFit(size, plan.baseWidth, plan.baseHeight);
     final s = fit.scale;
+    final animating = appear < 1.0;
 
     canvas.save();
     canvas.translate(fit.ox, fit.oy);
@@ -67,33 +87,59 @@ class MosaicPreviewPainter extends CustomPainter {
       ..filterQuality = FilterQuality.medium
       ..isAntiAlias = false;
 
+    var i = -1;
     for (final p in plan.placements) {
-      final img = tileImages[p.tileId];
+      i++;
       final dst = Rect.fromLTWH(p.x * s, p.y * s, p.width * s, p.height * s);
+
+      var drawRect = dst;
+      double opacity = 1;
+      if (animating) {
+        final start = _hash01(i) * (1 - _tileWindow);
+        final lt = ((appear - start) / _tileWindow).clamp(0.0, 1.0);
+        if (lt <= 0) continue; // not yet revealed
+        final e = Curves.easeOutCubic.transform(lt);
+        opacity = e;
+        final scale = 0.55 + 0.45 * e;
+        final ang = _hash01(i * 2 + 1) * 2 * math.pi;
+        final dist = (1 - e) * dst.width * 1.3;
+        drawRect = Rect.fromCenter(
+          center: dst.center.translate(
+              math.cos(ang) * dist, math.sin(ang) * dist),
+          width: dst.width * scale,
+          height: dst.height * scale,
+        );
+      }
+
+      final img = tileImages[p.tileId];
       if (img == null) {
         final c = p.regionAvgColor;
         if (c != null) {
           canvas.drawRect(
-              dst,
+              drawRect,
               Paint()
-                ..color = Color.fromRGBO(
-                    c[0].round(), c[1].round(), c[2].round(), 1));
+                ..color = Color.fromRGBO(c[0].round(), c[1].round(),
+                    c[2].round(), opacity));
         }
         continue;
       }
-      canvas.drawImageRect(img, centerCropSrc(img, p.width / p.height), dst, paint);
+      paint.color = Color.fromRGBO(255, 255, 255, opacity);
+      canvas.drawImageRect(
+          img, centerCropSrc(img, p.width / p.height), drawRect, paint);
     }
 
     if (baseImage != null && tintStrength > 0) {
       final src = Rect.fromLTWH(
           0, 0, baseImage!.width.toDouble(), baseImage!.height.toDouble());
       final dst = Rect.fromLTWH(0, 0, fit.drawW, fit.drawH);
+      // Fade the tint in alongside the reveal so the picture resolves last.
+      final tintAlpha = tintStrength.toDouble() * appear;
       canvas.drawImageRect(
         baseImage!,
         src,
         dst,
         Paint()
-          ..color = Color.fromRGBO(255, 255, 255, tintStrength.toDouble())
+          ..color = Color.fromRGBO(255, 255, 255, tintAlpha)
           ..filterQuality = FilterQuality.high,
       );
     }
@@ -106,6 +152,7 @@ class MosaicPreviewPainter extends CustomPainter {
       old.plan != plan ||
       old.baseImage != baseImage ||
       old.tintStrength != tintStrength ||
+      old.appear != appear ||
       old.tileImages.length != tileImages.length;
 }
 

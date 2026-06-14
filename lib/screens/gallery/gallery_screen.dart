@@ -10,6 +10,8 @@ import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/pressable.dart';
+import '../../widgets/shimmer.dart';
 
 class GalleryScreen extends ConsumerWidget {
   const GalleryScreen({super.key});
@@ -54,23 +56,37 @@ class GalleryScreen extends ConsumerWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppColors.primary,
-        foregroundColor: AppColors.textPrimary,
+      floatingActionButton: PressableScale(
         onPressed: () {
           ref.read(studioControllerProvider.notifier).reset();
           ref.read(renderControllerProvider.notifier).reset();
           context.push('/create/source');
         },
-        icon: const Icon(Icons.add),
-        label: const Text('New Mosaic'),
+        child: Container(
+          height: 52,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.x4),
+          decoration: BoxDecoration(
+            gradient: AppGradients.brand,
+            borderRadius: BorderRadius.circular(26),
+            boxShadow: AppGradients.glow(AppColors.gradientEnd),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.add, color: AppColors.textPrimary),
+              const SizedBox(width: AppSpacing.x2),
+              Text('New Mosaic',
+                  style: AppTypography.label
+                      .copyWith(color: AppColors.textPrimary)),
+            ],
+          ),
+        ),
       ),
       body: RefreshIndicator(
         color: AppColors.accent,
         onRefresh: () async => ref.invalidate(projectsListProvider),
         child: projects.when(
-          loading: () => const Center(
-              child: CircularProgressIndicator(color: AppColors.accent)),
+          loading: () => const GalleryGridSkeleton(),
           error: (e, _) => _Message(
               icon: Icons.cloud_off,
               text: 'Could not load your mosaics.\n$e'),
@@ -101,8 +117,8 @@ class _ProjectCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return GestureDetector(
-      onTap: () {
+    return PressableScale(
+      onPressed: () {
         final studio = ref.read(studioControllerProvider);
         ref.read(renderControllerProvider.notifier).reset();
         // If this project is already open in the studio, jump straight back in
@@ -120,6 +136,7 @@ class _ProjectCard extends ConsumerWidget {
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(color: AppColors.border),
+          boxShadow: AppGradients.elevation(opacity: 0.28, blur: 14),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

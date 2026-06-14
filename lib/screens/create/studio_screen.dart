@@ -192,51 +192,64 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       builder: (ctx) {
         final side =
             (MediaQuery.of(ctx).size.width.clamp(0, 360) * 0.9).toDouble();
+        // The magnified window's focus point — pannable by dragging.
+        double fx = bx, fy = by;
         // Tap anywhere outside the loupe closes it.
         return GestureDetector(
           onTap: () => Navigator.pop(ctx),
           child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Tap a tile inside the loupe → close, then reveal it in the
-                // tiles strip. Inverts the painter's base→screen mapping.
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTapUp: (d) {
-                    final s = side / windowSize;
-                    final baseX = bx + (d.localPosition.dx - side / 2) / s;
-                    final baseY = by + (d.localPosition.dy - side / 2) / s;
-                    final hit = _placementAt(plan, baseX, baseY);
-                    Navigator.pop(ctx);
-                    if (hit != null) _revealTile(hit.tileId);
-                  },
-                  child: Container(
-                    width: side,
-                    height: side,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(AppRadius.card),
-                      border:
-                          Border.all(color: AppColors.primaryBright, width: 2),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: CustomPaint(
-                      painter: MosaicZoomPainter(
-                        plan: plan,
-                        tileImages: studio.tileImages,
-                        baseImage: studio.base?.overlay,
-                        tintStrength: studio.settings.tintStrength,
-                        focusX: bx,
-                        focusY: by,
-                        windowSize: windowSize,
+            child: StatefulBuilder(
+              builder: (ctx, setLoupe) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    // Drag to pan the magnified window across the mosaic.
+                    onPanUpdate: (d) {
+                      final s = side / windowSize;
+                      setLoupe(() {
+                        fx = (fx - d.delta.dx / s)
+                            .clamp(0.0, plan.baseWidth.toDouble());
+                        fy = (fy - d.delta.dy / s)
+                            .clamp(0.0, plan.baseHeight.toDouble());
+                      });
+                    },
+                    // Tap a tile → close, then reveal it in the tiles strip.
+                    onTapUp: (d) {
+                      final s = side / windowSize;
+                      final baseX = fx + (d.localPosition.dx - side / 2) / s;
+                      final baseY = fy + (d.localPosition.dy - side / 2) / s;
+                      final hit = _placementAt(plan, baseX, baseY);
+                      Navigator.pop(ctx);
+                      if (hit != null) _revealTile(hit.tileId);
+                    },
+                    child: Container(
+                      width: side,
+                      height: side,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(AppRadius.card),
+                        border: Border.all(
+                            color: AppColors.primaryBright, width: 2),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: CustomPaint(
+                        painter: MosaicZoomPainter(
+                          plan: plan,
+                          tileImages: studio.tileImages,
+                          baseImage: studio.base?.overlay,
+                          tintStrength: studio.settings.tintStrength,
+                          focusX: fx,
+                          focusY: fy,
+                          windowSize: windowSize,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: AppSpacing.x3),
-                Text('Tap a tile to find it · tap outside to close',
-                    style: AppTypography.caption),
-              ],
+                  const SizedBox(height: AppSpacing.x3),
+                  Text('Drag to explore · tap a tile to find it',
+                      style: AppTypography.caption),
+                ],
+              ),
             ),
           ),
         );

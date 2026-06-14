@@ -228,21 +228,28 @@ class StudioController extends Notifier<StudioState> {
               'Remove some tiles to add more.');
       return;
     }
+    // Show the loader immediately. image_picker keeps resolving the selected
+    // files for a moment after the picker dismisses (longer for many photos);
+    // without this there's a dead gap where the app looks stuck.
+    state = state.copyWith(
+        isUploadingTiles: true, uploadDone: 0, uploadTotal: 0, error: null);
+
     final List<XFile> files;
     try {
       files = await _picker.pickMultiImage();
     } catch (e) {
-      state = state.copyWith(error: 'Could not open the photo library: $e');
+      state = state.copyWith(
+          isUploadingTiles: false,
+          error: 'Could not open the photo library: $e');
       return;
     }
-    if (files.isEmpty) return;
+    if (files.isEmpty) {
+      state = state.copyWith(isUploadingTiles: false); // cancelled
+      return;
+    }
 
     final picked = files.take(remaining).toList();
-    state = state.copyWith(
-        isUploadingTiles: true,
-        uploadDone: 0,
-        uploadTotal: picked.length,
-        error: null);
+    state = state.copyWith(uploadDone: 0, uploadTotal: picked.length);
 
     // Compress + upload + analyze in concurrent batches (network-bound, so
     // fanning out is far faster than a sequential loop).

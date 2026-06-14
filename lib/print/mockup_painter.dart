@@ -22,6 +22,7 @@ class MockupPainter extends CustomPainter {
     required this.aspect,
     this.frameColor = const Color(0xFF1C1C1E),
     this.canvasWrap,
+    this.wall,
   });
 
   /// The rendered mosaic image.
@@ -38,8 +39,11 @@ class MockupPainter extends CustomPainter {
   /// Frame colour for the framed-print mockup.
   final Color frameColor;
 
-  /// Canvas wrap (ImageWrap / MirrorWrap / Black / White) — drives the 3D edge.
+  /// Canvas wrap (ImageWrap / Black / White) — drives the 3D edge.
   final String? canvasWrap;
+
+  /// Wall photo for the background; falls back to a procedural wall if null.
+  final ui.Image? wall;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -72,6 +76,15 @@ class MockupPainter extends CustomPainter {
 
   void _drawWall(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
+    final w = wall;
+    if (w != null) {
+      // Cover-fit the wall photo.
+      final src = _coverSrc(w, size);
+      canvas.drawImageRect(
+          w, src, rect, Paint()..filterQuality = FilterQuality.medium);
+      return;
+    }
+    // Procedural fallback.
     canvas.drawRect(
       rect,
       Paint()
@@ -81,16 +94,18 @@ class MockupPainter extends CustomPainter {
           const [Color(0xFFEDEAE3), Color(0xFFDAD5CB)],
         ),
     );
-    // Soft floor shadow / grounding gradient at the bottom.
-    canvas.drawRect(
-      Rect.fromLTWH(0, size.height * 0.7, size.width, size.height * 0.3),
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(0, size.height * 0.7),
-          Offset(0, size.height),
-          const [Color(0x00000000), Color(0x14000000)],
-        ),
-    );
+  }
+
+  /// Source rect that center-cover-crops [img] to fill [size]'s aspect.
+  ui.Rect _coverSrc(ui.Image img, Size size) {
+    final iw = img.width.toDouble(), ih = img.height.toDouble();
+    final targetAR = size.width / size.height;
+    if (iw / ih > targetAR) {
+      final sw = ih * targetAR;
+      return ui.Rect.fromLTWH((iw - sw) / 2, 0, sw, ih);
+    }
+    final sh = iw / targetAR;
+    return ui.Rect.fromLTWH(0, (ih - sh) / 2, iw, sh);
   }
 
   void _mosaicInto(Canvas canvas, Rect dst) {
@@ -144,43 +159,35 @@ class MockupPainter extends CustomPainter {
     final art = art0.shift(-d / 2);
     final tr = art.topRight, br = art.bottomRight, bl = art.bottomLeft;
 
+    // The front shows the INNER region; the outer band continues onto the
+    // edges (true image-wrap: tiles run seamlessly from the face onto the side).
+    final c = cropSrc;
+    final bx = c.width * 0.03, by = c.height * 0.03;
+    final srcFront =
+        Rect.fromLTRB(c.left + bx, c.top + by, c.right - bx, c.bottom - by);
+
     _shadow(canvas, art.shift(d * 0.6), blur: 26, dy: 6, opacity: 0.3);
 
-    // Side faces (the wrapped edges), darker since they catch less light.
-    _wrapEdge(canvas,
-        [tr, br, br + d, tr + d],
-        _stripCoords(rightEdge: true),
-        darken: 0.20);
-    _wrapEdge(canvas,
-        [bl, br, br + d, bl + d],
-        _stripCoords(rightEdge: false),
-        darken: 0.34);
+    // Right edge: continues from the front's right edge (col right-bx) outward
+    // to the image edge (col right).
+    _wrapEdge(canvas, [tr, br, br + d, tr + d], [
+      Offset(c.right - bx, c.top + by),
+      Offset(c.right - bx, c.bottom - by),
+      Offset(c.right, c.bottom - by),
+      Offset(c.right, c.top + by),
+    ], darken: 0.20);
+    // Bottom edge: from row bottom-by outward to bottom.
+    _wrapEdge(canvas, [bl, br, br + d, bl + d], [
+      Offset(c.left + bx, c.bottom - by),
+      Offset(c.right - bx, c.bottom - by),
+      Offset(c.right - bx, c.bottom),
+      Offset(c.left + bx, c.bottom),
+    ], darken: 0.34);
 
-    // Front face.
-    _mosaicInto(canvas, art);
+    // Front face (inner region) + weave.
+    canvas.drawImageRect(
+        mosaic, srcFront, art, Paint()..filterQuality = FilterQuality.high);
     _weave(canvas, art);
-  }
-
-  /// Texture coordinates (mosaic px) for a depth strip along the right or
-  /// bottom edge of the crop — the part of the image that wraps around.
-  List<Offset> _stripCoords({required bool rightEdge}) {
-    final c = cropSrc;
-    if (rightEdge) {
-      final s = c.width * 0.03;
-      return [
-        Offset(c.right, c.top),
-        Offset(c.right, c.bottom),
-        Offset(c.right - s, c.bottom),
-        Offset(c.right - s, c.top),
-      ];
-    }
-    final s = c.height * 0.03;
-    return [
-      Offset(c.left, c.bottom),
-      Offset(c.right, c.bottom),
-      Offset(c.right, c.bottom - s),
-      Offset(c.left, c.bottom - s),
-    ];
   }
 
   void _wrapEdge(Canvas canvas, List<Offset> quad, List<Offset> tex,
@@ -266,5 +273,6 @@ class MockupPainter extends CustomPainter {
       old.type != type ||
       old.aspect != aspect ||
       old.frameColor != frameColor ||
-      old.canvasWrap != canvasWrap;
+      old.canvasWrap != canvasWrap ||
+      old.wall != wall;
 }

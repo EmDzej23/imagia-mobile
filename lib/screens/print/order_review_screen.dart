@@ -6,6 +6,7 @@ import '../../core/config.dart';
 import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
+import '../../print/wall_image_provider.dart';
 import '../../services/haptics.dart';
 import '../../state/features_providers.dart';
 import '../../state/print_providers.dart';
@@ -163,6 +164,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                         canvasWrap: d.type == PrintType.canvas
                             ? d.option?.value
                             : null,
+                        wall: ref.watch(wallImageProvider).asData?.value,
                       ),
                     ),
                   ),

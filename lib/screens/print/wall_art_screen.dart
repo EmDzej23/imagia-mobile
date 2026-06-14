@@ -8,6 +8,7 @@ import '../../mosaic/preview_painter.dart';
 import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
+import '../../print/wall_image_provider.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -207,6 +208,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                 frameColor: _frameColor,
                 canvasWrap:
                     _type == PrintType.canvas ? _option?.value : null,
+                wall: ref.watch(wallImageProvider).asData?.value,
               ),
             ),
           ),

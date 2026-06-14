@@ -11,6 +11,7 @@ class ProjectSummary {
     required this.tileCount,
     required this.createdAt,
     required this.updatedAt,
+    this.baseImageUrl,
     this.baseImageName,
   });
 
@@ -20,6 +21,10 @@ class ProjectSummary {
   final int tileCount;
   final String createdAt;
   final String updatedAt;
+
+  /// Private blob URL of the base photo (fetch via the authenticated
+  /// thumbnail endpoint — it is not publicly loadable).
+  final String? baseImageUrl;
   final String? baseImageName;
 
   factory ProjectSummary.fromJson(Map<String, dynamic> j) => ProjectSummary(
@@ -29,6 +34,7 @@ class ProjectSummary {
         tileCount: (j['tileCount'] as num?)?.toInt() ?? 0,
         createdAt: j['createdAt']?.toString() ?? '',
         updatedAt: j['updatedAt']?.toString() ?? '',
+        baseImageUrl: j['baseImageUrl'] as String?,
         baseImageName: j['baseImageName'] as String?,
       );
 }

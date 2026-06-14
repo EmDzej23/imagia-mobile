@@ -124,15 +124,7 @@ class _ProjectCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Center(
-                child: Icon(
-                  project.hasBase ? Icons.grid_on : Icons.image_outlined,
-                  size: 40,
-                  color: AppColors.textMuted,
-                ),
-              ),
-            ),
+            Expanded(child: _CardImage(project: project)),
             Padding(
               padding: const EdgeInsets.all(AppSpacing.x3),
               child: Column(
@@ -177,6 +169,50 @@ class _ProjectCard extends ConsumerWidget {
       await ref.read(projectsApiProvider).delete(project.id);
       ref.invalidate(projectsListProvider);
     }
+  }
+}
+
+/// Project card preview: the base photo (fetched via the authenticated
+/// thumbnail batch) when available, else a placeholder icon.
+class _CardImage extends ConsumerWidget {
+  const _CardImage({required this.project});
+  final ProjectSummary project;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    Widget placeholder() => Center(
+          child: Icon(
+            project.hasBase ? Icons.grid_on : Icons.image_outlined,
+            size: 40,
+            color: AppColors.textMuted,
+          ),
+        );
+
+    final url = project.baseImageUrl;
+    Widget child;
+    if (url == null) {
+      child = placeholder();
+    } else {
+      final thumbs = ref.watch(projectThumbnailsProvider);
+      final bytes = thumbs.asData?.value[url];
+      if (bytes != null) {
+        child = Image.memory(bytes,
+            width: double.infinity,
+            height: double.infinity,
+            fit: BoxFit.cover,
+            gaplessPlayback: true);
+      } else if (thumbs.isLoading) {
+        child = const ColoredBox(color: AppColors.surfaceRaised);
+      } else {
+        child = placeholder();
+      }
+    }
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.card)),
+      child: SizedBox.expand(child: child),
+    );
   }
 }
 

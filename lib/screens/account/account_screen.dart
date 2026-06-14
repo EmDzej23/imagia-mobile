@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/checkout_api.dart';
+import '../../core/config.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/secondary_button.dart';
+import '../legal/help_screen.dart';
+import '../legal/web_page_screen.dart';
 import 'checkout_webview_screen.dart';
 
 class AccountScreen extends ConsumerStatefulWidget {
@@ -117,6 +120,40 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                 onTap: () => _purchase(pkg),
               ),
             const SizedBox(height: AppSpacing.x6),
+            Text('Help & legal', style: AppTypography.label),
+            const SizedBox(height: AppSpacing.x2),
+            _LinkTile(
+              icon: Icons.help_outline,
+              label: 'How it works',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HelpScreen()),
+              ),
+            ),
+            _LinkTile(
+              icon: Icons.privacy_tip_outlined,
+              label: 'Privacy Policy',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const WebPageScreen(
+                    title: 'Privacy Policy',
+                    url: '${AppConfig.apiBaseUrl}/privacy',
+                  ),
+                ),
+              ),
+            ),
+            _LinkTile(
+              icon: Icons.description_outlined,
+              label: 'Terms of Service',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const WebPageScreen(
+                    title: 'Terms of Service',
+                    url: '${AppConfig.apiBaseUrl}/terms',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.x6),
             SecondaryButton(
               label: 'Sign out',
               icon: Icons.logout,
@@ -124,6 +161,41 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                   ref.read(authControllerProvider.notifier).signOut(),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LinkTile extends StatelessWidget {
+  const _LinkTile(
+      {required this.icon, required this.label, required this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.x2),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.x4),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: AppColors.textSecondary),
+              const SizedBox(width: AppSpacing.x3),
+              Expanded(child: Text(label, style: AppTypography.body)),
+              const Icon(Icons.chevron_right, color: AppColors.textMuted),
+            ],
+          ),
         ),
       ),
     );

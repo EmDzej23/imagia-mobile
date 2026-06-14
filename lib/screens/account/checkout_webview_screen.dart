@@ -8,9 +8,18 @@ import '../../theme/app_colors.dart';
 /// a successful payment; the server credits tokens on that load). Pops `false`
 /// if the user closes it.
 class CheckoutWebviewScreen extends StatefulWidget {
-  const CheckoutWebviewScreen({super.key, required this.checkoutUrl});
+  const CheckoutWebviewScreen({
+    super.key,
+    required this.checkoutUrl,
+    this.successPath = '/payment-success',
+  });
 
   final String checkoutUrl;
+
+  /// URL fragment that signals a completed payment (Creem only redirects here
+  /// after success). Defaults to the token-purchase page; prints use
+  /// `/print-success`.
+  final String successPath;
 
   @override
   State<CheckoutWebviewScreen> createState() => _CheckoutWebviewScreenState();
@@ -30,7 +39,7 @@ class _CheckoutWebviewScreenState extends State<CheckoutWebviewScreen> {
           // Let the success page load fully (the server credits tokens on that
           // request), then close.
           onPageFinished: (url) {
-            if (!_done && url.contains('/payment-success')) {
+            if (!_done && url.contains(widget.successPath)) {
               _done = true;
               if (mounted) Navigator.of(context).pop(true);
             }

@@ -8,8 +8,10 @@ import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/secondary_button.dart';
+import '../../print/print_catalog.dart' show isPrintRegionAllowed;
 import '../legal/help_screen.dart';
 import '../legal/legal_screen.dart';
+import '../print/my_orders_screen.dart';
 import 'checkout_webview_screen.dart';
 
 class AccountScreen extends ConsumerStatefulWidget {
@@ -119,6 +121,16 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                 disabled: _loading != null,
                 onTap: () => _purchase(pkg),
               ),
+            if (isPrintRegionAllowed()) ...[
+              const SizedBox(height: AppSpacing.x6),
+              _LinkTile(
+                icon: Icons.local_shipping_outlined,
+                label: 'My print orders',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MyOrdersScreen()),
+                ),
+              ),
+            ],
             const SizedBox(height: AppSpacing.x6),
             Text('Help & legal', style: AppTypography.label),
             const SizedBox(height: AppSpacing.x2),

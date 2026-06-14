@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../mosaic/preview_painter.dart';
 import '../../mosaic/types.dart';
+import '../../print/print_catalog.dart' show isPrintRegionAllowed;
 import '../../services/haptics.dart';
 import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
@@ -474,6 +475,17 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                               context.push('/create/video');
                             },
                     ),
+                    // Print feature only for supported regions (US/UK/EU + RS).
+                    if (isPrintRegionAllowed()) ...[
+                      const SizedBox(height: AppSpacing.x3),
+                      SecondaryButton(
+                        label: 'Order as wall art',
+                        icon: Icons.image_outlined,
+                        onPressed: studio.plan == null
+                            ? null
+                            : () => context.push('/create/wallart'),
+                      ),
+                    ],
                   ],
                 ),
               ),

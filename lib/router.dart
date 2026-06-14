@@ -13,6 +13,7 @@ import 'api/downloads_api.dart';
 import 'screens/downloads/downloads_screen.dart';
 import 'screens/gallery/gallery_screen.dart';
 import 'screens/preview/mosaic_preview_screen.dart';
+import 'screens/print/wall_art_screen.dart';
 import 'screens/video/video_export_screen.dart';
 import 'screens/splash_screen.dart';
 import 'state/auth_controller.dart';
@@ -68,6 +69,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/create/video',
           builder: (_, _) => const VideoExportScreen()),
+      GoRoute(
+          path: '/create/wallart',
+          builder: (_, _) => const WallArtScreen()),
       GoRoute(path: '/downloads', builder: (_, _) => const DownloadsScreen()),
       GoRoute(path: '/account', builder: (_, _) => const AccountScreen()),
       GoRoute(

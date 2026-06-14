@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +12,7 @@ import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/app_card.dart';
 import '../../widgets/pressable.dart';
 import '../../widgets/shimmer.dart';
 
@@ -90,35 +93,50 @@ class GalleryScreen extends ConsumerWidget {
           error: (e, _) => _Message(
               icon: Icons.cloud_off,
               text: 'Could not load your mosaics.\n$e'),
-          data: (list) => list.isEmpty
-              ? _EmptyGallery()
-              : GridView.builder(
-                  padding: const EdgeInsets.all(AppSpacing.screen),
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: AppSpacing.x3,
-                    crossAxisSpacing: AppSpacing.x3,
-                    childAspectRatio: 0.85,
-                  ),
-                  itemCount: list.length,
-                  itemBuilder: (context, i) =>
-                      _ProjectCard(project: list[i]),
-                ),
+          data: (list) =>
+              list.isEmpty ? _EmptyGallery() : _ProjectGrid(projects: list),
         ),
       ),
     );
   }
 }
 
-class _ProjectCard extends ConsumerWidget {
-  const _ProjectCard({required this.project});
-  final ProjectSummary project;
+/// The project grid. Watches the base-thumbnail batch *once* (here, not per
+/// card) and hands the result down, so individual cards don't each subscribe to
+/// a provider — keeping the gallery resilient to TickerMode resume crashes.
+class _ProjectGrid extends ConsumerWidget {
+  const _ProjectGrid({required this.projects});
+  final List<ProjectSummary> projects;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return PressableScale(
-      onPressed: () {
+    final thumbs =
+        ref.watch(projectThumbnailsProvider(projectThumbKey(projects)));
+    return GridView.builder(
+      padding: const EdgeInsets.all(AppSpacing.screen),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: AppSpacing.x3,
+        crossAxisSpacing: AppSpacing.x3,
+        childAspectRatio: 0.85,
+      ),
+      itemCount: projects.length,
+      itemBuilder: (context, i) =>
+          _ProjectCard(project: projects[i], thumbs: thumbs),
+    );
+  }
+}
+
+class _ProjectCard extends ConsumerWidget {
+  const _ProjectCard({required this.project, required this.thumbs});
+  final ProjectSummary project;
+  final AsyncValue<Map<String, Uint8List>> thumbs;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return AppCard(
+      clip: true,
+      onTap: () {
         final studio = ref.read(studioControllerProvider);
         ref.read(renderControllerProvider.notifier).reset();
         // If this project is already open in the studio, jump straight back in
@@ -131,34 +149,26 @@ class _ProjectCard extends ConsumerWidget {
         context.push('/create/studio');
       },
       onLongPress: () => _confirmDelete(context, ref),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadius.card),
-          border: Border.all(color: AppColors.border),
-          boxShadow: AppGradients.elevation(opacity: 0.28, blur: 14),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: _CardImage(project: project)),
-            Padding(
-              padding: const EdgeInsets.all(AppSpacing.x3),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(project.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.label),
-                  const SizedBox(height: AppSpacing.x1),
-                  Text('${project.tileCount} tiles',
-                      style: AppTypography.caption),
-                ],
-              ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: _CardImage(project: project, thumbs: thumbs)),
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.x3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(project.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.label),
+                const SizedBox(height: AppSpacing.x1),
+                Text('${project.tileCount} tiles',
+                    style: AppTypography.caption),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -189,14 +199,15 @@ class _ProjectCard extends ConsumerWidget {
   }
 }
 
-/// Project card preview: the base photo (fetched via the authenticated
-/// thumbnail batch) when available, else a placeholder icon.
-class _CardImage extends ConsumerWidget {
-  const _CardImage({required this.project});
+/// Project card preview: the base photo (from the batched thumbnail fetch
+/// passed in by [_ProjectGrid]) when available, else a placeholder icon.
+class _CardImage extends StatelessWidget {
+  const _CardImage({required this.project, required this.thumbs});
   final ProjectSummary project;
+  final AsyncValue<Map<String, Uint8List>> thumbs;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     Widget placeholder() => Center(
           child: Icon(
             project.hasBase ? Icons.grid_on : Icons.image_outlined,
@@ -210,7 +221,6 @@ class _CardImage extends ConsumerWidget {
     if (url == null) {
       child = placeholder();
     } else {
-      final thumbs = ref.watch(projectThumbnailsProvider);
       final bytes = thumbs.asData?.value[url];
       if (bytes != null) {
         child = Image.memory(bytes,
@@ -219,7 +229,7 @@ class _CardImage extends ConsumerWidget {
             fit: BoxFit.cover,
             gaplessPlayback: true);
       } else if (thumbs.isLoading) {
-        child = const ColoredBox(color: AppColors.surfaceRaised);
+        child = const GradientShimmerBox();
       } else {
         child = placeholder();
       }

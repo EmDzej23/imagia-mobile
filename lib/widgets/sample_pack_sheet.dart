@@ -4,6 +4,7 @@ import '../data/sample_packs.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
+import 'app_card.dart';
 
 /// Bottom sheet to choose a free sample tile pack. Resolves to the chosen
 /// folder id, or null if dismissed. Mirrors the web "Choose Sample Pack" modal,
@@ -84,41 +85,30 @@ class _PackTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.background,
-      borderRadius: BorderRadius.circular(AppRadius.chip),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.chip),
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.x3),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.chip),
-            border: Border.all(color: AppColors.border),
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(AppSpacing.x3),
+      child: Row(
+        children: [
+          Text(pack.emoji, style: const TextStyle(fontSize: 24)),
+          const SizedBox(width: AppSpacing.x2),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(pack.label,
+                    style: AppTypography.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                Text(pack.description,
+                    style: AppTypography.caption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ],
+            ),
           ),
-          child: Row(
-            children: [
-              Text(pack.emoji, style: const TextStyle(fontSize: 24)),
-              const SizedBox(width: AppSpacing.x2),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(pack.label,
-                        style: AppTypography.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                    Text(pack.description,
-                        style: AppTypography.caption,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }

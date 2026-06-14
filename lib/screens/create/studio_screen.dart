@@ -609,12 +609,15 @@ class _SourceAndTiles extends StatelessWidget {
   }
 }
 
-/// Mosaic preview that plays the tile-drift reveal when first shown. The ticker
-/// lives here (a plain StatefulWidget) — deliberately NOT on the screen's
-/// ConsumerState, where TickerMode changes during route transitions would
-/// resume Riverpod subscriptions mid-build and crash. Because this widget is
-/// only mounted while a plan exists, it is (re)created exactly on the
-/// null→present transition, so the reveal fires at the right moments.
+/// Mosaic preview with motion. The first plan plays the full tile-drift reveal;
+/// later *committed* config changes (density / variety / mode — each already
+/// debounced to rest, and each producing a new plan object) cross-dissolve via
+/// the [AnimatedSwitcher]. Tint/blur mutate the same plan object (no new key),
+/// so they repaint instantly with no fade.
+///
+/// The ticker lives in [_PlanLayer] (a plain StatefulWidget), deliberately NOT
+/// on the screen's ConsumerState — a ticker there would let TickerMode changes
+/// during route transitions resume Riverpod subscriptions mid-build and crash.
 class _AnimatedMosaicPreview extends StatefulWidget {
   const _AnimatedMosaicPreview({
     required this.plan,
@@ -632,39 +635,99 @@ class _AnimatedMosaicPreview extends StatefulWidget {
   State<_AnimatedMosaicPreview> createState() => _AnimatedMosaicPreviewState();
 }
 
-class _AnimatedMosaicPreviewState extends State<_AnimatedMosaicPreview>
+class _AnimatedMosaicPreviewState extends State<_AnimatedMosaicPreview> {
+  bool _first = true;
+
+  @override
+  Widget build(BuildContext context) {
+    // The very first plan drifts in; every plan after it cross-fades.
+    final reveal = _first;
+    _first = false;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 260),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeOut,
+      // Stack the outgoing arrangement under the incoming one for a true
+      // cross-dissolve (both fill the preview area).
+      layoutBuilder: (current, previous) => Stack(
+        fit: StackFit.expand,
+        children: [...previous, ?current],
+      ),
+      child: _PlanLayer(
+        key: ValueKey(widget.plan),
+        plan: widget.plan,
+        tileImages: widget.tileImages,
+        baseImage: widget.baseImage,
+        tintStrength: widget.tintStrength,
+        reveal: reveal,
+      ),
+    );
+  }
+}
+
+/// One painted mosaic arrangement. When [reveal] it owns a controller and plays
+/// the staggered tile-drift; otherwise it paints fully assembled and lets the
+/// parent [AnimatedSwitcher] fade it in.
+class _PlanLayer extends StatefulWidget {
+  const _PlanLayer({
+    super.key,
+    required this.plan,
+    required this.tileImages,
+    required this.baseImage,
+    required this.tintStrength,
+    required this.reveal,
+  });
+
+  final SlimMosaicPlan plan;
+  final Map<String, ui.Image> tileImages;
+  final ui.Image? baseImage;
+  final double tintStrength;
+  final bool reveal;
+
+  @override
+  State<_PlanLayer> createState() => _PlanLayerState();
+}
+
+class _PlanLayerState extends State<_PlanLayer>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _reveal = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  );
+  AnimationController? _drift;
 
   @override
   void initState() {
     super.initState();
-    _reveal.forward(from: 0);
-    Haptics.selection();
+    if (widget.reveal) {
+      _drift = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 1100),
+      )..forward();
+      Haptics.selection();
+    }
   }
 
   @override
   void dispose() {
-    _reveal.dispose();
+    _drift?.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _reveal,
-      builder: (_, _) => CustomPaint(
+  Widget _paint(double appear) => CustomPaint(
         painter: MosaicPreviewPainter(
           plan: widget.plan,
           tileImages: widget.tileImages,
           baseImage: widget.baseImage,
           tintStrength: widget.tintStrength,
-          appear: _reveal.value,
+          appear: appear,
         ),
-      ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final drift = _drift;
+    if (drift == null) return _paint(1);
+    return AnimatedBuilder(
+      animation: drift,
+      builder: (_, _) => _paint(drift.value),
     );
   }
 }

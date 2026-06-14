@@ -18,7 +18,7 @@ abstract final class AppSpacing {
 /// Corner radius tokens. Echoes the rectangular tiles without being literal.
 abstract final class AppRadius {
   /// Cards and sheets.
-  static const double card = 12;
+  static const double card = 16;
 
   /// Buttons and controls.
   static const double control = 8;

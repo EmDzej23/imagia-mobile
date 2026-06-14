@@ -15,6 +15,7 @@ import '../../state/library_providers.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/app_card.dart';
 import '../../widgets/shimmer.dart';
 
 class DownloadsScreen extends ConsumerStatefulWidget {
@@ -83,37 +84,20 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                   itemBuilder: (context, i) {
                     final d = list[i];
                     final busy = _busyId == d.id;
-                    return Container(
+                    return AppCard(
                       padding: const EdgeInsets.all(AppSpacing.x3),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(AppRadius.card),
-                        border: Border.all(color: AppColors.border),
-                      ),
                       child: Row(
                         children: [
                           ClipRRect(
                             borderRadius:
                                 BorderRadius.circular(AppRadius.chip),
-                            child: Image.network(
-                              '${AppConfig.apiBaseUrl}/api/mosaic-image/${d.downloadToken}?maxSize=200',
+                            child: SizedBox(
                               width: 48,
                               height: 48,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => const SizedBox(
-                                width: 48,
-                                height: 48,
-                                child: Icon(Icons.image,
-                                    color: AppColors.textMuted),
+                              child: ShimmerNetworkImage(
+                                url:
+                                    '${AppConfig.apiBaseUrl}/api/mosaic-image/${d.downloadToken}?maxSize=200',
                               ),
-                              loadingBuilder: (_, child, progress) =>
-                                  progress == null
-                                      ? child
-                                      : const SizedBox(
-                                          width: 48,
-                                          height: 48,
-                                          child: ColoredBox(
-                                              color: AppColors.surfaceRaised)),
                             ),
                           ),
                           const SizedBox(width: AppSpacing.x3),

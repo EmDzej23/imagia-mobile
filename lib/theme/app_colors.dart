@@ -55,6 +55,14 @@ abstract final class AppGradients {
     colors: [AppColors.gradientStart, AppColors.gradientEnd],
   );
 
+  /// Subtle top-lit surface for cards — a touch lighter at the top edge for a
+  /// raised, modern feel.
+  static const surface = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [AppColors.surfaceRaised, AppColors.surface],
+  );
+
   /// Soft elevation shadow — depth without hard borders.
   static List<BoxShadow> elevation({double opacity = 0.35, double blur = 18}) =>
       [

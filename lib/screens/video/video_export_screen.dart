@@ -25,7 +25,7 @@ class VideoExportScreen extends ConsumerStatefulWidget {
 }
 
 class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
-  VideoStyle _style = VideoStyle.deepZoom;
+  VideoStyle _style = VideoStyle.reelPoster;
   bool _hd = true;
   final _caption = TextEditingController();
   bool _saving = false;
@@ -75,7 +75,12 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
               selected: _style,
               onSelected: video.isBusy
                   ? (_) {}
-                  : (s) => setState(() => _style = s),
+                  : (s) {
+                      setState(() => _style = s);
+                      // Drop any generated video — it no longer matches the
+                      // selected style; the user can regenerate freely.
+                      controller.reset();
+                    },
               options: [
                 for (final s in VideoStyle.values)
                   SegmentOption(s, s.label),
@@ -90,7 +95,6 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
               enabled: !video.isBusy,
               style: AppTypography.body,
               decoration: const InputDecoration(
-                hintText: 'A mosaic of 500 photos',
                 filled: true,
                 fillColor: AppColors.surface,
               ),
@@ -103,8 +107,12 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
                 const Spacer(),
                 SegmentedSelector<bool>(
                   selected: _hd,
-                  onSelected:
-                      video.isBusy ? (_) {} : (v) => setState(() => _hd = v),
+                  onSelected: video.isBusy
+                      ? (_) {}
+                      : (v) {
+                          setState(() => _hd = v);
+                          controller.reset();
+                        },
                   options: const [
                     SegmentOption(true, 'HD 1080'),
                     SegmentOption(false, 'Fast 720'),
@@ -246,9 +254,14 @@ class _VideoPreviewPlayerState extends State<_VideoPreviewPlayer> {
       );
     }
     return GestureDetector(
-      onTap: () => setState(() => _controller.value.isPlaying
-          ? _controller.pause()
-          : _controller.play()),
+      onTap: () {
+        if (_controller.value.isPlaying) {
+          _controller.pause();
+        } else {
+          _controller.play();
+        }
+        setState(() {});
+      },
       child: AspectRatio(
         aspectRatio: _controller.value.aspectRatio,
         child: VideoPlayer(_controller),

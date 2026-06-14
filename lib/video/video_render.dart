@@ -6,24 +6,41 @@ import 'package:flutter/material.dart';
 import '../mosaic/shared.dart' show getBaseTileId, isTileFlipped;
 import '../mosaic/types.dart';
 
-/// Curated mobile animation styles (a subset of the web's 20). All output 9:16.
-enum VideoStyle { photoWall, burst, deepZoom, morph, reelPoster }
+/// Curated mobile animation styles. All output a 9:16 branded "poster": the
+/// mosaic sits in a centre band on a real-looking wall, with an animated
+/// caption above and the Imagia branding lockup below.
+enum VideoStyle { reelPoster, photoWall, burst, deepZoom, morph }
 
 extension VideoStyleInfo on VideoStyle {
   String get label => switch (this) {
+        VideoStyle.reelPoster => 'Reel poster',
         VideoStyle.photoWall => 'Photo wall',
         VideoStyle.burst => 'Burst',
         VideoStyle.deepZoom => 'Deep zoom-out',
         VideoStyle.morph => 'Photo morph',
-        VideoStyle.reelPoster => 'Reel poster',
       };
 
   bool get isZoomout => this == VideoStyle.deepZoom;
   bool get isInPlace => this == VideoStyle.morph;
 }
 
+// Layout of the 9:16 frame: top strip = caption, centre band = mosaic, bottom
+// strip = branding. Fractions of the video height/width.
+const double _topBand = 0.135;
+const double _bottomBand = 0.20;
+const double _sidePad = 0.05;
+
+const String _brandTitle = 'Imagia';
+const String _brandSlogan = 'Made of moments';
+
 double _cubicEaseInOut(double t) =>
     t < 0.5 ? 4 * t * t * t : 1 - math.pow(-2 * t + 2, 3) / 2;
+
+double _easeOutCubic(double t) => 1 - math.pow(1 - t.clamp(0, 1), 3).toDouble();
+
+/// Eased 0→1 ramp over [span] starting at [start].
+double _appearSeg(double progress, double start, double span) =>
+    _easeOutCubic(((progress - start) / span).clamp(0.0, 1.0));
 
 /// Deterministic RNG matching the web (`seededRandom`).
 double Function() _seededRandom(int seed) {
@@ -34,16 +51,15 @@ double Function() _seededRandom(int seed) {
   };
 }
 
-/// Contain-fit of the mosaic inside the 9:16 frame, centered.
+/// Contain-fit of the mosaic inside an arbitrary [band] rect, centred.
 typedef ContentLayout = ({double scale, double ox, double oy});
 
-ContentLayout contentLayout(
-    double baseW, double baseH, double videoW, double videoH) {
-  final scale = math.min(videoW / baseW, videoH / baseH);
+ContentLayout _containIn(double baseW, double baseH, Rect band) {
+  final scale = math.min(band.width / baseW, band.height / baseH);
   return (
     scale: scale,
-    ox: (videoW - baseW * scale) / 2,
-    oy: (videoH - baseH * scale) / 2,
+    ox: band.left + (band.width - baseW * scale) / 2,
+    oy: band.top + (band.height - baseH * scale) / 2,
   );
 }
 
@@ -54,8 +70,7 @@ class VideoTile {
   final String tileId;
 }
 
-List<VideoTile> _scaleInto(
-    List<SlimPlacement> placements, ContentLayout fit) {
+List<VideoTile> _scaleInto(List<SlimPlacement> placements, ContentLayout fit) {
   return placements
       .map((p) => VideoTile(fit.ox + p.x * fit.scale, fit.oy + p.y * fit.scale,
           p.width * fit.scale, p.height * fit.scale, p.tileId))
@@ -63,7 +78,7 @@ List<VideoTile> _scaleInto(
 }
 
 /// Per-tile animation state: a start rect/rotation/scale easing into the final
-/// placement rect. Ported from `video.ts` `TileAnimState`.
+/// placement rect.
 class TileAnimState {
   TileAnimState({
     required this.startX,
@@ -84,7 +99,7 @@ class TileAnimState {
   String tileId;
 }
 
-/// Pre-computed animation plan for a video (states + layout + focus).
+/// Pre-computed animation plan for a video.
 class VideoAnim {
   VideoAnim({
     required this.style,
@@ -105,7 +120,7 @@ class VideoAnim {
   final List<TileAnimState> states;
   final double tintStrength;
 
-  /// Where the mosaic sits in the 9:16 frame (for the tint overlay).
+  /// Where the mosaic sits within the centre band (for the tint overlay + frame).
   final Rect contentRect;
   final double? focusX;
   final double? focusY;
@@ -119,7 +134,15 @@ VideoAnim buildVideoAnim({
   required double videoH,
   String? caption,
 }) {
-  final fit = contentLayout(plan.baseWidth, plan.baseHeight, videoW, videoH);
+  // The mosaic lives in the centre band; the top/bottom strips hold caption +
+  // branding.
+  final band = Rect.fromLTRB(
+    videoW * _sidePad,
+    videoH * _topBand,
+    videoW * (1 - _sidePad),
+    videoH * (1 - _bottomBand),
+  );
+  final fit = _containIn(plan.baseWidth, plan.baseHeight, band);
   final tiles = _scaleInto(plan.placements, fit);
 
   double? fx, fy;
@@ -133,7 +156,8 @@ VideoAnim buildVideoAnim({
     for (var i = 0; i < tiles.length; i++) {
       final cx = tiles[i].x + tiles[i].w / 2;
       final cy = tiles[i].y + tiles[i].h / 2;
-      final d = (cx - targetX) * (cx - targetX) + (cy - targetY) * (cy - targetY);
+      final d =
+          (cx - targetX) * (cx - targetX) + (cy - targetY) * (cy - targetY);
       if (d < minDist) {
         minDist = d;
         best = i;
@@ -141,11 +165,11 @@ VideoAnim buildVideoAnim({
     }
     fx = tiles[best].x + tiles[best].w / 2;
     fy = tiles[best].y + tiles[best].h / 2;
-    states = _buildZoomoutStates(tiles);
+    states = _buildStaticStates(tiles);
+  } else if (style == VideoStyle.reelPoster) {
+    states = _buildStaticStates(tiles);
   } else if (style == VideoStyle.photoWall) {
     states = _buildGridStates(tiles, videoW, videoH);
-  } else if (style == VideoStyle.reelPoster) {
-    states = _buildZoomoutStates(tiles); // static; camera handled separately
   } else {
     states = _buildStates(tiles, videoW, videoH, style);
   }
@@ -157,32 +181,30 @@ VideoAnim buildVideoAnim({
     tiles: tiles,
     states: states,
     tintStrength: plan.tintStrength,
-    contentRect: Rect.fromLTWH(fit.ox, fit.oy, plan.baseWidth * fit.scale,
-        plan.baseHeight * fit.scale),
+    contentRect: Rect.fromLTWH(
+        fit.ox, fit.oy, plan.baseWidth * fit.scale, plan.baseHeight * fit.scale),
     focusX: fx,
     focusY: fy,
     caption: caption,
   );
 }
 
-List<TileAnimState> _buildZoomoutStates(List<VideoTile> tiles) {
-  return tiles
-      .map((t) => TileAnimState(
-            startX: t.x,
-            startY: t.y,
-            startW: t.w,
-            startH: t.h,
-            startRotation: 0,
-            startScale: 1,
-            endX: t.x,
-            endY: t.y,
-            endW: t.w,
-            endH: t.h,
-            stagger: 0,
-            tileId: t.tileId,
-          ))
-      .toList();
-}
+List<TileAnimState> _buildStaticStates(List<VideoTile> tiles) => tiles
+    .map((t) => TileAnimState(
+          startX: t.x,
+          startY: t.y,
+          startW: t.w,
+          startH: t.h,
+          startRotation: 0,
+          startScale: 1,
+          endX: t.x,
+          endY: t.y,
+          endW: t.w,
+          endH: t.h,
+          stagger: 0,
+          tileId: t.tileId,
+        ))
+    .toList();
 
 List<TileAnimState> _buildStates(
     List<VideoTile> tiles, double videoW, double videoH, VideoStyle style) {
@@ -195,8 +217,8 @@ List<TileAnimState> _buildStates(
   return List.generate(n, (i) {
     final sp = tiles[i];
     final tileCX = sp.x + sp.w / 2, tileCY = sp.y + sp.h / 2;
-    final distFromCenter =
-        math.sqrt((tileCX - cx) * (tileCX - cx) + (tileCY - cy) * (tileCY - cy));
+    final distFromCenter = math.sqrt(
+        (tileCX - cx) * (tileCX - cx) + (tileCY - cy) * (tileCY - cy));
 
     switch (style) {
       case VideoStyle.morph:
@@ -262,8 +284,8 @@ List<TileAnimState> _buildGridStates(
     final col = slot % cols;
     final row = slot ~/ cols;
     final tileCX = sp.x + sp.w / 2, tileCY = sp.y + sp.h / 2;
-    final dist =
-        math.sqrt((tileCX - cx) * (tileCX - cx) + (tileCY - cy) * (tileCY - cy));
+    final dist = math.sqrt(
+        (tileCX - cx) * (tileCX - cx) + (tileCY - cy) * (tileCY - cy));
     return TileAnimState(
       startX: pad + col * (cellW + gap),
       startY: pad + row * (cellH + gap),
@@ -278,13 +300,14 @@ List<TileAnimState> _buildGridStates(
 double _cameraZoom(double progress, VideoStyle style) {
   if (style.isInPlace) return 1.0;
   if (style.isZoomout) {
-    const hold = 0.03, easeEnd = 0.92, initial = 10.0;
+    // Settle earlier (0.66) than the web so the branded outro has room.
+    const hold = 0.03, easeEnd = 0.66, initial = 10.0;
     if (progress <= hold) return initial;
     if (progress >= easeEnd) return 1.0;
     return initial +
         (1.0 - initial) * _cubicEaseInOut((progress - hold) / (easeEnd - hold));
   }
-  const hold = 0.05, easeEnd = 0.75, initial = 4.0;
+  const hold = 0.05, easeEnd = 0.62, initial = 4.0;
   if (progress <= hold) return initial;
   if (progress >= easeEnd) return 1.0;
   return initial +
@@ -292,24 +315,24 @@ double _cameraZoom(double progress, VideoStyle style) {
 }
 
 double _tileEased(double progress, double stagger, VideoStyle style) {
-  if (style.isZoomout) return 1;
+  if (style.isZoomout || style == VideoStyle.reelPoster) return 1;
   double moveStart, moveEndBase, staggerRange;
   switch (style) {
     case VideoStyle.morph:
       moveStart = 0.05;
-      moveEndBase = 0.60;
-      staggerRange = 0.25;
+      moveEndBase = 0.52;
+      staggerRange = 0.22;
     case VideoStyle.photoWall:
       moveStart = 0.01;
-      moveEndBase = 0.68;
+      moveEndBase = 0.58;
       staggerRange = 0.08;
     case VideoStyle.burst:
       moveStart = 0.01;
-      moveEndBase = 0.60;
+      moveEndBase = 0.52;
       staggerRange = 0.12;
     default:
       moveStart = 0.01;
-      moveEndBase = 0.68;
+      moveEndBase = 0.58;
       staggerRange = 0.08;
   }
   final start = moveStart + stagger * staggerRange;
@@ -319,15 +342,21 @@ double _tileEased(double progress, double stagger, VideoStyle style) {
   return _cubicEaseInOut((progress - start) / (end - start));
 }
 
-// ── Per-frame painter ───────────────────────────────────────────────────────
+/// When the mosaic is settled in the band, so caption + branding can come in.
+({double cap, double brand}) _overlayTiming(VideoStyle s) => switch (s) {
+      VideoStyle.reelPoster => (cap: 0.10, brand: 0.32),
+      VideoStyle.morph => (cap: 0.58, brand: 0.70),
+      VideoStyle.photoWall => (cap: 0.64, brand: 0.76),
+      VideoStyle.burst => (cap: 0.58, brand: 0.70),
+      VideoStyle.deepZoom => (cap: 0.68, brand: 0.80),
+    };
 
-double _easeOutCubic(double t) => 1 - math.pow(1 - t, 3).toDouble();
+// ── Drawing ──────────────────────────────────────────────────────────────────
 
 final ui.Paint _tilePaint = ui.Paint()
   ..filterQuality = ui.FilterQuality.medium
   ..isAntiAlias = false;
 
-/// Source rect center-cropping [img] to aspect ratio [cellAR] (w/h).
 ui.Rect _centerCrop(ui.Image img, double cellAR) {
   final tw = img.width.toDouble(), th = img.height.toDouble();
   final tileAR = tw / th;
@@ -339,25 +368,27 @@ ui.Rect _centerCrop(ui.Image img, double cellAR) {
   return ui.Rect.fromLTWH(0, (th - sh) / 2, tw, sh);
 }
 
-void _drawGradientBackground(ui.Canvas canvas, double vw, double vh) {
-  final shader = ui.Gradient.radial(
-    ui.Offset(vw / 2, vh * 0.42),
-    math.max(vw, vh) * 0.8,
-    const [Color(0xFF1E2233), Color(0xFF0A0B0F)],
-    const [0.0, 1.0],
-  );
-  canvas.drawRect(
-      ui.Rect.fromLTWH(0, 0, vw, vh), ui.Paint()..shader = shader);
-}
-
-void _drawTile(ui.Canvas canvas, ui.Image img, bool flipped, double x, double y,
-    double w, double h, double rotation, double scale) {
+void _drawTile(
+  ui.Canvas canvas,
+  ui.Image img,
+  bool flipped,
+  double x,
+  double y,
+  double w,
+  double h,
+  double rotation,
+  double scale, {
+  ui.Image? overlay,
+  ui.Rect? overlaySrc,
+  double overlayAlpha = 0,
+}) {
   final src = _centerCrop(img, w / h);
   final dst = ui.Rect.fromLTWH(-w / 2, -h / 2, w, h);
   canvas.save();
   canvas.translate(x + w / 2, y + h / 2);
   if (rotation != 0) canvas.rotate(rotation);
   if (scale != 1) canvas.scale(scale, scale);
+  // Tile photo (mirrored for variety when flipped).
   if (flipped) {
     canvas.save();
     canvas.scale(-1, 1);
@@ -365,6 +396,19 @@ void _drawTile(ui.Canvas canvas, ui.Image img, bool flipped, double x, double y,
     canvas.restore();
   } else {
     canvas.drawImageRect(img, src, dst, _tilePaint);
+  }
+  // This tile's slice of the base overlay — glued to the tile (follows its
+  // position/rotation/scale) but never mirrored, so when all tiles meet at the
+  // end the overlay reconstructs exactly like the mosaic preview.
+  if (overlay != null && overlaySrc != null && overlayAlpha > 0) {
+    canvas.drawImageRect(
+      overlay,
+      overlaySrc,
+      dst,
+      ui.Paint()
+        ..color = Color.fromRGBO(255, 255, 255, overlayAlpha)
+        ..filterQuality = ui.FilterQuality.high,
+    );
   }
   canvas.restore();
 }
@@ -381,17 +425,155 @@ void _drawTint(ui.Canvas canvas, ui.Image overlay, Rect content, double alpha) {
   );
 }
 
-void _drawCaption(ui.Canvas canvas, double vw, double vh, String text) {
-  final builder = ui.ParagraphBuilder(ui.ParagraphStyle(
+void _drawCaption(
+    ui.Canvas canvas, double vw, double vh, String text, double appear) {
+  if (appear <= 0 || text.isEmpty) return;
+  final a = appear.clamp(0.0, 1.0);
+  final slide = (1 - a) * vh * 0.03; // ease down from above
+  final size = vw * 0.055;
+  final para = (ui.ParagraphBuilder(ui.ParagraphStyle(
     textAlign: TextAlign.center,
-    fontSize: vw * 0.052,
+    fontFamily: 'Inter',
+    fontSize: size,
     fontWeight: FontWeight.w600,
   ))
-    ..pushStyle(ui.TextStyle(color: const Color(0xFFF4F5F7)))
-    ..addText(text);
-  final para = builder.build()
+        ..pushStyle(ui.TextStyle(
+          color: Color.fromRGBO(244, 245, 247, a),
+          height: 1.15,
+          shadows: [
+            ui.Shadow(
+                color: Color.fromRGBO(0, 0, 0, 0.55 * a),
+                blurRadius: 16,
+                offset: const Offset(0, 3)),
+          ],
+        ))
+        ..addText(text))
+      .build()
     ..layout(ui.ParagraphConstraints(width: vw * 0.86));
-  canvas.drawParagraph(para, ui.Offset(vw * 0.07, vh * 0.86));
+  final centerY = vh * _topBand * 0.52;
+  canvas.drawParagraph(
+      para, ui.Offset(vw * 0.07, centerY - para.height / 2 - slide));
+}
+
+void _drawBranding(
+    ui.Canvas canvas, double vw, double vh, ui.Image? logo, double appear) {
+  if (appear <= 0) return;
+  final a = appear.clamp(0.0, 1.0);
+  final slide = (1 - a) * vh * 0.035; // ease up from below
+
+  final shadow = [
+    ui.Shadow(
+        color: Color.fromRGBO(0, 0, 0, 0.5 * a),
+        blurRadius: 12,
+        offset: const Offset(0, 3)),
+  ];
+
+  // Stacked lockup: logo on top, wordmark, then slogan — all centred.
+  final logoH = logo != null ? vw * 0.125 : 0.0;
+  final logoAR = logo != null ? logo.width / logo.height : 1.0;
+  final logoW = logoH * logoAR;
+
+  final titleSize = vw * 0.062;
+  final titlePara = (ui.ParagraphBuilder(ui.ParagraphStyle(
+    textAlign: TextAlign.center,
+    fontFamily: 'Inter',
+    fontSize: titleSize,
+    fontWeight: FontWeight.w700,
+  ))
+        ..pushStyle(ui.TextStyle(
+            color: Color.fromRGBO(244, 245, 247, a),
+            letterSpacing: titleSize * 0.01,
+            shadows: shadow))
+        ..addText(_brandTitle))
+      .build()
+    ..layout(ui.ParagraphConstraints(width: vw));
+
+  final sloganSize = vw * 0.030;
+  final sloganPara = (ui.ParagraphBuilder(ui.ParagraphStyle(
+    textAlign: TextAlign.center,
+    fontFamily: 'Inter',
+    fontSize: sloganSize,
+    fontWeight: FontWeight.w500,
+  ))
+        ..pushStyle(ui.TextStyle(
+            color: Color.fromRGBO(232, 220, 192, 0.92 * a),
+            letterSpacing: sloganSize * 0.12,
+            shadows: shadow))
+        ..addText(_brandSlogan))
+      .build()
+    ..layout(ui.ParagraphConstraints(width: vw));
+
+  final gapLogo = vh * 0.008;
+  final gapSlogan = vh * 0.006;
+  final blockH = logoH +
+      gapLogo +
+      titlePara.height +
+      gapSlogan +
+      sloganPara.height;
+  final top = vh * 0.885 - blockH / 2 + slide;
+
+  if (logo != null) {
+    canvas.drawImageRect(
+      logo,
+      ui.Rect.fromLTWH(0, 0, logo.width.toDouble(), logo.height.toDouble()),
+      ui.Rect.fromLTWH((vw - logoW) / 2, top, logoW, logoH),
+      ui.Paint()
+        ..color = Color.fromRGBO(255, 255, 255, a)
+        ..filterQuality = ui.FilterQuality.high,
+    );
+  }
+  final titleY = top + logoH + gapLogo;
+  canvas.drawParagraph(titlePara, ui.Offset(0, titleY));
+  canvas.drawParagraph(
+      sloganPara, ui.Offset(0, titleY + titlePara.height + gapSlogan));
+}
+
+/// Renders the framed "poster" (cream mat + drop shadow + mosaic) for the
+/// reelPoster style and as the settled look. [intro] fades/scales it in.
+void _drawPoster(
+  ui.Canvas canvas,
+  VideoAnim anim,
+  Map<String, ui.Image> tileImages,
+  ui.Image? overlay,
+  double progress,
+) {
+  final c = anim.contentRect;
+  final intro = _easeOutCubic((progress / 0.22).clamp(0.0, 1.0));
+  final ken = 1 + 0.05 * _easeOutCubic(progress);
+  final s = ken * (0.97 + 0.03 * intro);
+
+  canvas.saveLayer(
+      null, ui.Paint()..color = Color.fromRGBO(255, 255, 255, intro));
+  canvas.translate(c.center.dx, c.center.dy);
+  canvas.scale(s, s);
+  canvas.translate(-c.center.dx, -c.center.dy);
+
+  final matInset = c.width * 0.035;
+  final mat = RRect.fromRectAndRadius(
+      c.inflate(matInset), Radius.circular(c.width * 0.02));
+  // Drop shadow on the wall.
+  canvas.drawRRect(
+    mat.shift(Offset(0, c.height * 0.018)),
+    ui.Paint()
+      ..color = const Color(0xAA000000)
+      ..maskFilter = ui.MaskFilter.blur(ui.BlurStyle.normal, c.width * 0.05),
+  );
+  // Cream mat board.
+  canvas.drawRRect(mat, ui.Paint()..color = const Color(0xFFEDE8DE));
+
+  canvas.save();
+  canvas.clipRRect(
+      RRect.fromRectAndRadius(c, Radius.circular(c.width * 0.012)));
+  for (final t in anim.tiles) {
+    final img = tileImages[getBaseTileId(t.tileId)];
+    if (img == null) continue;
+    _drawTile(canvas, img, isTileFlipped(t.tileId), t.x, t.y, t.w, t.h, 0, 1);
+  }
+  if (anim.tintStrength > 0 && overlay != null) {
+    _drawTint(canvas, overlay, c, anim.tintStrength);
+  }
+  canvas.restore();
+  canvas.restore(); // saveLayer
 }
 
 /// Renders one frame at [progress] in [0,1] onto [canvas].
@@ -401,54 +583,54 @@ void drawVideoFrame(
   Map<String, ui.Image> tileImages,
   ui.Image? morphBase,
   ui.Image? overlay,
+  ui.Image wall,
+  ui.Image? logo,
   double progress,
 ) {
   final vw = anim.videoW, vh = anim.videoH;
-  _drawGradientBackground(canvas, vw, vh);
+
+  // Wall backdrop.
+  canvas.drawImageRect(
+    wall,
+    ui.Rect.fromLTWH(0, 0, wall.width.toDouble(), wall.height.toDouble()),
+    ui.Rect.fromLTWH(0, 0, vw, vh),
+    ui.Paint()..filterQuality = ui.FilterQuality.low,
+  );
 
   if (anim.style == VideoStyle.reelPoster) {
-    // Static poster with a slow Ken-Burns zoom + caption.
-    final z = 1.0 + 0.08 * _easeOutCubic(progress.clamp(0, 1).toDouble());
-    canvas.save();
-    canvas.translate(vw / 2, vh / 2);
-    canvas.scale(z, z);
-    canvas.translate(-vw / 2, -vh / 2);
-    // Drop shadow + subtle border around the poster.
-    final c = anim.contentRect;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(c.inflate(2), const Radius.circular(8)),
-      ui.Paint()
-        ..color = const Color(0x66000000)
-        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 24),
-    );
-    canvas.save();
-    canvas.clipRRect(
-        RRect.fromRectAndRadius(c, const Radius.circular(6)));
-    for (final t in anim.tiles) {
-      final img = tileImages[getBaseTileId(t.tileId)];
-      if (img == null) continue;
-      _drawTile(canvas, img, isTileFlipped(t.tileId), t.x, t.y, t.w, t.h, 0, 1);
-    }
-    if (anim.tintStrength > 0 && overlay != null) {
-      _drawTint(canvas, overlay, c, anim.tintStrength);
-    }
-    canvas.restore();
-    canvas.restore();
-    if (anim.caption != null && anim.caption!.isNotEmpty) {
-      _drawCaption(canvas, vw, vh, anim.caption!);
-    }
-    _drawFadeOut(canvas, vw, vh, progress);
-    return;
+    _drawPoster(canvas, anim, tileImages, overlay, progress);
+  } else {
+    _drawAnimatedTiles(canvas, anim, tileImages, morphBase, overlay, progress);
   }
 
+  // Animated overlays: caption above, branding below.
+  final timing = _overlayTiming(anim.style);
+  if (anim.caption != null && anim.caption!.isNotEmpty) {
+    _drawCaption(canvas, vw, vh, anim.caption!,
+        _appearSeg(progress, timing.cap, 0.14));
+  }
+  _drawBranding(
+      canvas, vw, vh, logo, _appearSeg(progress, timing.brand, 0.16));
+
+  _drawFadeOut(canvas, vw, vh, progress);
+}
+
+void _drawAnimatedTiles(
+  ui.Canvas canvas,
+  VideoAnim anim,
+  Map<String, ui.Image> tileImages,
+  ui.Image? morphBase,
+  ui.Image? overlay,
+  double progress,
+) {
+  final vw = anim.videoW, vh = anim.videoH;
   var zoom = _cameraZoom(progress, anim.style);
   final screenCX = vw / 2, screenCY = vh / 2;
   var fx = anim.focusX ?? screenCX;
   var fy = anim.focusY ?? screenCY;
 
   // Zoom-out: pan the focus from the subject back to the frame centre as the
-  // camera pulls out, so the (letterboxed 9:16) mosaic ends perfectly centred
-  // rather than offset on the subject tile.
+  // camera pulls out, so the mosaic ends perfectly centred in its band.
   if (anim.style.isZoomout) {
     const initial = 10.0;
     final blend = ((initial - zoom) / (initial - 1.0)).clamp(0.0, 1.0);
@@ -456,12 +638,12 @@ void drawVideoFrame(
     fy = fy + (screenCY - fy) * blend;
   }
 
-  const driftStart = 0.82;
+  const driftStart = 0.80;
   if (!anim.style.isZoomout && zoom <= 1.01 && progress > driftStart) {
     final dt = (progress - driftStart) / (1.0 - driftStart);
-    zoom = 1.0 + 0.18 * math.sin(dt * math.pi);
-    fx = screenCX + math.sin(dt * math.pi * 2.0) * vw * 0.07;
-    fy = screenCY + math.sin(dt * math.pi * 1.3) * vh * 0.05;
+    zoom = 1.0 + 0.12 * math.sin(dt * math.pi);
+    fx = screenCX + math.sin(dt * math.pi * 2.0) * vw * 0.05;
+    fy = screenCY + math.sin(dt * math.pi * 1.3) * vh * 0.035;
   }
 
   final invZoom = 1 / zoom;
@@ -490,6 +672,18 @@ void drawVideoFrame(
     }
   }
 
+  // Styles where tiles fly in from non-final positions would briefly show the
+  // full base overlay floating in the empty band. Instead, give each tile its
+  // own slice of the overlay so it's carried in — the overlay only "completes"
+  // as the tiles settle, matching the mosaic preview.
+  final perTileOverlay = (anim.style == VideoStyle.burst ||
+          anim.style == VideoStyle.photoWall) &&
+      overlay != null &&
+      anim.tintStrength > 0;
+  final c = anim.contentRect;
+  final ow = overlay?.width.toDouble() ?? 0;
+  final oh = overlay?.height.toDouble() ?? 0;
+
   const scaleOvershoot = 0.15;
   for (final st in anim.states) {
     final t = _tileEased(progress, st.stagger, anim.style);
@@ -506,23 +700,36 @@ void drawVideoFrame(
     if (x + dw < visL || x > visR || y + dh < visT || y > visB) continue;
     final img = tileImages[getBaseTileId(st.tileId)];
     if (img == null) continue;
+
+    ui.Rect? overlaySrc;
+    if (perTileOverlay) {
+      // The overlay region for this tile's FINAL cell (relative to contentRect).
+      overlaySrc = ui.Rect.fromLTWH(
+        (st.endX - c.left) / c.width * ow,
+        (st.endY - c.top) / c.height * oh,
+        st.endW / c.width * ow,
+        st.endH / c.height * oh,
+      );
+    }
+
     _drawTile(canvas, img, isTileFlipped(st.tileId), x, y, dw, dh,
-        st.startRotation * (1 - t), scale);
+        st.startRotation * (1 - t), scale,
+        overlay: perTileOverlay ? overlay : null,
+        overlaySrc: overlaySrc,
+        overlayAlpha: perTileOverlay ? anim.tintStrength : 0);
   }
 
-  if (anim.tintStrength > 0 && overlay != null) {
+  // Full-band overlay for the styles that don't carry it per-tile (deepZoom &
+  // morph keep all tiles present, so no premature base photo shows).
+  if (!perTileOverlay && anim.tintStrength > 0 && overlay != null) {
     _drawTint(canvas, overlay, anim.contentRect, anim.tintStrength);
   }
 
   canvas.restore();
-  if (anim.caption != null && anim.caption!.isNotEmpty) {
-    _drawCaption(canvas, vw, vh, anim.caption!);
-  }
-  _drawFadeOut(canvas, vw, vh, progress);
 }
 
 void _drawFadeOut(ui.Canvas canvas, double vw, double vh, double progress) {
-  const fadeStart = 0.93;
+  const fadeStart = 0.95;
   if (progress > fadeStart) {
     final a = ((progress - fadeStart) / (1.0 - fadeStart)).clamp(0.0, 1.0);
     canvas.drawRect(ui.Rect.fromLTWH(0, 0, vw, vh),

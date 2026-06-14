@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'app_colors.dart';
 import 'app_spacing.dart';
@@ -21,7 +20,9 @@ abstract final class AppTheme {
         onSurface: AppColors.textPrimary,
         onPrimary: AppColors.textPrimary,
       ),
-      textTheme: GoogleFonts.interTextTheme(base.textTheme).apply(
+      // Bundled Inter font asset (no runtime fetch).
+      textTheme: base.textTheme.apply(
+        fontFamily: AppTypography.fontFamily,
         bodyColor: AppColors.textPrimary,
         displayColor: AppColors.textPrimary,
       ),

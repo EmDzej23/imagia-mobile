@@ -6,6 +6,7 @@ import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/app_card.dart';
 import '../../widgets/secondary_button.dart';
 import '../legal/help_screen.dart';
 import '../legal/legal_screen.dart';
@@ -62,13 +63,8 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
           padding: const EdgeInsets.all(AppSpacing.screen),
           children: [
             // Profile + balance
-            Container(
+            AppCard(
               padding: const EdgeInsets.all(AppSpacing.x4),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(AppRadius.card),
-                border: Border.all(color: AppColors.border),
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -172,24 +168,16 @@ class _LinkTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.x2),
-      child: InkWell(
+      child: AppCard(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.x4),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 20, color: AppColors.textSecondary),
-              const SizedBox(width: AppSpacing.x3),
-              Expanded(child: Text(label, style: AppTypography.body)),
-              const Icon(Icons.chevron_right, color: AppColors.textMuted),
-            ],
-          ),
+        padding: const EdgeInsets.all(AppSpacing.x4),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: AppColors.textSecondary),
+            const SizedBox(width: AppSpacing.x3),
+            Expanded(child: Text(label, style: AppTypography.body)),
+            const Icon(Icons.chevron_right, color: AppColors.textMuted),
+          ],
         ),
       ),
     );
@@ -213,51 +201,46 @@ class _PackageTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.x3),
-      child: InkWell(
+      child: AppCard(
         onTap: disabled ? null : onTap,
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.x4),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(pkg.label, style: AppTypography.label),
-                    const SizedBox(height: 2),
-                    Text(
-                      '\$${(pkg.price / pkg.tokens).toStringAsFixed(2)} per render',
-                      style: AppTypography.caption,
-                    ),
-                  ],
-                ),
+        padding: const EdgeInsets.all(AppSpacing.x4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(pkg.label, style: AppTypography.label),
+                  const SizedBox(height: 2),
+                  Text(
+                    '\$${(pkg.price / pkg.tokens).toStringAsFixed(2)} per render',
+                    style: AppTypography.caption,
+                  ),
+                ],
               ),
-              if (loading)
-                const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppColors.accent),
-                )
-              else
-                Container(
+            ),
+            if (loading)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.accent),
+              )
+            else
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: AppGradients.brand,
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                ),
+                child: Padding(
                   padding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(AppRadius.control),
-                  ),
                   child: Text('\$${pkg.price.toStringAsFixed(2)}',
-                      style: AppTypography.label),
+                      style: AppTypography.label
+                          .copyWith(color: AppColors.textPrimary)),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );

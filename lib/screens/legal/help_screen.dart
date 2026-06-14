@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/app_card.dart';
 
 /// "How it works" + FAQ. Content mirrors the web landing FAQ so the guidance
 /// stays consistent across platforms.
@@ -90,23 +91,20 @@ class HelpScreen extends StatelessWidget {
                 style: AppTypography.caption),
             const SizedBox(height: AppSpacing.x6),
             for (final (title, body) in _steps) ...[
-              Container(
-                margin: const EdgeInsets.only(bottom: AppSpacing.x3),
-                padding: const EdgeInsets.all(AppSpacing.x4),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(AppRadius.card),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: AppTypography.label),
-                    const SizedBox(height: AppSpacing.x1),
-                    Text(body,
-                        style: AppTypography.body
-                            .copyWith(color: AppColors.textSecondary)),
-                  ],
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.x3),
+                child: AppCard(
+                  padding: const EdgeInsets.all(AppSpacing.x4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: AppTypography.label),
+                      const SizedBox(height: AppSpacing.x1),
+                      Text(body,
+                          style: AppTypography.body
+                              .copyWith(color: AppColors.textSecondary)),
+                    ],
+                  ),
                 ),
               ),
             ],

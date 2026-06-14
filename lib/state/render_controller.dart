@@ -10,6 +10,18 @@ import 'studio_controller.dart';
 final renderApiProvider =
     Provider((ref) => RenderApi(ref.watch(apiClientProvider)));
 
+/// True while the export/render screen is mounted. The app-wide render
+/// indicator hides itself when this is true (so it doesn't show on the very
+/// screen it would link to). The export screen toggles it on mount/unmount.
+class OnRenderScreen extends Notifier<bool> {
+  @override
+  bool build() => false;
+  set value(bool v) => state = v;
+}
+
+final onRenderScreenProvider =
+    NotifierProvider<OnRenderScreen, bool>(OnRenderScreen.new);
+
 enum RenderPhase { idle, rendering, completed, failed }
 
 class RenderUiState {

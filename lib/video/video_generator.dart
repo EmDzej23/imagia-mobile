@@ -124,41 +124,8 @@ Future<ui.Image?> _loadAssetImage(String asset) async {
   }
 }
 
-double Function() _wallRng(int seed) {
-  var s = seed;
-  return () {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}
-
-/// Procedurally builds a realistic interior wall (once, reused every frame):
-/// warm dark concrete with a soft spotlight, plaster mottling, fine grain and a
-/// vignette. Makes the colourful mosaic pop like a framed print on a wall.
-Future<ui.Image> _buildWall(int vw, int vh) async {
-  final w = vw.toDouble(), h = vh.toDouble();
-  final full = ui.Rect.fromLTWH(0, 0, w, h);
-  final recorder = ui.PictureRecorder();
-  final canvas = ui.Canvas(recorder, full);
-
-  // Base vertical gradient.
-  canvas.drawRect(
-    full,
-    ui.Paint()
-      ..shader = ui.Gradient.linear(const ui.Offset(0, 0), ui.Offset(0, h),
-          const [ui.Color(0xFF2B2832), ui.Color(0xFF1A1820)]),
-  );
-
-  // Soft spotlight behind the poster (upper-centre).
-  canvas.drawRect(
-    full,
-    ui.Paint()
-      ..shader = ui.Gradient.radial(
-          ui.Offset(w / 2, h * 0.44), math.max(w, h) * 0.62,
-          const [ui.Color(0x22FFFFFF), ui.Color(0x00FFFFFF)]),
-  );
-
-  // Plaster mottling: large soft blobs, alternating lighter / darker.
+/// Plaster mottling + fine grain for the procedural-fallback wall.
+void _wallTexture(ui.Canvas canvas, double w, double h) {
   final rng = _wallRng(7);
   for (var i = 0; i < 42; i++) {
     final r = w * (0.06 + rng() * 0.14);
@@ -171,8 +138,6 @@ Future<ui.Image> _buildWall(int vw, int vh) async {
         ..maskFilter = ui.MaskFilter.blur(ui.BlurStyle.normal, r * 0.8),
     );
   }
-
-  // Fine grain.
   for (var i = 0; i < 460; i++) {
     final light = rng() > 0.5;
     canvas.drawCircle(
@@ -182,6 +147,69 @@ Future<ui.Image> _buildWall(int vw, int vh) async {
         ..color = light ? const ui.Color(0x0AFFFFFF) : const ui.Color(0x0E000000),
     );
   }
+}
+
+double Function() _wallRng(int seed) {
+  var s = seed;
+  return () {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
+/// Builds the wall backdrop (once, reused every frame). Uses the bundled wall
+/// photo cover-fit and darkened, falling back to a procedural interior wall.
+/// Either way a soft spotlight + vignette + floor gradient make the colourful
+/// mosaic pop like a framed print on a wall.
+Future<ui.Image> _buildWall(int vw, int vh) async {
+  final w = vw.toDouble(), h = vh.toDouble();
+  final full = ui.Rect.fromLTWH(0, 0, w, h);
+  final recorder = ui.PictureRecorder();
+  final canvas = ui.Canvas(recorder, full);
+
+  final photo = await _loadAssetImage('assets/wall.jpg');
+  if (photo != null) {
+    // Cover-fit the wall photo, then dim it so the artwork reads against it.
+    final iw = photo.width.toDouble(), ih = photo.height.toDouble();
+    final targetAR = w / h;
+    final ui.Rect src;
+    if (iw / ih > targetAR) {
+      final sw = ih * targetAR;
+      src = ui.Rect.fromLTWH((iw - sw) / 2, 0, sw, ih);
+    } else {
+      final sh = iw / targetAR;
+      src = ui.Rect.fromLTWH(0, (ih - sh) / 2, iw, sh);
+    }
+    canvas.drawImageRect(
+        photo, src, full, ui.Paint()..filterQuality = ui.FilterQuality.medium);
+    canvas.drawRect(full, ui.Paint()..color = const ui.Color(0x4D000000));
+  } else {
+    // Procedural fallback: base vertical gradient + plaster mottling + grain.
+    canvas.drawRect(
+      full,
+      ui.Paint()
+        ..shader = ui.Gradient.linear(const ui.Offset(0, 0), ui.Offset(0, h),
+            const [ui.Color(0xFF2B2832), ui.Color(0xFF1A1820)]),
+    );
+    _wallTexture(canvas, w, h);
+  }
+
+  // Soft spotlight behind the poster (upper-centre).
+  canvas.drawRect(
+    full,
+    ui.Paint()
+      ..shader = ui.Gradient.radial(
+          ui.Offset(w / 2, h * 0.44), math.max(w, h) * 0.62,
+          const [ui.Color(0x22FFFFFF), ui.Color(0x00FFFFFF)]),
+  );
+
+  // Soft floor gradient grounding the poster in the lower third.
+  canvas.drawRect(
+    full,
+    ui.Paint()
+      ..shader = ui.Gradient.linear(ui.Offset(w / 2, h * 0.62), ui.Offset(w / 2, h),
+          const [ui.Color(0x00000000), ui.Color(0x59000000)]),
+  );
 
   // Vignette.
   canvas.drawRect(

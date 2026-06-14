@@ -14,23 +14,14 @@ class RenderIndicatorOverlay extends ConsumerWidget {
   const RenderIndicatorOverlay({super.key, required this.child});
   final Widget child;
 
-  static const _renderRoute = '/create/export';
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final rendering = ref.watch(renderControllerProvider
         .select((s) => s.phase == RenderPhase.rendering));
-    final router = ref.watch(routerProvider);
-
-    return ListenableBuilder(
-      // Rebuild on navigation so we can hide the pill on the render screen.
-      listenable: router.routeInformationProvider,
-      builder: (context, _) {
-        final onRenderScreen =
-            router.routeInformationProvider.value.uri.path == _renderRoute;
-        return _build(ref, rendering && !onRenderScreen);
-      },
-    );
+    // The export screen reports its own visibility (router-listening from
+    // inside MaterialApp.builder re-enters the build and crashes).
+    final onRenderScreen = ref.watch(onRenderScreenProvider);
+    return _build(ref, rendering && !onRenderScreen);
   }
 
   Widget _build(WidgetRef ref, bool showPill) {

@@ -82,16 +82,38 @@ class MockupPainter extends CustomPainter {
       final src = _coverSrc(w, size);
       canvas.drawImageRect(
           w, src, rect, Paint()..filterQuality = FilterQuality.medium);
-      return;
+    } else {
+      // Procedural fallback.
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(size.width / 2, 0),
+            Offset(size.width / 2, size.height),
+            const [Color(0xFFEDEAE3), Color(0xFFDAD5CB)],
+          ),
+      );
     }
-    // Procedural fallback.
+    // Slightly dim + vignette so the artwork pops off the wall.
+    canvas.drawRect(rect, Paint()..color = const Color(0x1A000000));
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(size.width / 2, size.height * 0.45),
+          size.width * 0.85,
+          const [Color(0x00000000), Color(0x30000000)],
+          const [0.55, 1.0],
+        ),
+    );
+    // Soft floor gradient grounding the product in the lower third.
     canvas.drawRect(
       rect,
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(size.width / 2, 0),
+          Offset(size.width / 2, size.height * 0.6),
           Offset(size.width / 2, size.height),
-          const [Color(0xFFEDEAE3), Color(0xFFDAD5CB)],
+          const [Color(0x00000000), Color(0x3D000000)],
         ),
     );
   }

@@ -26,13 +26,33 @@ class ExportScreen extends ConsumerStatefulWidget {
 
 class _ExportScreenState extends ConsumerState<ExportScreen> {
   bool _saving = false;
+  ProviderContainer? _container;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(onRenderScreenProvider.notifier).value = true;
       ref.read(renderControllerProvider.notifier).start();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _container = ProviderScope.containerOf(context, listen: false);
+  }
+
+  @override
+  void dispose() {
+    // Defer past the teardown frame to avoid mutating a provider mid-dispose;
+    // the overlay re-shows once we've left this screen.
+    final container = _container;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      container?.read(onRenderScreenProvider.notifier).value = false;
+    });
+    super.dispose();
   }
 
   String _resolveUrl(String url) =>

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,8 +28,7 @@ class StudioScreen extends ConsumerStatefulWidget {
   ConsumerState<StudioScreen> createState() => _StudioScreenState();
 }
 
-class _StudioScreenState extends ConsumerState<StudioScreen>
-    with SingleTickerProviderStateMixin {
+class _StudioScreenState extends ConsumerState<StudioScreen> {
   // Assigned eagerly in initState so dispose() never touches `ref` (unsafe once
   // the widget is being unmounted). Must NOT be a `late` lazy initializer —
   // that defers the `ref.read` to first access, which can be dispose() itself
@@ -40,14 +40,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   final ScrollController _tilesScroll = ScrollController();
   String? _highlightedTileId;
   Timer? _highlightTimer;
-
-  // Drives the tile-drift reveal when a plan first appears. Starts settled (1)
-  // so re-entering an already-open project doesn't replay the animation.
-  late final AnimationController _reveal = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-    value: 1,
-  );
 
   // Tiles strip geometry (must match the ListView item + separator below).
   static const double _tileExtent = 56;
@@ -94,7 +86,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     _controller.cancelRestore();
     _highlightTimer?.cancel();
     _tilesScroll.dispose();
-    _reveal.dispose();
     super.dispose();
   }
 
@@ -266,16 +257,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
       }
     });
 
-    // Play the tile-drift reveal whenever a plan first appears (initial build
-    // or restore complete) — not on every live slider rebuild (plan stays
-    // non-null then, so this only fires on the null→present transition).
-    ref.listen(studioControllerProvider.select((s) => s.plan != null),
-        (prev, hasPlan) {
-      if (hasPlan && prev != true) {
-        _reveal.forward(from: 0);
-        Haptics.selection();
-      }
-    });
 
     final studio = ref.watch(studioControllerProvider);
     final canRender = ref.watch(canRenderProvider);
@@ -327,17 +308,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                       fit: StackFit.expand,
                       children: [
                         if (plan != null)
-                          AnimatedBuilder(
-                            animation: _reveal,
-                            builder: (_, _) => CustomPaint(
-                              painter: MosaicPreviewPainter(
-                                plan: plan,
-                                tileImages: studio.tileImages,
-                                baseImage: studio.base?.overlay,
-                                tintStrength: settings.tintStrength,
-                                appear: _reveal.value,
-                              ),
-                            ),
+                          _AnimatedMosaicPreview(
+                            plan: plan,
+                            tileImages: studio.tileImages,
+                            baseImage: studio.base?.overlay,
+                            tintStrength: settings.tintStrength,
                           )
                         else
                           Center(
@@ -630,6 +605,66 @@ class _SourceAndTiles extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+}
+
+/// Mosaic preview that plays the tile-drift reveal when first shown. The ticker
+/// lives here (a plain StatefulWidget) — deliberately NOT on the screen's
+/// ConsumerState, where TickerMode changes during route transitions would
+/// resume Riverpod subscriptions mid-build and crash. Because this widget is
+/// only mounted while a plan exists, it is (re)created exactly on the
+/// null→present transition, so the reveal fires at the right moments.
+class _AnimatedMosaicPreview extends StatefulWidget {
+  const _AnimatedMosaicPreview({
+    required this.plan,
+    required this.tileImages,
+    required this.baseImage,
+    required this.tintStrength,
+  });
+
+  final SlimMosaicPlan plan;
+  final Map<String, ui.Image> tileImages;
+  final ui.Image? baseImage;
+  final double tintStrength;
+
+  @override
+  State<_AnimatedMosaicPreview> createState() => _AnimatedMosaicPreviewState();
+}
+
+class _AnimatedMosaicPreviewState extends State<_AnimatedMosaicPreview>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _reveal = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _reveal.forward(from: 0);
+    Haptics.selection();
+  }
+
+  @override
+  void dispose() {
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _reveal,
+      builder: (_, _) => CustomPaint(
+        painter: MosaicPreviewPainter(
+          plan: widget.plan,
+          tileImages: widget.tileImages,
+          baseImage: widget.baseImage,
+          tintStrength: widget.tintStrength,
+          appear: _reveal.value,
+        ),
+      ),
     );
   }
 }

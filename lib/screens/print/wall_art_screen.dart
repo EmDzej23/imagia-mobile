@@ -205,6 +205,8 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                 type: _type,
                 aspect: printSpec(_type, _orientation).aspect,
                 frameColor: _frameColor,
+                canvasWrap:
+                    _type == PrintType.canvas ? _option?.value : null,
               ),
             ),
           ),

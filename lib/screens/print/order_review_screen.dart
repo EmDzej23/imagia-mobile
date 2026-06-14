@@ -160,6 +160,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                         type: d.type,
                         aspect: d.aspect,
                         frameColor: d.frameColor,
+                        canvasWrap: d.type == PrintType.canvas
+                            ? d.option?.value
+                            : null,
                       ),
                     ),
                   ),

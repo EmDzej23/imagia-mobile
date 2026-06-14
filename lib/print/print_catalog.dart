@@ -46,7 +46,6 @@ const _framedColours = [
 
 const _canvasWraps = [
   PrintOptionChoice('ImageWrap', 'Image wrap'),
-  PrintOptionChoice('MirrorWrap', 'Mirror wrap'),
   PrintOptionChoice('Black', 'Black edge'),
   PrintOptionChoice('White', 'White edge'),
 ];

@@ -1,8 +1,12 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import 'print_catalog.dart';
+
+final Float64List _identity = Float64List.fromList(
+    <double>[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
 /// Renders a straight-on "wall art" mockup: the cropped mosaic shown as a
 /// framed print / canvas / poster / metal print, hung on a wall.
@@ -17,6 +21,7 @@ class MockupPainter extends CustomPainter {
     required this.type,
     required this.aspect,
     this.frameColor = const Color(0xFF1C1C1E),
+    this.canvasWrap,
   });
 
   /// The rendered mosaic image.
@@ -32,6 +37,9 @@ class MockupPainter extends CustomPainter {
 
   /// Frame colour for the framed-print mockup.
   final Color frameColor;
+
+  /// Canvas wrap (ImageWrap / MirrorWrap / Black / White) — drives the 3D edge.
+  final String? canvasWrap;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -127,22 +135,79 @@ class MockupPainter extends CustomPainter {
           ..color = const Color(0x33000000));
   }
 
-  void _drawCanvas(Canvas canvas, Rect art) {
-    _shadow(canvas, art, dy: 16, opacity: 0.28);
+  void _drawCanvas(Canvas canvas, Rect art0) {
+    // Slight 3D slab so the gallery-wrap edge is visible. Recede the depth
+    // down-right; centre the slab so it doesn't drift off the wall.
+    // ~3 cm of the ~100 cm print → ~3% of the width.
+    final depth = art0.width * 0.03;
+    final d = Offset(depth, depth * 0.5);
+    final art = art0.shift(-d / 2);
+    final tr = art.topRight, br = art.bottomRight, bl = art.bottomLeft;
+
+    _shadow(canvas, art.shift(d * 0.6), blur: 26, dy: 6, opacity: 0.3);
+
+    // Side faces (the wrapped edges), darker since they catch less light.
+    _wrapEdge(canvas,
+        [tr, br, br + d, tr + d],
+        _stripCoords(rightEdge: true),
+        darken: 0.20);
+    _wrapEdge(canvas,
+        [bl, br, br + d, bl + d],
+        _stripCoords(rightEdge: false),
+        darken: 0.34);
+
+    // Front face.
     _mosaicInto(canvas, art);
-    // Faint weave texture so it reads as canvas, not paper.
     _weave(canvas, art);
-    // Gallery-wrap edge hint: a soft darkening down the right + bottom.
-    canvas.drawRect(
-      Rect.fromLTWH(art.right - art.width * 0.012, art.top, art.width * 0.012,
-          art.height),
-      Paint()..color = const Color(0x22000000),
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(art.left, art.bottom - art.height * 0.012, art.width,
-          art.height * 0.012),
-      Paint()..color = const Color(0x2C000000),
-    );
+  }
+
+  /// Texture coordinates (mosaic px) for a depth strip along the right or
+  /// bottom edge of the crop — the part of the image that wraps around.
+  List<Offset> _stripCoords({required bool rightEdge}) {
+    final c = cropSrc;
+    if (rightEdge) {
+      final s = c.width * 0.03;
+      return [
+        Offset(c.right, c.top),
+        Offset(c.right, c.bottom),
+        Offset(c.right - s, c.bottom),
+        Offset(c.right - s, c.top),
+      ];
+    }
+    final s = c.height * 0.03;
+    return [
+      Offset(c.left, c.bottom),
+      Offset(c.right, c.bottom),
+      Offset(c.right, c.bottom - s),
+      Offset(c.left, c.bottom - s),
+    ];
+  }
+
+  void _wrapEdge(Canvas canvas, List<Offset> quad, List<Offset> tex,
+      {required double darken}) {
+    final path = Path()..addPolygon(quad, true);
+    final wrap = canvasWrap;
+    if (wrap == 'Black' || wrap == 'White') {
+      canvas.drawPath(path,
+          Paint()..color = wrap == 'Black' ? Colors.black : Colors.white);
+    } else {
+      // ImageWrap / MirrorWrap: map the image edge strip onto the side face.
+      final verts = ui.Vertices(
+        ui.VertexMode.triangleFan,
+        quad,
+        textureCoordinates: tex,
+      );
+      canvas.drawVertices(
+        verts,
+        BlendMode.srcOver,
+        Paint()
+          ..shader = ui.ImageShader(
+              mosaic, TileMode.clamp, TileMode.clamp, _identity,
+              filterQuality: FilterQuality.medium),
+      );
+    }
+    // Shade the receding face.
+    canvas.drawPath(path, Paint()..color = Color.fromRGBO(0, 0, 0, darken));
   }
 
   void _weave(Canvas canvas, Rect art) {
@@ -200,5 +265,6 @@ class MockupPainter extends CustomPainter {
       old.cropSrc != cropSrc ||
       old.type != type ||
       old.aspect != aspect ||
-      old.frameColor != frameColor;
+      old.frameColor != frameColor ||
+      old.canvasWrap != canvasWrap;
 }

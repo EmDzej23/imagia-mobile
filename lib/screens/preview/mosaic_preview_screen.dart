@@ -93,24 +93,40 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
 
     final record = rec;
     return _scaffold(
-      InteractiveViewer(
-        minScale: 0.8,
-        maxScale: 10,
-        child: Center(
-          child: Image.network(
-            _imageUrl(record.downloadToken),
-            fit: BoxFit.contain,
-            loadingBuilder: (context, child, progress) {
-              if (progress == null) return child;
-              return const Center(
-                  child: CircularProgressIndicator(color: AppColors.accent));
-            },
-            errorBuilder: (context, error, stack) => Center(
-              child: Text('Could not load image',
-                  style: AppTypography.caption),
+      Stack(
+        fit: StackFit.expand,
+        children: [
+          // Loader sits behind the image so it's visible the instant the screen
+          // opens — the image fades in over it once decoded.
+          const Center(
+              child: CircularProgressIndicator(color: AppColors.accent)),
+          InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 10,
+            child: Center(
+              child: Image.network(
+                _imageUrl(record.downloadToken),
+                fit: BoxFit.contain,
+                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                  if (wasSynchronouslyLoaded) return child;
+                  return AnimatedOpacity(
+                    opacity: frame == null ? 0 : 1,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOut,
+                    child: child,
+                  );
+                },
+                errorBuilder: (context, error, stack) => ColoredBox(
+                  color: Colors.black,
+                  child: Center(
+                    child: Text('Could not load image',
+                        style: AppTypography.caption),
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
       actions: _saving
           ? const [

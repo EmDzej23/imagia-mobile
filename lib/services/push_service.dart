@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/api_client.dart';
@@ -20,7 +21,8 @@ class PushService {
 
   /// Wires up permission + tap handlers. Call once at startup.
   Future<void> init() async {
-    await _messaging.requestPermission();
+    final settings = await _messaging.requestPermission();
+    debugPrint('[push] permission: ${settings.authorizationStatus}');
 
     // Tapped while backgrounded.
     FirebaseMessaging.onMessageOpenedApp.listen(_handleOpen);
@@ -33,19 +35,41 @@ class PushService {
   /// Call after sign-in (needs the bearer token on [client]).
   Future<void> registerToken(ApiClient client) async {
     try {
+      // iOS: FCM cannot mint a token until APNs has registered this (re)install.
+      // On a fresh install there's a short delay before the APNs token lands,
+      // so poll for it — otherwise getToken() returns null and the new install
+      // never registers, leaving the server with a stale (dead) token.
+      if (Platform.isIOS) {
+        var apns = await _messaging.getAPNSToken();
+        for (var i = 0; i < 12 && apns == null; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          apns = await _messaging.getAPNSToken();
+        }
+        debugPrint(
+            '[push] APNs token: ${apns == null ? 'NULL — not registered with APNs' : 'present'}');
+      }
+
       final token = await _messaging.getToken();
+      debugPrint('[push] FCM token: ${token ?? 'NULL'}');
       if (token != null) await _send(client, token);
-      _messaging.onTokenRefresh.listen((t) => _send(client, t));
-    } catch (_) {
-      // Push registration is best-effort.
+
+      // Re-register if the token rotates (e.g. after a reinstall/restore).
+      _messaging.onTokenRefresh.listen((t) {
+        debugPrint('[push] FCM token refreshed');
+        _send(client, t);
+      });
+    } catch (e) {
+      debugPrint('[push] registerToken failed: $e');
     }
   }
 
   Future<void> _send(ApiClient client, String token) async {
-    await client.post<dynamic>('/api/push/register', body: {
+    final res = await client.post<dynamic>('/api/push/register', body: {
       'token': token,
       'platform': Platform.isIOS ? 'ios' : 'android',
     });
+    debugPrint(
+        '[push] register → ${res.status} ${res.isOk ? 'OK' : res.error}');
   }
 
   void _handleOpen(RemoteMessage message) {

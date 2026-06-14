@@ -7,6 +7,7 @@ import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
 import '../../services/haptics.dart';
+import '../../state/features_providers.dart';
 import '../../state/print_providers.dart';
 import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
@@ -48,11 +49,13 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
       throw 'No mosaic to print.';
     }
     final tileUrls = {for (final t in studio.tiles) t.id: t.blobUrl};
+    final maxRes = await ref.read(maxResolutionProvider.future);
     final res = await ref.read(renderApiProvider).render(
           plan: plan,
           tileUrls: tileUrls,
           baseUrl: base.blobUrl,
           fileName: '${base.name}-print.jpg',
+          outputLongSide: maxRes,
         );
     if (!res.isOk || res.data == null) {
       throw res.error ?? 'Render failed.';
@@ -79,9 +82,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
             mosaicUrl: mosaicUrl,
             cropRect: widget.draft.cropNormalized,
             recipient: widget.recipient,
-            frameColour: widget.draft.type == PrintType.framedPrint
-                ? widget.draft.frameColour.prodigiValue
-                : null,
+            attributes: widget.draft.attributes,
           );
       if (!checkout.isOk || checkout.data == null) {
         throw checkout.error ?? 'Could not start checkout.';
@@ -158,7 +159,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                         cropSrc: d.cropSrc,
                         type: d.type,
                         aspect: d.aspect,
-                        frameColor: d.frameColour.swatch,
+                        frameColor: d.frameColor,
                       ),
                     ),
                   ),

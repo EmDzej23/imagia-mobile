@@ -143,7 +143,7 @@ class PrintApi {
     required String mosaicUrl,
     required PrintCrop cropRect,
     required PrintRecipient recipient,
-    String? frameColour,
+    Map<String, String>? attributes,
   }) async {
     final res = await _client.post<Map<String, dynamic>>(
       '/api/print/prodigi/checkout',
@@ -153,7 +153,7 @@ class PrintApi {
         'mosaicUrl': mosaicUrl,
         'cropRect': cropRect.toJson(),
         'recipient': recipient.toJson(),
-        'frameColour': ?frameColour,
+        'attributes': ?attributes,
       },
     );
     if (!res.isOk || res.data == null || res.data!['checkout_url'] == null) {

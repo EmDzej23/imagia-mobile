@@ -4,6 +4,7 @@ import '../api/render_api.dart';
 import '../services/haptics.dart';
 import '../services/notifications.dart';
 import 'auth_controller.dart';
+import 'features_providers.dart';
 import 'studio_controller.dart';
 
 final renderApiProvider =
@@ -53,6 +54,9 @@ class RenderController extends Notifier<RenderUiState> {
   /// final server render synchronously (the route returns the result directly,
   /// proxying to the Cloud Run render service when enabled).
   Future<void> start() async {
+    // Never run two renders at once (re-entering the export screen via the
+    // global indicator must not restart an in-flight render).
+    if (state.phase == RenderPhase.rendering) return;
     final studio = ref.read(studioControllerProvider);
     final plan = studio.plan;
     final base = studio.base;
@@ -66,11 +70,14 @@ class RenderController extends Notifier<RenderUiState> {
         phase: RenderPhase.rendering, message: 'Rendering your mosaic…');
 
     final tileUrls = {for (final t in studio.tiles) t.id: t.blobUrl};
+    // Render at the server's in-app max resolution (the plan default is small).
+    final maxRes = await ref.read(maxResolutionProvider.future);
     final res = await _api.render(
       plan: plan,
       tileUrls: tileUrls,
       baseUrl: base.blobUrl,
       fileName: '${base.name}-mosaic.jpg',
+      outputLongSide: maxRes,
     );
 
     if (!res.isOk || res.data == null) {

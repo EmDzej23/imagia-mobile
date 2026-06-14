@@ -63,7 +63,12 @@ class NotificationService {
           importance: Importance.high,
           priority: Priority.high,
         ),
-        iOS: DarwinNotificationDetails(),
+        iOS: DarwinNotificationDetails(
+          // Show the banner even when the app is in the foreground.
+          presentAlert: true,
+          presentBanner: true,
+          presentSound: true,
+        ),
       ),
       payload: _previewPayload,
     );

@@ -274,6 +274,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
 
     final studio = ref.watch(studioControllerProvider);
     final canRender = ref.watch(canRenderProvider);
+    final rendering = ref.watch(renderControllerProvider
+        .select((s) => s.phase == RenderPhase.rendering));
     final settings = studio.settings;
 
     void update(MosaicSettings s) => _controller.updateSettings(s);
@@ -449,8 +451,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                       children: [
                         Expanded(
                           child: PrimaryButton(
-                            label: 'Export full quality (1)',
-                            onPressed: studio.plan == null
+                            label: rendering
+                                ? 'Rendering…'
+                                : 'Export full quality (1)',
+                            onPressed: (studio.plan == null || rendering)
                                 ? null
                                 : () => _onExport(context, canRender),
                           ),

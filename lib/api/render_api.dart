@@ -42,15 +42,34 @@ class RenderApi {
     required Map<String, String> tileUrls,
     String? baseUrl,
     String? fileName,
+    int? outputLongSide,
   }) async {
+    // The server renders at the plan's outputWidth/outputHeight, so to get a
+    // full-size export the client must set them (the plan default is small).
+    // Scale so the LONG side == outputLongSide (server caps at its max res).
+    final planJson = plan.toJson();
+    if (outputLongSide != null && outputLongSide > 0) {
+      final bw = plan.baseWidth, bh = plan.baseHeight;
+      final double ow, oh;
+      if (bw >= bh) {
+        ow = outputLongSide.toDouble();
+        oh = (outputLongSide * bh / bw).roundToDouble();
+      } else {
+        oh = outputLongSide.toDouble();
+        ow = (outputLongSide * bw / bh).roundToDouble();
+      }
+      planJson['outputWidth'] = ow;
+      planJson['outputHeight'] = oh;
+    }
+
     final res = await _client.post<Map<String, dynamic>>(
       '/api/render',
       body: {
         'mode': 'sync',
-        'plan': plan.toJson(),
+        'plan': planJson,
         'tileUrls': tileUrls,
-        if (baseUrl != null) 'baseUrl': baseUrl,
-        if (fileName != null) 'fileName': fileName,
+        'baseUrl': ?baseUrl,
+        'fileName': ?fileName,
       },
       receiveTimeout: _renderTimeout,
       sendTimeout: const Duration(minutes: 2),

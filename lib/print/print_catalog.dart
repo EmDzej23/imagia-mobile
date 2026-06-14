@@ -12,45 +12,58 @@ enum PrintType { framedPrint, canvas, poster, metal }
 
 enum PrintOrientation { square, portrait, landscape }
 
-/// Frame colours offered for Classic framed prints (Prodigi `color` attribute).
-enum FrameColour { white, silver, natural, lightGrey, gold, darkGrey, brown, black }
+/// A user-choosable Prodigi attribute value (e.g. a frame colour, canvas wrap,
+/// metal finish). [value] is the exact Prodigi attribute value.
+class PrintOptionChoice {
+  const PrintOptionChoice(this.value, this.label, [this.swatch]);
+  final String value;
+  final String label;
 
-extension FrameColourInfo on FrameColour {
-  /// Exact Prodigi attribute value (must match the SKU's validValues).
-  String get prodigiValue => switch (this) {
-        FrameColour.white => 'white',
-        FrameColour.silver => 'silver',
-        FrameColour.natural => 'natural',
-        FrameColour.lightGrey => 'light grey',
-        FrameColour.gold => 'gold',
-        FrameColour.darkGrey => 'dark grey',
-        FrameColour.brown => 'brown',
-        FrameColour.black => 'black',
-      };
-
-  String get label => switch (this) {
-        FrameColour.white => 'White',
-        FrameColour.silver => 'Silver',
-        FrameColour.natural => 'Natural',
-        FrameColour.lightGrey => 'Light grey',
-        FrameColour.gold => 'Gold',
-        FrameColour.darkGrey => 'Dark grey',
-        FrameColour.brown => 'Brown',
-        FrameColour.black => 'Black',
-      };
-
-  /// Swatch used to render the frame in the mockup.
-  Color get swatch => switch (this) {
-        FrameColour.white => const Color(0xFFEDEDEA),
-        FrameColour.silver => const Color(0xFFB9BCC1),
-        FrameColour.natural => const Color(0xFFC8A877),
-        FrameColour.lightGrey => const Color(0xFFAFB1B5),
-        FrameColour.gold => const Color(0xFFC8A24A),
-        FrameColour.darkGrey => const Color(0xFF4A4A50),
-        FrameColour.brown => const Color(0xFF5C3D28),
-        FrameColour.black => const Color(0xFF1C1C1E),
-      };
+  /// For colour choices — drawn in the mockup; null for non-colour options.
+  final Color? swatch;
 }
+
+/// The one important choosable attribute for a product type (the Prodigi
+/// attribute [attrKey] + its choices). Null for products without one.
+class PrintOption {
+  const PrintOption(this.attrKey, this.label, this.choices);
+  final String attrKey;
+  final String label;
+  final List<PrintOptionChoice> choices;
+  PrintOptionChoice get defaultChoice => choices.first;
+}
+
+const _framedColours = [
+  PrintOptionChoice('black', 'Black', Color(0xFF1C1C1E)),
+  PrintOptionChoice('white', 'White', Color(0xFFEDEDEA)),
+  PrintOptionChoice('natural', 'Natural', Color(0xFFC8A877)),
+  PrintOptionChoice('silver', 'Silver', Color(0xFFB9BCC1)),
+  PrintOptionChoice('light grey', 'Light grey', Color(0xFFAFB1B5)),
+  PrintOptionChoice('dark grey', 'Dark grey', Color(0xFF4A4A50)),
+  PrintOptionChoice('gold', 'Gold', Color(0xFFC8A24A)),
+  PrintOptionChoice('brown', 'Brown', Color(0xFF5C3D28)),
+];
+
+const _canvasWraps = [
+  PrintOptionChoice('ImageWrap', 'Image wrap'),
+  PrintOptionChoice('MirrorWrap', 'Mirror wrap'),
+  PrintOptionChoice('Black', 'Black edge'),
+  PrintOptionChoice('White', 'White edge'),
+];
+
+const _metalFinishes = [
+  PrintOptionChoice('lustre', 'Lustre'),
+  PrintOptionChoice('gloss', 'Gloss'),
+  PrintOptionChoice('matte', 'Matte'),
+];
+
+/// The choosable option for a product type (or null).
+PrintOption? printOption(PrintType type) => switch (type) {
+      PrintType.framedPrint => const PrintOption('color', 'Frame', _framedColours),
+      PrintType.canvas => const PrintOption('wrap', 'Edge', _canvasWraps),
+      PrintType.metal => const PrintOption('finish', 'Finish', _metalFinishes),
+      PrintType.poster => null,
+    };
 
 /// Product types currently offered in the app (those with a real Prodigi SKU).
 /// Poster is excluded until it's configured.

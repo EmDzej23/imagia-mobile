@@ -34,8 +34,13 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   String? _error;
   PrintType _type = PrintType.framedPrint;
   PrintOrientation _orientation = PrintOrientation.portrait;
-  FrameColour _frameColour = FrameColour.black;
+  PrintOptionChoice? _option =
+      printOption(PrintType.framedPrint)?.defaultChoice;
   ui.Rect? _cropSrc; // in mosaic pixels
+
+  Color get _frameColor => _type == PrintType.framedPrint
+      ? (_option?.swatch ?? const Color(0xFF1C1C1E))
+      : const Color(0xFF1C1C1E);
 
   @override
   void initState() {
@@ -107,6 +112,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   void _setType(PrintType t) {
     setState(() {
       _type = t;
+      _option = printOption(t)?.defaultChoice; // reset to the type's default
       // Different products have different aspects — re-fit the crop.
       if (_mosaic != null) {
         _cropSrc = _centerCrop(_mosaic!, printSpec(t, _orientation).aspect);
@@ -198,7 +204,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                 cropSrc: crop,
                 type: _type,
                 aspect: printSpec(_type, _orientation).aspect,
-                frameColor: _frameColour.swatch,
+                frameColor: _frameColor,
               ),
             ),
           ),
@@ -245,38 +251,26 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         SegmentOption(o, o.label),
                     ],
                   ),
-                  // Frame colour — only for framed prints.
-                  if (_type == PrintType.framedPrint) ...[
+                  // Product option (frame colour / canvas wrap / metal finish).
+                  if (printOption(_type) case final opt?) ...[
                     const SizedBox(height: AppSpacing.x3),
-                    Text('Frame: ${_frameColour.label}',
+                    Text('${opt.label}: ${_option?.label ?? ''}',
                         style: AppTypography.caption),
                     const SizedBox(height: AppSpacing.x2),
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                        for (final c in FrameColour.values)
-                          Padding(
-                            padding:
-                                const EdgeInsets.only(right: AppSpacing.x2),
-                            child: GestureDetector(
-                              onTap: () => setState(() => _frameColour = c),
-                              child: Container(
-                                width: 30,
-                                height: 30,
-                                decoration: BoxDecoration(
-                                  color: c.swatch,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: c == _frameColour
-                                        ? AppColors.accent
-                                        : AppColors.border,
-                                    width: c == _frameColour ? 2.5 : 1,
-                                  ),
-                                ),
+                          for (final c in opt.choices)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.only(right: AppSpacing.x2),
+                              child: _OptionChip(
+                                choice: c,
+                                selected: c.value == _option?.value,
+                                onTap: () => setState(() => _option = c),
                               ),
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -317,7 +311,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         mosaic: mosaic,
                         cropSrc: crop,
                         priceEur: printPriceEur(_type, _orientation),
-                        frameColour: _frameColour,
+                        option: _option,
                       );
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => ShippingAddressScreen(draft: draft),
@@ -330,6 +324,53 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A product-option choice: a colour swatch (frame colours) or a labelled chip
+/// (canvas wrap, metal finish).
+class _OptionChip extends StatelessWidget {
+  const _OptionChip(
+      {required this.choice, required this.selected, required this.onTap});
+  final PrintOptionChoice choice;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (choice.swatch != null) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: choice.swatch,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected ? AppColors.accent : AppColors.border,
+              width: selected ? 2.5 : 1,
+            ),
+          ),
+        ),
+      );
+    }
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceRaised,
+          borderRadius: BorderRadius.circular(AppRadius.chip),
+          border: Border.all(
+            color: selected ? AppColors.accent : AppColors.border,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Text(choice.label, style: AppTypography.caption),
+      ),
     );
   }
 }

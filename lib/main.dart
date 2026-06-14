@@ -6,6 +6,7 @@ import 'router.dart';
 import 'services/notifications.dart';
 import 'services/push_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/render_indicator.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,8 @@ class ImagiaApp extends ConsumerWidget {
       theme: AppTheme.dark,
       themeMode: ThemeMode.dark,
       routerConfig: router,
+      builder: (context, child) =>
+          RenderIndicatorOverlay(child: child ?? const SizedBox.shrink()),
     );
   }
 }

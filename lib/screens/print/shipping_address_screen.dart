@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/print_api.dart';
 import '../../print/print_order_draft.dart';
+import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -29,15 +31,16 @@ const List<({String code, String name})> _countries = [
   (code: 'RS', name: 'Serbia'), // testing
 ];
 
-class ShippingAddressScreen extends StatefulWidget {
+class ShippingAddressScreen extends ConsumerStatefulWidget {
   const ShippingAddressScreen({super.key, required this.draft});
   final PrintOrderDraft draft;
 
   @override
-  State<ShippingAddressScreen> createState() => _ShippingAddressScreenState();
+  ConsumerState<ShippingAddressScreen> createState() =>
+      _ShippingAddressScreenState();
 }
 
-class _ShippingAddressScreenState extends State<ShippingAddressScreen> {
+class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
@@ -48,6 +51,17 @@ class _ShippingAddressScreenState extends State<ShippingAddressScreen> {
   final _zip = TextEditingController();
   String _country = 'US';
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Prefill name + email from the signed-in account (both stay editable).
+    final user = ref.read(authControllerProvider).user;
+    if (user != null) {
+      _email.text = user.email;
+      if (user.name.isNotEmpty) _name.text = user.name;
+    }
+  }
 
   @override
   void dispose() {

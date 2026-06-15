@@ -42,6 +42,8 @@ class PrintOrderDto {
     required this.status,
     required this.totalFormatted,
     this.prodigiStatus,
+    this.prodigiOrderId,
+    this.errorMessage,
     this.trackingNumber,
     this.trackingUrl,
     this.createdAt,
@@ -52,9 +54,19 @@ class PrintOrderDto {
   final String status;
   final String totalFormatted;
   final String? prodigiStatus;
+  final String? prodigiOrderId;
+  final String? errorMessage;
   final String? trackingNumber;
   final String? trackingUrl;
   final String? createdAt;
+
+  /// Paid but not yet handed to Prodigi — can be re-submitted (resumed).
+  bool get isResumable =>
+      prodigiOrderId == null &&
+      (status == 'paid' ||
+          status == 'uploading' ||
+          status == 'submitted' ||
+          status == 'failed');
 
   factory PrintOrderDto.fromJson(Map<String, dynamic> j) => PrintOrderDto(
         id: j['id'] as String,
@@ -62,6 +74,8 @@ class PrintOrderDto {
         status: j['status'] as String? ?? 'pending',
         totalFormatted: j['totalFormatted'] as String? ?? '',
         prodigiStatus: j['prodigiStatus'] as String?,
+        prodigiOrderId: j['prodigiOrderId'] as String?,
+        errorMessage: j['errorMessage'] as String?,
         trackingNumber: j['trackingNumber'] as String?,
         trackingUrl: j['trackingUrl'] as String?,
         createdAt: j['createdAt']?.toString(),

@@ -6,7 +6,7 @@ import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
 import '../../print/wall_image_provider.dart';
-import '../../services/haptics.dart';
+import '../../state/print_job_controller.dart';
 import '../../state/print_providers.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
@@ -15,7 +15,7 @@ import '../../theme/app_typography.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/primary_button.dart';
 import '../account/checkout_webview_screen.dart';
-import 'my_orders_screen.dart';
+import 'order_processing_screen.dart';
 
 class OrderReviewScreen extends ConsumerStatefulWidget {
   const OrderReviewScreen(
@@ -30,7 +30,6 @@ class OrderReviewScreen extends ConsumerStatefulWidget {
 class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
   bool _busy = false;
   String _step = '';
-  bool _done = false;
 
   Future<void> _pay() async {
     final studio = ref.read(studioControllerProvider);
@@ -79,21 +78,19 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
         return;
       }
 
-      setState(() => _step = 'Rendering & placing your order…');
-      final fulfilled =
-          await ref.read(printApiProvider).fulfill(checkout.data!.orderId);
+      // Hand off to the global print job: it renders + submits the order and
+      // survives leaving this screen. We jump to the processing screen (rooted
+      // at the gallery) so the app-wide indicator can bring the user back.
+      ref.read(printJobControllerProvider.notifier).start(
+            orderId: checkout.data!.orderId,
+            productName:
+                '${widget.draft.type.label} · ${widget.draft.orientation.label}',
+          );
       if (!mounted) return;
-      if (!fulfilled.isOk) {
-        // Paid but submission failed — surface clearly; order is recoverable.
-        throw 'Payment succeeded but we could not submit the order: '
-            '${fulfilled.error}. It will appear in My Orders; contact support if needed.';
-      }
-      Haptics.success();
-      ref.invalidate(printOrdersProvider);
-      setState(() {
-        _busy = false;
-        _done = true;
-      });
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const OrderProcessingScreen()),
+        (r) => r.isFirst,
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -111,7 +108,6 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_done) return _confirmation();
     final d = widget.draft;
     final r = widget.recipient;
 
@@ -207,47 +203,6 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                 ),
               ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _confirmation() {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Order placed')),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.x6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.check_circle_outline,
-                  size: 72, color: AppColors.success),
-              const SizedBox(height: AppSpacing.x4),
-              Text('Your print is on its way to production',
-                  textAlign: TextAlign.center, style: AppTypography.title),
-              const SizedBox(height: AppSpacing.x2),
-              Text(
-                  'We\'ll notify you when it ships. You can track it under My orders.',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.body
-                      .copyWith(color: AppColors.textSecondary)),
-              const SizedBox(height: AppSpacing.x6),
-              PrimaryButton(
-                label: 'View my orders',
-                onPressed: () {
-                  Navigator.of(context).pushReplacement(MaterialPageRoute(
-                      builder: (_) => const MyOrdersScreen()));
-                },
-              ),
-              const SizedBox(height: AppSpacing.x3),
-              TextButton(
-                onPressed: () => Navigator.of(context)
-                    .popUntil((route) => route.isFirst),
-                child: const Text('Done'),
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/print_api.dart';
+import '../../state/print_job_controller.dart';
 import '../../state/print_providers.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_card.dart';
+import 'order_processing_screen.dart';
 
 class MyOrdersScreen extends ConsumerWidget {
   const MyOrdersScreen({super.key});
@@ -47,7 +49,7 @@ class MyOrdersScreen extends ConsumerWidget {
   }
 }
 
-class _OrderTile extends StatelessWidget {
+class _OrderTile extends ConsumerWidget {
   const _OrderTile({required this.order});
   final PrintOrderDto order;
 
@@ -63,8 +65,17 @@ class _OrderTile extends StatelessWidget {
         _ => (label: order.status, color: AppColors.textSecondary),
       };
 
+  void _resume(BuildContext context, WidgetRef ref) {
+    ref.read(printJobControllerProvider.notifier).start(
+          orderId: order.id,
+          productName: order.productName,
+        );
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => const OrderProcessingScreen()));
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final s = _status;
     return AppCard(
       padding: const EdgeInsets.all(AppSpacing.x4),
@@ -99,6 +110,26 @@ class _OrderTile extends StatelessWidget {
             Text('Tracking: ${order.trackingNumber}',
                 style: AppTypography.caption
                     .copyWith(color: AppColors.textSecondary)),
+          ],
+          if (order.isResumable) ...[
+            const SizedBox(height: AppSpacing.x3),
+            Text(
+                order.status == 'failed'
+                    ? 'Paid, but the order didn\'t go through. Retrying won\'t charge you again.'
+                    : 'Paid — finish placing your order.',
+                style: AppTypography.caption
+                    .copyWith(color: AppColors.textSecondary)),
+            const SizedBox(height: AppSpacing.x2),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _resume(context, ref),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: Text(order.status == 'failed'
+                    ? 'Retry order'
+                    : 'Resume order'),
+              ),
+            ),
           ],
         ],
       ),

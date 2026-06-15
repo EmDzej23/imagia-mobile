@@ -1,11 +1,12 @@
 import 'dart:io' show Platform;
 
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/api_client.dart';
 import '../router.dart';
+import '../screens/print/my_orders_screen.dart';
 
 /// Firebase Cloud Messaging integration. The server pushes a "your mosaic is
 /// ready" message when a render finishes — so the user is notified even if they
@@ -73,8 +74,14 @@ class PushService {
   }
 
   void _handleOpen(RemoteMessage message) {
-    // All current pushes route to the latest rendered mosaic.
-    final ctx = rootNavigatorKey.currentContext;
-    if (ctx != null) ctx.push('/preview');
+    // Route by push type: order updates → My orders, render done → preview.
+    final type = message.data['type'];
+    if (type == 'print_shipped') {
+      rootNavigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => const MyOrdersScreen()),
+      );
+      return;
+    }
+    rootNavigatorKey.currentContext?.push('/preview');
   }
 }

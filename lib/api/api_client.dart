@@ -35,6 +35,12 @@ class ApiClient {
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
         options.headers['Origin'] = AppConfig.apiBaseUrl;
+        // Identify the mobile app so the server allows free renders during the
+        // launch bridge (web keeps the token model).
+        if (AppConfig.freeRenders) {
+          options.headers['X-Imagia-Client'] = 'mobile';
+          options.headers['X-Imagia-Mobile-Key'] = AppConfig.mobileRenderKey;
+        }
         final token = await _tokens.read();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';

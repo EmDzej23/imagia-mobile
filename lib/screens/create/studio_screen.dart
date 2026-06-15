@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config.dart';
 import '../../mosaic/preview_painter.dart';
 import '../../mosaic/types.dart';
 import '../../print/print_catalog.dart' show isPrintRegionAllowed;
@@ -150,11 +151,15 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surfaceRaised,
-        title: Text('Export & tokens', style: AppTypography.title),
+        title: Text('Export', style: AppTypography.title),
         content: Text(
-          'Each full-quality export renders your mosaic at high resolution on '
-          'our servers and costs 1 token. Designing, previewing, and creating '
-          'videos are all free — tokens are only used at export.',
+          AppConfig.freeRenders
+              ? 'Export renders your mosaic at full resolution on our servers '
+                  'and saves it to your device. Designing, previewing, and '
+                  'creating videos are all free too.'
+              : 'Each full-quality export renders your mosaic at high resolution '
+                  'on our servers and costs 1 token. Designing, previewing, and '
+                  'creating videos are all free — tokens are only used at export.',
           style: AppTypography.body,
         ),
         actions: [
@@ -461,7 +466,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                         ),
                         const SizedBox(width: AppSpacing.x2),
                         IconButton(
-                          tooltip: 'About export & tokens',
+                          tooltip: AppConfig.freeRenders
+                              ? 'About export'
+                              : 'About export & tokens',
                           icon: const Icon(Icons.info_outline,
                               color: AppColors.textSecondary),
                           onPressed: () => _showTokenInfo(context),

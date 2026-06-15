@@ -1,7 +1,13 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
 import '../../api/checkout_api.dart';
+import '../../core/config.dart';
+import '../../services/iap_service.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -24,6 +30,115 @@ class AccountScreen extends ConsumerStatefulWidget {
 class _AccountScreenState extends ConsumerState<AccountScreen> {
   TokenPackage? _loading;
   bool _deleting = false;
+
+  // iOS In-App Purchase state.
+  final bool _useIap = Platform.isIOS;
+  List<ProductDetails> _iapProducts = [];
+  bool _iapLoading = false;
+  bool _iapUnavailable = false;
+  String? _iapBusyProductId;
+  StreamSubscription<List<PurchaseDetails>>? _purchaseSub;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_useIap) _initIap();
+  }
+
+  @override
+  void dispose() {
+    _purchaseSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initIap() async {
+    setState(() => _iapLoading = true);
+    final iap = ref.read(iapServiceProvider);
+    // Listen first so interrupted/pending transactions are delivered on launch.
+    _purchaseSub = iap.purchaseStream.listen(
+      _onPurchaseUpdates,
+      onError: (_) {},
+    );
+    try {
+      if (!await iap.available()) {
+        if (mounted) setState(() => _iapUnavailable = true);
+        return;
+      }
+      final products = await iap.loadProducts();
+      if (mounted) setState(() => _iapProducts = products);
+    } finally {
+      if (mounted) setState(() => _iapLoading = false);
+    }
+  }
+
+  Future<void> _onPurchaseUpdates(List<PurchaseDetails> purchases) async {
+    final iap = ref.read(iapServiceProvider);
+    for (final p in purchases) {
+      switch (p.status) {
+        case PurchaseStatus.pending:
+          if (mounted) setState(() => _iapBusyProductId = p.productID);
+        case PurchaseStatus.purchased:
+        case PurchaseStatus.restored:
+          try {
+            await iap.verifyAndComplete(p);
+            await ref.read(authControllerProvider.notifier).refreshUser();
+            _snack('Tokens added — thank you!');
+          } catch (e) {
+            _snack('Purchase verification failed: $e');
+          } finally {
+            if (mounted) setState(() => _iapBusyProductId = null);
+          }
+        case PurchaseStatus.error:
+          await iap.complete(p); // clear it from the queue
+          _snack(p.error?.message ?? 'Purchase failed.');
+          if (mounted) setState(() => _iapBusyProductId = null);
+        case PurchaseStatus.canceled:
+          if (mounted) setState(() => _iapBusyProductId = null);
+      }
+    }
+  }
+
+  Future<void> _buyIap(ProductDetails product) async {
+    if (_iapBusyProductId != null) return;
+    setState(() => _iapBusyProductId = product.id);
+    try {
+      await ref.read(iapServiceProvider).buy(product);
+    } catch (e) {
+      _snack('Could not start purchase: $e');
+      if (mounted) setState(() => _iapBusyProductId = null);
+    }
+  }
+
+  List<Widget> _buildIapTiles() {
+    if (_iapLoading) {
+      return const [
+        Padding(
+          padding: EdgeInsets.all(AppSpacing.x4),
+          child: Center(
+              child: CircularProgressIndicator(color: AppColors.accent)),
+        ),
+      ];
+    }
+    if (_iapUnavailable || _iapProducts.isEmpty) {
+      return [
+        Text(
+          'Token purchases are unavailable right now. Please try again later.',
+          style:
+              AppTypography.caption.copyWith(color: AppColors.textSecondary),
+        ),
+      ];
+    }
+    return [
+      for (final p in _iapProducts)
+        _IapTile(
+          product: p,
+          tokens: IapService.productTokens[p.id] ?? 0,
+          loading: _iapBusyProductId == p.id,
+          disabled: _iapBusyProductId != null,
+          onTap: () => _buyIap(p),
+        ),
+    ];
+  }
 
   Future<void> _purchase(TokenPackage pkg) async {
     setState(() => _loading = pkg);
@@ -108,52 +223,75 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                       style: AppTypography.body
                           .copyWith(color: AppColors.textSecondary)),
                   const SizedBox(height: AppSpacing.x3),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: AppSpacing.x3, vertical: AppSpacing.x1),
-                        decoration: BoxDecoration(
-                          color: AppColors.surfaceRaised,
-                          borderRadius: BorderRadius.circular(AppRadius.chip),
-                          border: Border.all(color: AppColors.border),
-                        ),
-                        child: TweenAnimationBuilder<int>(
-                          tween: IntTween(begin: 0, end: user?.tokenBalance ?? 0),
-                          duration: const Duration(milliseconds: 600),
-                          curve: Curves.easeOut,
-                          builder: (_, value, _) => Text(
-                            '$value token${value == 1 ? '' : 's'}',
-                            style: AppTypography.number(AppTypography.label)
-                                .copyWith(color: AppColors.accent),
+                  if (AppConfig.freeRenders)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.x3, vertical: AppSpacing.x1),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceRaised,
+                        borderRadius: BorderRadius.circular(AppRadius.chip),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Text('Mosaics are free to create',
+                          style: AppTypography.label
+                              .copyWith(color: AppColors.accent)),
+                    )
+                  else
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppSpacing.x3,
+                              vertical: AppSpacing.x1),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceRaised,
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.chip),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: TweenAnimationBuilder<int>(
+                            tween: IntTween(
+                                begin: 0, end: user?.tokenBalance ?? 0),
+                            duration: const Duration(milliseconds: 600),
+                            curve: Curves.easeOut,
+                            builder: (_, value, _) => Text(
+                              '$value token${value == 1 ? '' : 's'}',
+                              style: AppTypography.number(AppTypography.label)
+                                  .copyWith(color: AppColors.accent),
+                            ),
                           ),
                         ),
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => ref
-                            .read(authControllerProvider.notifier)
-                            .refreshUser(),
-                        child: const Text('Refresh'),
-                      ),
-                    ],
-                  ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => ref
+                              .read(authControllerProvider.notifier)
+                              .refreshUser(),
+                          child: const Text('Refresh'),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
-            const SizedBox(height: AppSpacing.x6),
-            Text('Buy tokens', style: AppTypography.label),
-            const SizedBox(height: AppSpacing.x1),
-            Text('Each token renders one high-resolution mosaic.',
-                style: AppTypography.caption),
-            const SizedBox(height: AppSpacing.x3),
-            for (final pkg in TokenPackage.values)
-              _PackageTile(
-                pkg: pkg,
-                loading: _loading == pkg,
-                disabled: _loading != null,
-                onTap: () => _purchase(pkg),
-              ),
+            // Token purchases are hidden during the free-render launch bridge.
+            if (!AppConfig.freeRenders) ...[
+              const SizedBox(height: AppSpacing.x6),
+              Text('Buy tokens', style: AppTypography.label),
+              const SizedBox(height: AppSpacing.x1),
+              Text('Each token renders one high-resolution mosaic.',
+                  style: AppTypography.caption),
+              const SizedBox(height: AppSpacing.x3),
+              if (_useIap)
+                ..._buildIapTiles()
+              else
+                for (final pkg in TokenPackage.values)
+                  _PackageTile(
+                    pkg: pkg,
+                    loading: _loading == pkg,
+                    disabled: _loading != null,
+                    onTap: () => _purchase(pkg),
+                  ),
+            ],
             if (isPrintRegionAllowed()) ...[
               const SizedBox(height: AppSpacing.x6),
               _LinkTile(
@@ -296,6 +434,71 @@ class _PackageTile extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
                   child: Text('\$${pkg.price.toStringAsFixed(2)}',
+                      style: AppTypography.label
+                          .copyWith(color: AppColors.textPrimary)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Token-pack tile backed by an Apple IAP product (Apple's localized price).
+class _IapTile extends StatelessWidget {
+  const _IapTile({
+    required this.product,
+    required this.tokens,
+    required this.loading,
+    required this.disabled,
+    required this.onTap,
+  });
+
+  final ProductDetails product;
+  final int tokens;
+  final bool loading;
+  final bool disabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = '$tokens Mosaic Token${tokens == 1 ? '' : 's'}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.x3),
+      child: AppCard(
+        onTap: disabled ? null : onTap,
+        padding: const EdgeInsets.all(AppSpacing.x4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: AppTypography.label),
+                  const SizedBox(height: 2),
+                  Text('Renders ${tokens == 1 ? 'one mosaic' : '$tokens mosaics'}',
+                      style: AppTypography.caption),
+                ],
+              ),
+            ),
+            if (loading)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.accent),
+              )
+            else
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: AppGradients.brand,
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+                  child: Text(product.price,
                       style: AppTypography.label
                           .copyWith(color: AppColors.textPrimary)),
                 ),

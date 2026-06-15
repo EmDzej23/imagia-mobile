@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../api/projects_api.dart';
 import '../api/tiles_api.dart';
+import '../core/config.dart';
 import '../mosaic/mosaic_engine.dart';
 import '../mosaic/shared.dart';
 import '../mosaic/types.dart';
@@ -638,9 +639,10 @@ class StudioController extends Notifier<StudioState> {
   String _basename(String path) => path.split('/').last.split('\\').last;
 }
 
-/// Convenience: is the device able to render (has a plan and tokens)?
+/// Convenience: is the device able to render? Needs a plan, plus a token —
+/// except during the free-render launch bridge ([AppConfig.freeRenders]).
 final canRenderProvider = Provider<bool>((ref) {
   final tokens = ref.watch(authControllerProvider).user?.tokenBalance ?? 0;
   final plan = ref.watch(studioControllerProvider).plan;
-  return plan != null && tokens > 0;
+  return plan != null && (AppConfig.freeRenders || tokens > 0);
 });

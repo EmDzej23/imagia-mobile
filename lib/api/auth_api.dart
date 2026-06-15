@@ -53,6 +53,21 @@ class AuthApi {
   }
 
   /// Extracts the token from the redirect URL captured by the auth webview.
+  /// Verifies a native Apple identity token server-side and returns a session
+  /// token. [fullName] is only available on the first authorization.
+  Future<String> signInApple({
+    required String identityToken,
+    String? rawNonce,
+    String? fullName,
+  }) async {
+    final res = await _post('/api/mobile/auth/apple', {
+      'identityToken': identityToken,
+      'rawNonce': ?rawNonce,
+      'fullName': ?fullName,
+    }, 'Apple sign-in failed.');
+    return _extractToken(res.data);
+  }
+
   String? tokenFromRedirect(Uri uri) {
     final fromQuery = uri.queryParameters['token'];
     if (fromQuery != null && fromQuery.isNotEmpty) return fromQuery;

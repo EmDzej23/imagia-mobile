@@ -1,6 +1,6 @@
 # Imagia Mobile — Progress & Handoff
 
-Detailed running notes so work can resume after a context reset. Last updated: **2026-06-14**.
+Detailed running notes so work can resume after a context reset. Last updated: **2026-06-15**.
 
 ## Repos & architecture
 - **`imagia-mobile`** (this repo): Flutter (iOS + Android) app. Bundle/package `com.imagiastore.studio`. Dark theme, Inter font, Riverpod, go_router, dio.
@@ -17,6 +17,8 @@ Detailed running notes so work can resume after a context reset. Last updated: *
 - **Don't put a `TickerProvider` (animation) on a `ConsumerState`** — TickerMode changes during route transitions resume Riverpod subscriptions mid-build → "setState during build" crash. Put the ticker in a plain child `StatefulWidget` (see `_AnimatedMosaicPreview` in studio_screen).
 - **Don't have an autoDispose provider `ref.watch` another provider that changes** if widgets with tickers/route-transitions watch it — same crash class. (Fixed `projectThumbnailsProvider` by making it a `.family` keyed by URL string.)
 - Text rendered in `MaterialApp.builder` (above the Navigator) shows **yellow debug underlines** — wrap in `Material(type: transparency)` (see `RenderIndicatorOverlay`).
+- **Never read/listen to the go_router `routerDelegate`/`routeInformationProvider` from inside `MaterialApp.builder`** — the overlay is a descendant of what the delegate builds, so it re-enters the build → `!_dirty` assertion crash. Use a provider flag set by the target screen instead (see the indicators section).
+- **Benign iOS console noise to ignore:** UIKit `NSLayoutConstraint` "unsatisfiable / will attempt to recover" logs about `SystemInputAssistantView` (keyboard) and `_UIToolbarContentView`/`_UIButtonBarStackView`/`_UIModernBarButton` (the keyboard input-accessory toolbar) — these come from the OS keyboard and the WKWebView (Creem checkout page), not our code. No fix; not in our control. Decided to leave the Creem checkout as an embedded webview.
 - Font/asset/pubspec changes require a **full rebuild** (not hot reload). The user often runs the app **standalone (no `flutter run` attach)** because of a local **VM-service/DDS attach failure** (utun/VPN interfering with 127.0.0.1) — so code changes need a fresh build/install to appear. `flutter run --no-dds` / disabling VPN / iCloud Private Relay is the workaround; the app itself is fine.
 
 ## Memory files (auto-loaded)
@@ -65,10 +67,12 @@ Detailed running notes so work can resume after a context reset. Last updated: *
 
 ### Render resolution fix (was producing 8000px)
 - The mobile sent the plan with the default `outputWidth: 8000` (`lib/mosaic/shared.dart`); the server renders at the plan's `outputWidth`. Web sets it to the configured max at export.
-- Fix: `lib/api/features_api.dart` + `maxResolutionProvider` fetch `/api/features` `maxResolution` (currently **20000**). `RenderApi.render(outputLongSide:)` overrides the plan's output dims so the **long side = maxResolution**. Used by the export render (`render_controller`) and the print render (`order_review`). Admin settings: In-App Max = 20000, Print Max = 12000 (separate `getMaxResolutionPrint`, only used by the unused `/api/print/render`).
+- Fix: `lib/api/features_api.dart` + `maxResolutionProvider` fetch `/api/features` `maxResolution` (currently **20000**). `RenderApi.render(outputLongSide:)` overrides the plan's output dims so the **long side = maxResolution**. Used by the export render (`render_controller`). Admin/db settings (NB defaults in `lib/features.ts` are swapped vs. the values): **In-App Max (`getMaxResolution`) = 20000, Print Max (`getMaxResolutionPrint`) = 12000**. The print flow renders at `getMaxResolutionPrint()` server-side (see POD below).
 
-### Global render indicator
-- `lib/widgets/render_indicator.dart` (`RenderIndicatorOverlay`) wrapped via `MaterialApp.builder`. Shows a tappable gradient pill on every screen while `renderControllerProvider.phase == rendering`; tap → `/create/export`. **Hidden on the export screen** (listens to `router.routeInformationProvider`). `RenderController.start()` no-ops if already rendering; studio Export button disabled + "Rendering…" while busy.
+### Global indicators (render + print job)
+- `lib/widgets/render_indicator.dart` (`RenderIndicatorOverlay`) wrapped via `MaterialApp.builder`. Shows tappable gradient pills on every screen for **two** long-running jobs, stacked if both: a mosaic render (`renderControllerProvider.phase == rendering` → tap `/create/export`) and a **print-order finalisation** (`printJobControllerProvider.isProcessing` → tap pushes `OrderProcessingScreen`).
+- Each pill hides on its own screen via a provider flag set by that screen on mount/unmount — `onRenderScreenProvider` (export) and `onPrintProcessingScreenProvider` (processing). **Do NOT listen to `router.routerDelegate`/`routeInformationProvider` from inside `MaterialApp.builder`** — it re-enters the build and crashes (`!_dirty`). The flag is toggled in `initState` (post-frame) + `dispose` (post-frame, via a `ProviderContainer` captured in `didChangeDependencies`).
+- `RenderController.start()` no-ops if already rendering; studio Export button disabled + "Rendering…" while busy.
 
 ---
 
@@ -79,19 +83,63 @@ Detailed running notes so work can resume after a context reset. Last updated: *
   - Framed `GLOBAL-CFP-40X40` / `GLOBAL-CFP-32X40`
   - Metal `GLOBAL-DI-36X36` (sq) / `GLOBAL-DI-28X40` (portrait+landscape)
 - **Prices (VAT-incl EUR)**: canvas 275 all; framed 325 sq / 275 p+l; metal 235 sq / 285 p+l.
+- **Margin sanity-check (2026-06-15, live Prodigi `/quotes`, Standard shipping, EUR, cost = item+shipping; margin = retail − cost):** all products clear cost comfortably in US/UK/EU. Lowest margin ~€136 (metal square US). US is the priciest shipping lane; DE cheapest for canvas/framed; metal ships dearer to DE/US (different facility). **Serbia (test only) is the outlier** — that order's shipping was €128.94 (DHL Express Worldwide), margin only ~€53; ignore for launch pricing.
+
+  | Product (retail) | US cost→margin | UK cost→margin | DE/EU cost→margin |
+  |---|--:|--:|--:|
+  | Canvas square (€275) | 100.60→+174 | 98.31→+177 | 90.95→+184 |
+  | Canvas portrait/landscape (€275) | 100.60→+174 | 89.04→+186 | 78.95→+196 |
+  | Framed square (€325) | 164.36→+161 | 137.70→+187 | 112.95→+212 |
+  | Framed portrait/landscape (€275) | 129.90→+145 | 114.53→+161 | 96.95→+178 |
+  | Metal square (€235) | 98.70→+136 | 74.21→+161 | 92.98→+143 |
+  | Metal portrait/landscape (€285) | 102.32→+183 | 70.50→+215 | 91.24→+194 |
+
+  **VAT caveat:** Prodigi costs are VAT-EXCLUSIVE (what we pay); retail is VAT-INCLUSIVE (what the customer pays). Once VAT-registered/remitting, net revenue ≈ `retail ÷ 1.2`, so subtract VAT before the "real" margin — still positive on every product (e.g. framed sq DE: €325→~€271 net − €112.95 = +€158). Re-pull quotes (`DEST=US,GB,DE node scripts/prodigi-discover.mjs <skus>`, fill required attrs) if Prodigi prices change.
+- **Landscape orientation = image-aspect-driven (verified 2026-06-15).** Prodigi has NO orientation attribute and NO dedicated landscape SKU; each SKU is "Portrait / landscape" and orientation follows the supplied image's aspect ratio. So landscape variants reuse the portrait SKU and send the image **UPRIGHT/wide — `rotate` is false everywhere** (the old 90° rotate produced a portrait order with sideways content / wrong-side hardware). Thumbnail is generated from the upright crop. Confirmed end-to-end: a real order (`GLOBAL-CFP-32X40`, Color Black) shows upright + In production on Prodigi. Still worth a sandbox check per type (esp. framed hardware) before scaling.
 - **Choosable attributes** (others auto): canvas `wrap` (ImageWrap default — **MirrorWrap removed**; Black/White solid edges), framed `color` (8 colours, key confirmed = `color`), metal `finish` (lustre default; gloss/matte). Generic `PrintOption`/`printOption(type)` in mobile; flows `checkout → prodigi_orders.attributes (JSON) → fulfill` (merged over catalog defaults).
-- Mobile UX: studio "Order as wall art" (gated to US/UK/EU+RS via `isPrintRegionAllowed`) → wall-art screen (mockup + type/orientation + option selector + **3D canvas mockup** showing the wrap + **"Actual size" loupe** at true print scale) → crop → shipping address → review → Creem webview (`successPath: /print-success`) → fulfill → My Orders. Files: `lib/print/*`, `lib/screens/print/*`, `lib/api/print_api.dart`, `lib/state/print_providers.dart`.
-- Render for print **reuses the regular `/api/render`** (not `/api/print/render`) → builds `/api/mosaic-image/{token}?maxSize=20000`; server `fulfill` crops with sharp + rotates landscape + creates the Prodigi order. **Print spends 1 render token** (user keeps digital copy).
-- Mockup background is now the bundled wall photo `assets/wall.jpg` (converted from wall.avif); `wallImageProvider` + `MockupPainter.wall` (cover-fit, procedural fallback).
-- 3D canvas mockup: front shows inner region, right+bottom edges continue the image outward (true image-wrap, ~3 cm depth).
-- Shipped FCM push (`sendPrintShippedPush`) wired from `/api/print/prodigi/webhook`. Payment hardening: `verifyCreemPaid()` in fulfill (GET `/v1/checkouts/{id}`; rejects only on definitive unpaid).
+- Mobile UX: studio "Order as wall art" (gated to US/UK/EU+RS via `isPrintRegionAllowed`) → wall-art screen (mockup + type/orientation + option selector + **3D canvas mockup** showing the wrap + **"Actual size" loupe** at true print scale) → crop → shipping address → review → Creem webview (`successPath: /print-success`) → **processing screen** → My Orders. Files: `lib/print/*`, `lib/screens/print/*`, `lib/api/print_api.dart`, `lib/state/print_providers.dart`, `lib/state/print_job_controller.dart`.
+- Mockup background is the bundled wall photo `assets/wall.jpg`; `wallImageProvider` + `MockupPainter.wall` (cover-fit + dim/vignette/floor, procedural fallback). 3D canvas mockup: front shows inner region, right+bottom edges continue the image outward (true image-wrap, ~3 cm depth).
+
+#### POD render = SERVER-SIDE, AFTER PAYMENT, NO TOKEN (changed this session)
+- **Decision (user):** the print mosaic is rendered **server-side in `fulfill` after a verified payment** — NOT client-side, and **no render token is charged** (customer pays for the physical product, not a digital export). This also closes the free-render hole a client "skip token" flag would open.
+- **checkout** now stores the *design* — `mosaicPlan` (slim plan JSON), `tileUrls` (JSON map), `baseUrl` — instead of a pre-rendered `mosaicUrl`. New `prodigi_orders` columns: `mosaic_plan`, `tile_urls`, `base_url`, plus `thumbnail_url`. Mobile `PrintApi.checkout(plan, tileUrls, baseUrl, …)`; `order_review` sends `studio.plan.toJson()` + `{id:blobUrl}` + `base.blobUrl` (no client render, no `maxResolutionProvider`).
+- **fulfill** (`app/api/print/prodigi/fulfill/route.ts`): `verifyCreemPaid()` → `renderPrintAsset(order)` calls the **Cloud Run render service** (`RENDER_SERVICE_URL`/`_SECRET`, no token, no email) at `getMaxResolutionPrint()`, scaling plan output to that long side. The render output is a **private** blob → fetched with `Authorization: Bearer ${BLOB_READ_WRITE_TOKEN}` (a plain fetch 403s). Then a single sharp pipeline crops (normalised `cropRect`) + rotates landscape, uploads the print asset (private), and creates the Prodigi order. Requires Cloud Run enabled (errors clearly otherwise).
+- **Print asset URL durability:** Prodigi pulls the asset async (and on reprints). The asset is served via `/api/print/preview/{token}`; `storePreviewToken(token, url, ttlMs)` now takes a TTL → print assets use **`PRINT_ASSET_EXPIRY_MS` = 30 days** (UI previews keep the 1h default). The preview route is **public** (token-gated, no auth/middleware) — that's why both Prodigi and `Image.network` can load it.
+- **Thumbnail:** fulfill also makes a 600px thumbnail of the cropped print (private blob + 30-day token) → `thumbnail_url`. Shown in My Orders. Old orders (pre-deploy) have null → placeholder icon.
+- **Emails (Resend):** `sendProdigiOrderConfirmationEmail` (order details) sent at end of fulfill; `sendProdigiShippedEmail` (with tracking) sent from the webhook on the **first** shipped transition. These are SEPARATE from the Printful `sendPrintOrderConfirmationEmail` (don't clobber). No digital "download ready" email for prints.
+- **Webhook** (`/api/print/prodigi/webhook`): updates status + tracking; on first ship → `sendPrintShippedPush` **and** `sendProdigiShippedEmail`. Push data is typed (`{type:'print_shipped'}` vs render's `{type:'render_done'}`).
+
+#### Resumable order processing (this session)
+- Global `printJobControllerProvider` (`print_job_controller.dart`) runs `fulfill` and holds phase (idle/processing/done/failed) — survives leaving the screen. `OrderProcessingScreen` shows progress → success → **Retry** (idempotent, no re-charge). `order_review._pay` hands off to it + `pushAndRemoveUntil` to processing rooted at gallery.
+- Processing screen back (AppBar + system, via `PopScope`) goes to **My Orders** while working (does NOT reset the job, so the pill keeps showing), or home when done.
+- My Orders (`my_orders_screen.dart`): per-order **thumbnail**, option summary (`optionSummary`: "Image wrap"/"Black frame"/"Lustre finish"), price, status, **tappable + copyable tracking** (`url_launcher` + `Clipboard`), and **Resume/Retry** for paid-but-unsubmitted orders (`PrintOrderDto.isResumable`: `prodigiOrderId == null && status in {paid,uploading,submitted,failed}`). Orders endpoint now returns `prodigiOrderId`, `errorMessage`, `attributes` (parsed object), `thumbnailUrl`, `productKey`.
+- **Push deep-link** (`push_service.dart` `_handleOpen`): routes by `message.data['type']` — `print_shipped` → My Orders (root navigator push), else → `/preview`.
+
+#### Prefill (this session)
+- Shipping form (`shipping_address_screen.dart`, now Consumer) prefills name + email from `authControllerProvider.user` (editable). Creem checkout passes `customer: { email: recipient.email }` to prefill the hosted page. Creem's `customer` object only supports `id`/`email` — **name/address can't be prefilled** into Creem (and don't need to be; shipping name/address flow only to Prodigi).
 
 ### POD — pending MANUAL steps (user)
-1. Create **9 Creem products** at the prices above; set env keys `PRODIGI_CREEM_{CANVAS,FRAMED,METAL}_{SQUARE,PORTRAIT,LANDSCAPE}` = the Creem product_ids.
-2. Set `PRODIGI_API_KEY` = **sandbox** key (+ `PRODIGI_SANDBOX=1`) for test orders. (`PRODIGI_API_KEY_LIVE` is in `.env.local`, used only by `scripts/prodigi-discover.mjs` for quotes/discovery.) Also `PRODIGI_CALLBACK_URL=https://studio.imagiastore.com/api/print/prodigi/webhook`, `PRODIGI_ALLOWED_COUNTRIES` (US,GB,RS,+EU).
-3. `pnpm db:push` in foto-mozaik (creates `prodigi_orders` incl. `attributes` column).
-4. Register the webhook URL in the Prodigi dashboard. Deploy foto-mozaik. Rebuild the app.
-- A product is only sellable with **both** a SKU and a Creem product id (else checkout returns "Product not available yet").
+1. Create **9 Creem products** at the prices above; set env `PRODIGI_CREEM_{CANVAS,FRAMED,METAL}_{SQUARE,PORTRAIT,LANDSCAPE}` = the Creem product_ids. (`CREEM_TEST_MODE=true` ⇒ test key + **test-mode** product ids; mismatch 404s.)
+2. `PRODIGI_API_KEY` = **sandbox** key + `PRODIGI_SANDBOX=1`; `PRODIGI_CALLBACK_URL=https://studio.imagiastore.com/api/print/prodigi/webhook`; `PRODIGI_ALLOWED_COUNTRIES` (US,GB,RS,+EU). (`PRODIGI_API_KEY_LIVE` in `.env.local` is discovery-only.)
+3. Ensure `RENDER_SERVICE_URL` + `RENDER_SERVICE_SECRET` set and **Cloud Run enabled** (fulfill renders there). `BLOB_READ_WRITE_TOKEN`, `RESEND_API_KEY`, `FROM_EMAIL`, `NEXT_PUBLIC_APP_URL` set.
+4. **`pnpm db:push`** — adds `mosaic_plan`, `tile_urls`, `base_url`, `thumbnail_url`. (Without it, new orders fail at the fulfill UPDATE.)
+5. Register the webhook in the Prodigi dashboard. Deploy foto-mozaik. **Rebuild the app** (new `url_launcher` plugin → pod install).
+- A product is sellable only with **both** a SKU and a Creem product id (else checkout: "Product not available yet").
+- Orders are retryable: `fulfill` is idempotent (guards on `prodigiOrderId`); a failed/paid order can be re-run (no re-charge) via My Orders → Resume or `POST /api/print/prodigi/fulfill {orderId}`. Earlier failed orders that predate the schema change lack `mosaic_plan` and can't be resumed — place a fresh order.
+
+## App Store release readiness (in progress)
+
+Full prioritized checklist was produced 2026-06-15. Three hard iOS blockers; progress:
+
+**Blocker 1 — IAP for digital tokens (Guideline 3.1.1): NOT STARTED.** Render tokens unlock *digital* content, so on iOS the token purchase MUST use Apple In-App Purchase, not the Creem webview. **Prints stay on Creem** (physical goods are exempt). Plan: `in_app_purchase` package (consumables) + a server endpoint that verifies the Apple transaction (StoreKit2 JWS / App Store Server API) and credits tokens idempotently (reuse the existing Creem token-granting logic); optional App Store Server Notifications v2 for refunds. ~3–4 dev days; the **Apple Paid Apps agreement + banking/tax (W-8BEN-E for the Serbian D.O.O.)** is the schedule gate — start early. Apple cut 15% (Small Business Program) / 30%; Apple sets price tiers and remits VAT.
+
+**Blocker 2 — Sign in with Apple (Guideline 4.8): DONE (needs Apple-portal capability + rebuild).** Required because Google sign-in is offered. Native flow: `signInWithApple()` in `auth_controller.dart` (nonce → sha256 → `SignInWithApple.getAppleIDCredential`) → `AuthApi.signInApple` → server `POST /api/mobile/auth/apple` verifies the identity token with `jose` (JWKS, iss/aud=bundle id/exp/nonce), finds/creates/links user + session (mirrors the Google bridge), returns bearer. Apple button (iOS-only) on `sign_in_screen.dart`. Entitlement `com.apple.developer.applesignin` added to `Runner.entitlements`. Deps added: client `sign_in_with_apple`+`crypto`, server `jose`. MANUAL: enable "Sign In with Apple" on the App ID at developer.apple.com/account/resources/identifiers/list, refresh provisioning profile; optional env `APPLE_BUNDLE_ID`; rebuild + redeploy.
+
+**Blocker 3 — In-app account deletion (Guideline 5.1.1(v)): DONE.** `DELETE /api/user` deletes the user row → cascades all data (sessions, accounts, orders, downloads, projects, tokens). Client: `UserApi.deleteAccount` → `AuthController.deleteAccount` (clears token, signs out; throws on failure) → red "Delete account" button + confirm dialog on the account screen.
+
+**Privacy manifest: DONE (needs Xcode target add).** Created `ios/Runner/PrivacyInfo.xcprivacy` (no tracking; collected data types: email/name/phone/physical address/photos/userID/purchase history, all linked, App Functionality; required-reason APIs: file timestamp C617.1, user defaults CA92.1, system boot time 35F9.1, disk space E174.1). **MANUAL: add the file to the Runner target in Xcode** (drag into Runner group, check "Runner" target membership) or it won't be bundled. Keep its data types in sync with the App Store Connect App Privacy nutrition label.
+
+**Other release prep (not yet done):** demo account + review notes for the login-gated app; App Privacy nutrition label in ASC; public Privacy Policy URL; Info.plist usage strings reviewed for clarity (camera/photo add/photo read present); ASC metadata (screenshots, 1024 icon, age rating, category, support/marketing URLs); IAP products in ASC; export-compliance answer; verify production push from TestFlight (aps-environment is `development` in the file — distribution profile should swap to production, confirm).
 
 ## Other pending / nice-to-haves
 - Audio for video: drop a royalty-free piano WAV at `assets/audio/piano.wav` (44100/stereo/16-bit) + pubspec entry (currently silent).

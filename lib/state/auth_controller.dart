@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../api/api_client.dart';
 import '../api/auth_api.dart';
@@ -129,6 +134,50 @@ class AuthController extends Notifier<AuthState> {
     await _loadUser();
   }
 
+  /// Native Sign in with Apple (iOS). Gets an Apple identity token on-device,
+  /// has the server verify it, then stores the returned session token. The
+  /// nonce is hashed (sha256) before being sent to Apple and re-checked server
+  /// side against the token's `nonce` claim.
+  Future<void> signInWithApple() async {
+    final rawNonce = _generateNonce();
+    final hashedNonce =
+        sha256.convert(utf8.encode(rawNonce)).toString();
+
+    final credential = await SignInWithApple.getAppleIDCredential(
+      scopes: const [
+        AppleIDAuthorizationScopes.email,
+        AppleIDAuthorizationScopes.fullName,
+      ],
+      nonce: hashedNonce,
+    );
+
+    final identityToken = credential.identityToken;
+    if (identityToken == null || identityToken.isEmpty) {
+      throw const AuthException('No Apple identity token received.');
+    }
+    // Name is only provided on the first authorization.
+    final fullName = [credential.givenName, credential.familyName]
+        .whereType<String>()
+        .where((s) => s.isNotEmpty)
+        .join(' ');
+
+    final token = await _auth.signInApple(
+      identityToken: identityToken,
+      rawNonce: rawNonce,
+      fullName: fullName.isEmpty ? null : fullName,
+    );
+    await _tokens.write(token);
+    await _loadUser();
+  }
+
+  String _generateNonce([int length = 32]) {
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._';
+    final rand = Random.secure();
+    return List.generate(length, (_) => chars[rand.nextInt(chars.length)])
+        .join();
+  }
+
   Future<void> signOut() async {
     final token = await _tokens.read();
     if (token != null) {
@@ -136,6 +185,18 @@ class AuthController extends Notifier<AuthState> {
       try {
         await ref.read(apiClientProvider).post<dynamic>('/api/auth/sign-out');
       } catch (_) {}
+    }
+    await _tokens.clear();
+    state = const AuthState.signedOut();
+  }
+
+  /// Permanently deletes the account + all its data, then signs out locally.
+  /// Throws [AuthException] if the server delete fails (so the UI can surface it
+  /// and NOT pretend the account was removed).
+  Future<void> deleteAccount() async {
+    final res = await _user.deleteAccount();
+    if (!res.isOk) {
+      throw AuthException(res.error ?? 'Could not delete account.');
     }
     await _tokens.clear();
     state = const AuthState.signedOut();

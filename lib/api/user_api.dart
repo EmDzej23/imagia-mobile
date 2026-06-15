@@ -42,4 +42,13 @@ class UserApi {
     }
     return ApiResult.ok(UserProfile.fromJson(res.data!), res.status);
   }
+
+  /// Permanently deletes the signed-in user and all their data.
+  Future<ApiResult<void>> deleteAccount() async {
+    final res = await _client.delete<Map<String, dynamic>>('/api/user');
+    if (!res.isOk) {
+      return ApiResult.fail(res.error ?? 'Could not delete account.', res.status);
+    }
+    return ApiResult.ok(null, res.status);
+  }
 }

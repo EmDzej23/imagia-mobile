@@ -1,6 +1,9 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../services/app_prefs.dart';
 import '../../state/auth_controller.dart';
@@ -74,6 +77,10 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
         await ref.read(authControllerProvider.notifier).signInWithGoogle();
       });
 
+  Future<void> _signInApple() => _run(() async {
+        await ref.read(authControllerProvider.notifier).signInWithApple();
+      });
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -125,6 +132,16 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                   onPressed: _busy ? null : _signInEmail,
                 ),
                 const SizedBox(height: AppSpacing.x3),
+                if (Platform.isIOS) ...[
+                  SignInWithAppleButton(
+                    onPressed: _busy ? () {} : _signInApple,
+                    style: SignInWithAppleButtonStyle.white,
+                    height: 48,
+                    borderRadius:
+                        BorderRadius.circular(AppRadius.control),
+                  ),
+                  const SizedBox(height: AppSpacing.x3),
+                ],
                 SecondaryButton(
                   label: 'Continue with Google',
                   icon: Icons.g_mobiledata,

@@ -23,6 +23,7 @@ class AccountScreen extends ConsumerStatefulWidget {
 
 class _AccountScreenState extends ConsumerState<AccountScreen> {
   TokenPackage? _loading;
+  bool _deleting = false;
 
   Future<void> _purchase(TokenPackage pkg) async {
     setState(() => _loading = pkg);
@@ -44,6 +45,38 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       if (ok == true) _snack('Tokens added — thank you!');
     } finally {
       if (mounted) setState(() => _loading = null);
+    }
+  }
+
+  Future<void> _confirmDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete account?'),
+        content: const Text(
+            'This permanently deletes your account, mosaics, projects, tokens '
+            'and order history. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _deleting = true);
+    try {
+      // On success the auth state flips to signedOut and the router redirects.
+      await ref.read(authControllerProvider.notifier).deleteAccount();
+    } catch (e) {
+      _snack('$e');
+      if (mounted) setState(() => _deleting = false);
     }
   }
 
@@ -159,8 +192,23 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             SecondaryButton(
               label: 'Sign out',
               icon: Icons.logout,
-              onPressed: () =>
-                  ref.read(authControllerProvider.notifier).signOut(),
+              onPressed: _deleting
+                  ? null
+                  : () => ref.read(authControllerProvider.notifier).signOut(),
+            ),
+            const SizedBox(height: AppSpacing.x2),
+            TextButton.icon(
+              onPressed: _deleting ? null : _confirmDeleteAccount,
+              icon: _deleting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppColors.error),
+                    )
+                  : const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Delete account'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.error),
             ),
           ],
         ),

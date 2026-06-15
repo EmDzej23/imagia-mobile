@@ -140,7 +140,9 @@ class PrintApi {
   Future<ApiResult<CheckoutSession>> checkout({
     required String productKey,
     required String sessionId,
-    required String mosaicUrl,
+    required Map<String, dynamic> plan,
+    required Map<String, String> tileUrls,
+    required String baseUrl,
     required PrintCrop cropRect,
     required PrintRecipient recipient,
     Map<String, String>? attributes,
@@ -150,7 +152,9 @@ class PrintApi {
       body: {
         'productKey': productKey,
         'sessionId': sessionId,
-        'mosaicUrl': mosaicUrl,
+        'plan': plan,
+        'tileUrls': tileUrls,
+        'baseUrl': baseUrl,
         'cropRect': cropRect.toJson(),
         'recipient': recipient.toJson(),
         'attributes': ?attributes,

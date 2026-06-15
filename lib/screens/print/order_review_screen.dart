@@ -2,15 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/print_api.dart';
-import '../../core/config.dart';
 import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
 import '../../print/wall_image_provider.dart';
 import '../../services/haptics.dart';
-import '../../state/features_providers.dart';
 import '../../state/print_providers.dart';
-import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -35,52 +32,28 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
   String _step = '';
   bool _done = false;
 
-  /// High-res mosaic URL Prodigi can pull — reuses an existing render if the
-  /// user already exported (no extra token), else renders now via the regular
-  /// render path.
-  Future<String> _ensureMosaicUrl() async {
-    final existing = ref.read(renderControllerProvider).result;
-    if (existing != null && existing.downloadToken.isNotEmpty) {
-      return _imageUrl(existing.downloadToken);
-    }
+  Future<void> _pay() async {
     final studio = ref.read(studioControllerProvider);
     final plan = studio.plan;
     final base = studio.base;
     if (plan == null || base == null) {
-      throw 'No mosaic to print.';
+      _snack('No mosaic to print.');
+      return;
     }
-    final tileUrls = {for (final t in studio.tiles) t.id: t.blobUrl};
-    final maxRes = await ref.read(maxResolutionProvider.future);
-    final res = await ref.read(renderApiProvider).render(
-          plan: plan,
-          tileUrls: tileUrls,
-          baseUrl: base.blobUrl,
-          fileName: '${base.name}-print.jpg',
-          outputLongSide: maxRes,
-        );
-    if (!res.isOk || res.data == null) {
-      throw res.error ?? 'Render failed.';
-    }
-    return _imageUrl(res.data!.downloadToken);
-  }
-
-  String _imageUrl(String token) =>
-      '${AppConfig.apiBaseUrl}/api/mosaic-image/$token?maxSize=20000';
-
-  Future<void> _pay() async {
     setState(() {
       _busy = true;
-      _step = 'Rendering your print…';
+      _step = 'Starting checkout…';
     });
     try {
-      final mosaicUrl = await _ensureMosaicUrl();
-      if (!mounted) return;
-      setState(() => _step = 'Starting checkout…');
-
+      // The print mosaic is rendered server-side after payment (no render
+      // token), so we just send the design to checkout.
+      final tileUrls = {for (final t in studio.tiles) t.id: t.blobUrl};
       final checkout = await ref.read(printApiProvider).checkout(
             productKey: widget.draft.productKey,
             sessionId: 'mobile-${DateTime.now().millisecondsSinceEpoch}',
-            mosaicUrl: mosaicUrl,
+            plan: plan.toJson(),
+            tileUrls: tileUrls,
+            baseUrl: base.blobUrl,
             cropRect: widget.draft.cropNormalized,
             recipient: widget.recipient,
             attributes: widget.draft.attributes,
@@ -106,7 +79,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
         return;
       }
 
-      setState(() => _step = 'Placing your order…');
+      setState(() => _step = 'Rendering & placing your order…');
       final fulfilled =
           await ref.read(printApiProvider).fulfill(checkout.data!.orderId);
       if (!mounted) return;
@@ -211,7 +184,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                 ),
                 const SizedBox(height: AppSpacing.x2),
                 Text(
-                  'Rendering a print-quality mosaic uses 1 render token (you keep the digital copy too).',
+                  'We print a high-resolution mosaic from your design — no render tokens are used.',
                   style: AppTypography.caption,
                   textAlign: TextAlign.center,
                 ),

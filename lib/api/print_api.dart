@@ -41,6 +41,9 @@ class PrintOrderDto {
     required this.productName,
     required this.status,
     required this.totalFormatted,
+    this.productKey,
+    this.attributes,
+    this.thumbnailUrl,
     this.prodigiStatus,
     this.prodigiOrderId,
     this.errorMessage,
@@ -53,6 +56,9 @@ class PrintOrderDto {
   final String productName;
   final String status;
   final String totalFormatted;
+  final String? productKey;
+  final Map<String, String>? attributes;
+  final String? thumbnailUrl;
   final String? prodigiStatus;
   final String? prodigiOrderId;
   final String? errorMessage;
@@ -68,11 +74,44 @@ class PrintOrderDto {
           status == 'submitted' ||
           status == 'failed');
 
+  /// Human-readable option line, e.g. "Image wrap" / "Black frame" / "Lustre".
+  String? get optionSummary {
+    final a = attributes;
+    if (a == null || a.isEmpty) return null;
+    final parts = <String>[];
+    for (final e in a.entries) {
+      switch (e.key) {
+        case 'wrap':
+          parts.add(switch (e.value) {
+            'ImageWrap' => 'Image wrap',
+            'MirrorWrap' => 'Mirror wrap',
+            'Black' => 'Black edges',
+            'White' => 'White edges',
+            _ => e.value,
+          });
+        case 'color':
+          parts.add('${_cap(e.value)} frame');
+        case 'finish':
+          parts.add('${_cap(e.value)} finish');
+        default:
+          parts.add('${e.key}: ${e.value}');
+      }
+    }
+    return parts.join(' · ');
+  }
+
+  static String _cap(String s) =>
+      s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+
   factory PrintOrderDto.fromJson(Map<String, dynamic> j) => PrintOrderDto(
         id: j['id'] as String,
         productName: j['productName'] as String? ?? 'Print',
         status: j['status'] as String? ?? 'pending',
         totalFormatted: j['totalFormatted'] as String? ?? '',
+        productKey: j['productKey'] as String?,
+        attributes: (j['attributes'] as Map?)
+            ?.map((k, v) => MapEntry(k.toString(), v.toString())),
+        thumbnailUrl: j['thumbnailUrl'] as String?,
         prodigiStatus: j['prodigiStatus'] as String?,
         prodigiOrderId: j['prodigiOrderId'] as String?,
         errorMessage: j['errorMessage'] as String?,

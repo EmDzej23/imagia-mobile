@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../api/print_api.dart';
 import '../../state/print_job_controller.dart';
@@ -8,6 +10,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/shimmer.dart';
 import 'order_processing_screen.dart';
 
 class MyOrdersScreen extends ConsumerWidget {
@@ -74,42 +77,140 @@ class _OrderTile extends ConsumerWidget {
         builder: (_) => const OrderProcessingScreen()));
   }
 
+  double get _aspect {
+    final n = order.productName.toLowerCase();
+    if (n.contains('portrait')) return 0.8;
+    if (n.contains('landscape')) return 1.25;
+    return 1.0;
+  }
+
+  Future<void> _openTracking() async {
+    final url = order.trackingUrl;
+    if (url == null || url.isEmpty) return;
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _copyTracking(BuildContext context) async {
+    final n = order.trackingNumber;
+    if (n == null || n.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: n));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tracking number copied')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = _status;
+    final option = order.optionSummary;
+    final hasTrackingLink =
+        order.trackingUrl != null && order.trackingUrl!.isNotEmpty;
     return AppCard(
       padding: const EdgeInsets.all(AppSpacing.x4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(order.productName,
-                    style: AppTypography.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.x2, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceRaised,
-                  borderRadius: BorderRadius.circular(AppRadius.chip),
+              // Print preview thumbnail.
+              SizedBox(
+                height: 84,
+                width: 84 * _aspect,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                  child: order.thumbnailUrl != null
+                      ? ShimmerNetworkImage(url: order.thumbnailUrl!)
+                      : const ColoredBox(
+                          color: AppColors.surfaceRaised,
+                          child: Icon(Icons.image_outlined,
+                              color: AppColors.textMuted),
+                        ),
                 ),
-                child: Text(s.label,
-                    style: AppTypography.caption.copyWith(color: s.color)),
+              ),
+              const SizedBox(width: AppSpacing.x3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(order.productName,
+                              style: AppTypography.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppSpacing.x2, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceRaised,
+                            borderRadius:
+                                BorderRadius.circular(AppRadius.chip),
+                          ),
+                          child: Text(s.label,
+                              style: AppTypography.caption
+                                  .copyWith(color: s.color)),
+                        ),
+                      ],
+                    ),
+                    if (option != null) ...[
+                      const SizedBox(height: AppSpacing.x1),
+                      Text(option,
+                          style: AppTypography.caption
+                              .copyWith(color: AppColors.textSecondary)),
+                    ],
+                    const SizedBox(height: AppSpacing.x1),
+                    Text(order.totalFormatted, style: AppTypography.caption),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.x1),
-          Text(order.totalFormatted, style: AppTypography.caption),
           if (order.trackingNumber != null &&
               order.trackingNumber!.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.x2),
-            Text('Tracking: ${order.trackingNumber}',
-                style: AppTypography.caption
-                    .copyWith(color: AppColors.textSecondary)),
+            Row(
+              children: [
+                Icon(Icons.local_shipping_outlined,
+                    size: 16, color: AppColors.textSecondary),
+                const SizedBox(width: AppSpacing.x1),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: hasTrackingLink ? _openTracking : null,
+                    child: Text('Tracking: ${order.trackingNumber}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.caption.copyWith(
+                            color: hasTrackingLink
+                                ? AppColors.accent
+                                : AppColors.textSecondary)),
+                  ),
+                ),
+                if (hasTrackingLink)
+                  IconButton(
+                    onPressed: _openTracking,
+                    icon: const Icon(Icons.open_in_new, size: 16),
+                    color: AppColors.accent,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Track parcel',
+                    constraints: const BoxConstraints(),
+                    padding: const EdgeInsets.all(AppSpacing.x1),
+                  ),
+                IconButton(
+                  onPressed: () => _copyTracking(context),
+                  icon: const Icon(Icons.copy, size: 16),
+                  color: AppColors.textSecondary,
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Copy tracking number',
+                  constraints: const BoxConstraints(),
+                  padding: const EdgeInsets.all(AppSpacing.x1),
+                ),
+              ],
+            ),
           ],
           if (order.isResumable) ...[
             const SizedBox(height: AppSpacing.x3),

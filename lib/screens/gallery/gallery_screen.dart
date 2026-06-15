@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../api/projects_api.dart';
-import '../../state/auth_controller.dart';
 import '../../state/library_providers.dart';
 import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
@@ -21,32 +20,12 @@ class GalleryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(authControllerProvider).user;
     final projects = ref.watch(projectsListProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Imagia'),
         actions: [
-          if (user != null)
-            GestureDetector(
-              onTap: () => context.push('/account'),
-              child: Center(
-                child: Container(
-                  margin: const EdgeInsets.only(right: AppSpacing.x2),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.x3, vertical: AppSpacing.x1),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(AppRadius.chip),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: Text('${user.tokenBalance} ◆',
-                      style: AppTypography.number(AppTypography.caption)
-                          .copyWith(color: AppColors.accent)),
-                ),
-              ),
-            ),
           IconButton(
             tooltip: 'Downloads',
             icon: const Icon(Icons.download_outlined),

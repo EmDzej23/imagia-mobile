@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/config.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -10,31 +11,35 @@ import '../../widgets/app_card.dart';
 class HelpScreen extends StatelessWidget {
   const HelpScreen({super.key});
 
-  static const _steps = [
-    (
-      '1. Pick a base photo',
-      'Choose the picture your mosaic will recreate — a portrait, pet, or '
-          'landscape all work well.'
-    ),
-    (
-      '2. Add tile photos',
-      'Add your own photos, or tap “Free sample photos” to start instantly. '
-          'More variety in color and content gives a sharper result — aim for '
-          '200+ when using your own.'
-    ),
-    (
-      '3. Tune in the studio',
-      'The preview rebuilds live as you adjust density and style. Tap the '
-          'preview to zoom in and see the individual tiles.'
-    ),
-    (
-      '4. Export & download',
-      'Spend one token to render a high-resolution version, then save it to '
-          'your photos or share it. You can also create a free video.'
-    ),
-  ];
+  List<(String, String)> get _steps => [
+        (
+          '1. Pick a base photo',
+          'Choose the picture your mosaic will recreate — a portrait, pet, or '
+              'landscape all work well.'
+        ),
+        (
+          '2. Add tile photos',
+          'Add your own photos, or tap “Free sample photos” to start instantly. '
+              'More variety in color and content gives a sharper result — aim '
+              'for 200+ when using your own.'
+        ),
+        (
+          '3. Tune in the studio',
+          'The preview rebuilds live as you adjust density and style. Tap the '
+              'preview to zoom in and see the individual tiles.'
+        ),
+        (
+          '4. Export & download',
+          AppConfig.freeRenders
+              ? 'Render a high-resolution version — free — then save it to your '
+                  'photos or share it. You can also create a video.'
+              : 'Spend one token to render a high-resolution version, then save '
+                  'it to your photos or share it. You can also create a free '
+                  'video.'
+        ),
+      ];
 
-  static const _faqs = [
+  List<(String, String)> get _faqs => [
     (
       'How does privacy work?',
       'Tile analysis and mosaic matching run entirely on your device — instant '
@@ -49,15 +54,25 @@ class HelpScreen extends StatelessWidget {
     ),
     (
       'What resolution is the export?',
-      'Up to 12,000 px on the long side — sharp enough to print a wall mural at '
-          'full photographic quality. Preview is unlimited and free; you only '
-          'pay for the high-res download.'
+      AppConfig.freeRenders
+          ? 'Up to 12,000 px on the long side — sharp enough to print a wall '
+              'mural at full photographic quality. Preview and download are free.'
+          : 'Up to 12,000 px on the long side — sharp enough to print a wall '
+              'mural at full photographic quality. Preview is unlimited and '
+              'free; you only pay for the high-res download.'
     ),
-    (
-      'Do tokens expire?',
-      'Never. Buy tokens whenever you want and use them at your own pace. No '
-          'subscription, no monthly fees.'
-    ),
+    if (AppConfig.freeRenders)
+      (
+        'Is it free to create mosaics?',
+        'Yes — designing, tuning, exporting, and downloading your mosaics is '
+            'free in the app.'
+      )
+    else
+      (
+        'Do tokens expire?',
+        'Never. Buy tokens whenever you want and use them at your own pace. No '
+            'subscription, no monthly fees.'
+      ),
     (
       'What image formats are supported?',
       'JPEG, PNG, WebP, and HEIC for uploads. Exports are high-quality JPEG '

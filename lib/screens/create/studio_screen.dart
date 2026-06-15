@@ -20,7 +20,6 @@ import '../../widgets/app_progress_bar.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
-import '../../widgets/secondary_button.dart';
 import '../../widgets/segmented_selector.dart';
 
 class StudioScreen extends ConsumerStatefulWidget {
@@ -286,7 +285,18 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     void update(MosaicSettings s) => _controller.updateSettings(s);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Studio')),
+      appBar: AppBar(
+        title: const Text('Studio'),
+        actions: [
+          IconButton(
+            tooltip: AppConfig.freeRenders
+                ? 'About export'
+                : 'About export & tokens',
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => _showTokenInfo(context),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -451,52 +461,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                       onChanged: (v) =>
                           update(settings.copyWith(autoContrast: v)),
                     ),
-                    const SizedBox(height: AppSpacing.x4),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: PrimaryButton(
-                            label: rendering
-                                ? 'Rendering…'
-                                : 'Export full quality (1)',
-                            onPressed: (studio.plan == null || rendering)
-                                ? null
-                                : () => _onExport(context, canRender),
-                          ),
-                        ),
-                        const SizedBox(width: AppSpacing.x2),
-                        IconButton(
-                          tooltip: AppConfig.freeRenders
-                              ? 'About export'
-                              : 'About export & tokens',
-                          icon: const Icon(Icons.info_outline,
-                              color: AppColors.textSecondary),
-                          onPressed: () => _showTokenInfo(context),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: AppSpacing.x3),
-                    SecondaryButton(
-                      label: 'Create video (free)',
-                      icon: Icons.movie_creation_outlined,
-                      onPressed: studio.plan == null
-                          ? null
-                          : () {
-                              ref.read(videoControllerProvider.notifier).reset();
-                              context.push('/create/video');
-                            },
-                    ),
-                    // Print feature only for supported regions (US/UK/EU + RS).
-                    if (isPrintRegionAllowed()) ...[
-                      const SizedBox(height: AppSpacing.x3),
-                      SecondaryButton(
-                        label: 'Order as wall art',
-                        icon: Icons.image_outlined,
-                        onPressed: studio.plan == null
-                            ? null
-                            : () => context.push('/create/wallart'),
-                      ),
-                    ],
+                    // Actions live in the persistent bottom bar (see below).
+                    const SizedBox(height: AppSpacing.x2),
                   ],
                 ),
               ),
@@ -504,6 +470,22 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
           ],
         ),
       ),
+      // Persistent action bar — always reachable, doesn't scroll. Primary CTA
+      // is "Order wall art" where prints are available (the monetised action;
+      // digital export is free during the bridge); export + video are compact
+      // secondary actions. Hidden until a mosaic plan exists.
+      bottomNavigationBar: studio.plan == null
+          ? null
+          : _StudioActionBar(
+              rendering: rendering,
+              printAllowed: isPrintRegionAllowed(),
+              onExport: rendering ? null : () => _onExport(context, canRender),
+              onVideo: () {
+                ref.read(videoControllerProvider.notifier).reset();
+                context.push('/create/video');
+              },
+              onPrint: () => context.push('/create/wallart'),
+            ),
     );
   }
 
@@ -824,6 +806,127 @@ class _Hint extends StatelessWidget {
           Text(text,
               style: AppTypography.caption.copyWith(color: Colors.white70)),
         ],
+      ),
+    );
+  }
+}
+
+/// Persistent studio action bar. Print is the primary CTA where available
+/// (the monetised action; digital export is free during the bridge); export +
+/// video are compact secondary actions. Always visible, doesn't scroll.
+class _StudioActionBar extends StatelessWidget {
+  const _StudioActionBar({
+    required this.rendering,
+    required this.printAllowed,
+    required this.onExport,
+    required this.onVideo,
+    required this.onPrint,
+  });
+
+  final bool rendering;
+  final bool printAllowed;
+  final VoidCallback? onExport;
+  final VoidCallback onVideo;
+  final VoidCallback onPrint;
+
+  @override
+  Widget build(BuildContext context) {
+    final exportLabel = AppConfig.freeRenders ? 'Export' : 'Export (1)';
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.x4, vertical: AppSpacing.x3),
+          child: Row(
+            children: [
+              if (printAllowed) ...[
+                _ActionIcon(
+                  icon: Icons.download_outlined,
+                  label: exportLabel,
+                  busy: rendering,
+                  onPressed: onExport,
+                ),
+                const SizedBox(width: AppSpacing.x2),
+              ],
+              _ActionIcon(
+                icon: Icons.movie_creation_outlined,
+                label: 'Video',
+                onPressed: onVideo,
+              ),
+              const SizedBox(width: AppSpacing.x3),
+              Expanded(
+                child: printAllowed
+                    ? PrimaryButton(
+                        label: 'Order wall art',
+                        icon: Icons.image_outlined,
+                        onPressed: onPrint,
+                      )
+                    : PrimaryButton(
+                        label: rendering
+                            ? 'Rendering…'
+                            : (AppConfig.freeRenders
+                                ? 'Export full quality'
+                                : 'Export full quality (1)'),
+                        onPressed: onExport,
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact secondary action: icon + small label in a bordered square.
+class _ActionIcon extends StatelessWidget {
+  const _ActionIcon({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.busy = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = onPressed == null;
+    final color = disabled ? AppColors.textMuted : AppColors.textSecondary;
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        width: 60,
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.x2),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceRaised,
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.accent),
+                  )
+                : Icon(icon, size: 20, color: color),
+            const SizedBox(height: 2),
+            Text(label,
+                style: AppTypography.caption.copyWith(color: color)),
+          ],
+        ),
       ),
     );
   }

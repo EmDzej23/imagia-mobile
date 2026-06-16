@@ -61,7 +61,11 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   Future<File> _download(String url, String fileName) async {
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/$fileName';
-    await Dio().download(_resolveUrl(url), path);
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 2),
+    ));
+    await dio.download(_resolveUrl(url), path);
     return File(path);
   }
 
@@ -69,6 +73,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     setState(() => _saving = true);
     try {
       final file = await _download(url, fileName);
+      if (!await Gal.hasAccess()) await Gal.requestAccess();
       await Gal.putImage(file.path);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -34,9 +34,12 @@ class MosaicPreviewScreen extends ConsumerStatefulWidget {
 class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
   bool _saving = false;
 
-  /// Display resolution for the zoomable view — high enough to read individual
-  /// tiles when zoomed deep into the mosaic.
-  static const _displayMaxSize = 10000;
+  /// Display resolution for the zoomable view. A single decoded image can't
+  /// exceed the GPU's max texture size or it gets clamped per-axis and shows
+  /// distorted. iPhones are ~16384; most Android GPUs are 8192 (some older are
+  /// 4096). Cap Android at 8192 — full detail on iOS, near-full on Android,
+  /// without exceeding the common Android limit.
+  static final int _displayMaxSize = Platform.isAndroid ? 8192 : 10000;
 
   String _imageUrl(String token) =>
       '${AppConfig.apiBaseUrl}/api/mosaic-image/$token?maxSize=$_displayMaxSize';
@@ -45,7 +48,13 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
     final token = await ref.read(tokenStorageProvider).read();
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/${rec.fileName}';
-    await Dio().download(
+    // Full-res mosaics are large; allow a long total download but fail fast on a
+    // stalled connection (otherwise the save spinner hangs forever).
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 2), // per-chunk stall guard
+    ));
+    await dio.download(
       '${AppConfig.apiBaseUrl}${rec.downloadPath}',
       path,
       options: Options(
@@ -146,6 +155,7 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
                 tooltip: 'Save to Photos',
                 icon: const Icon(Icons.download),
                 onPressed: () => _run(record, (f) async {
+                  if (!await Gal.hasAccess()) await Gal.requestAccess();
                   await Gal.putImage(f.path);
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(

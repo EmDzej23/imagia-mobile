@@ -44,7 +44,8 @@ class HelpScreen extends StatelessWidget {
       'How does privacy work?',
       'Tile analysis and mosaic matching run entirely on your device — instant '
           'feedback, no server round-trips. Your uploaded photos are private to '
-          'your account and never shared.'
+          'your account; we only share your finished mosaic with our print '
+          'provider if you order a print.'
     ),
     (
       'How many tile images do I need?',

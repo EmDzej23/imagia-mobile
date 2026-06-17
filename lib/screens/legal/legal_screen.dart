@@ -31,25 +31,42 @@ class LegalScreen extends StatelessWidget {
   /// Privacy Policy (content mirrored from the web, adapted for the app).
   factory LegalScreen.privacy() => const LegalScreen(
         title: 'Privacy Policy',
+        lastUpdated: 'Last updated: June 2026',
         sections: [
-          LegalSection('Image Processing', paragraphs: [
-            'Tile matching and live preview run entirely on your device. To '
-                'create the final high-resolution mosaic, your images are '
-                'uploaded to secure cloud storage and rendered on secure '
-                'servers, where the result is stored temporarily for download.',
-            'We retain images only as long as needed to complete your mosaic '
-                'and provide download access. We do not use your images for any '
-                'other purpose, and they are never shared with third parties.',
+          LegalSection('What We Collect', paragraphs: [
+            'Account information — your email and name — to create and manage '
+                'your account, including when you sign in with Google or Apple.',
+            'The photos you upload (base and tile images) and the mosaics you '
+                'create, used to build and render your mosaic.',
+            'If you order a print: the recipient name, shipping address, and '
+                'phone number you provide.',
+            'A push notification token, so we can alert you when a mosaic is '
+                'ready or an order ships, plus minimal anonymous usage '
+                'analytics to improve the service.',
           ]),
-          LegalSection('Data We Collect', paragraphs: [
-            'We collect minimal, anonymous usage analytics (such as feature '
-                'usage) to improve the service. No personally identifiable '
-                'information is collected through analytics.',
+          LegalSection('How We Use It', paragraphs: [
+            'Only to provide the service: authenticate your account, build and '
+                'render mosaics, deliver downloads, fulfil and ship print '
+                'orders, and send service notifications. We do not use your '
+                'data for advertising or cross-app tracking.',
           ]),
-          LegalSection('Payment Information', paragraphs: [
-            'When you purchase tokens, payment processing is handled by our '
-                'third-party payment provider. We do not store your credit card '
-                'details or billing information on our servers.',
+          LegalSection('Sharing', paragraphs: [
+            'We share data only with the providers needed to run the service: '
+                'cloud hosting and storage; payment processors (which handle '
+                'card details — we never receive them); and, if you order a '
+                'print, our print provider, which receives your finished mosaic '
+                'and shipping details to produce and ship your order.',
+            'We do not sell your data or share it with advertisers.',
+          ]),
+          LegalSection('Data Retention', paragraphs: [
+            'Photos and mosaics are kept while your account is active and as '
+                'long as needed to provide downloads and complete orders. '
+                'Account data is kept until you delete your account.',
+          ]),
+          LegalSection('Deleting Your Account', paragraphs: [
+            'You can permanently delete your account and its data anytime from '
+                'Account → Delete account, or by request through our website at '
+                'studio.imagiastore.com.',
           ]),
           LegalSection('Tracking', paragraphs: [
             'We do not use tracking technologies and we do not share your data '
@@ -65,7 +82,7 @@ class LegalScreen extends StatelessWidget {
   /// Terms of Service (content mirrored from the web, adapted for the app).
   factory LegalScreen.terms() => const LegalScreen(
         title: 'Terms of Service',
-        lastUpdated: 'Last updated: March 2026',
+        lastUpdated: 'Last updated: June 2026',
         sections: [
           LegalSection('Service Description', paragraphs: [
             'Imagia is an app that generates photo mosaics from images you '
@@ -99,10 +116,11 @@ class LegalScreen extends StatelessWidget {
                 'using our service.',
           ]),
           LegalSection('Payments and Refunds', paragraphs: [
-            'Purchases are processed through our third-party payment provider. '
-                'Since mosaic exports are delivered instantly as digital '
-                'downloads, refunds are handled on a case-by-case basis. '
-                'Contact us if you experience any issues with your purchase.',
+            'Physical print orders are paid and processed through a third-party '
+                'payment provider; we do not store your card details. Because '
+                'prints are made to order, refunds are handled on a '
+                'case-by-case basis — contact us if there is any issue with '
+                'your order.',
           ]),
           LegalSection('Limitation of Liability', paragraphs: [
             'The service is provided “as is” without warranties of any '

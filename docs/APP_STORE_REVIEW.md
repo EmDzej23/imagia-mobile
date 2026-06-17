@@ -87,10 +87,10 @@ For every type below: **Linked to the user = Yes**, **Used for tracking = No**, 
 
 | Field | Limit | Draft |
 |---|---|---|
-| App Name | 30 | `Imagia — Photo Mosaics` |
+| App Name | 30 | `Imagia Mosaic Maker` |
 | Subtitle | 30 | `Turn photos into mosaics` |
 | Promotional Text | 170 | `Create stunning photo mosaics from your own pictures — tune them live, export in high resolution, and order them as framed wall art.` |
-| Keywords | 100 (comma-separated, no spaces) | `mosaic,photo mosaic,collage,picture,wall art,canvas print,photo collage,art,maker,poster` |
+| Keywords | 100 (comma-separated, no spaces) | `photo mosaic,collage,picture,wall art,canvas print,photo collage,art,poster,picture mosaic,photo art` |
 | Primary Category | — | Photo & Video |
 | Secondary Category | — | Graphics & Design (optional) |
 | Copyright | — | `2026 <D.O.O. legal name>` |

@@ -95,8 +95,18 @@ class ImageAnalyzer {
     double sourceHeight, {
     double colorBoost = 1.0,
     double autoContrast = 0,
+    bool grayscale = false,
+    double grayContrast = 0,
+    bool invert = false,
+    bool threshold = false,
   }) {
-    preprocessPixels(rgba, colorBoost: colorBoost, autoContrast: autoContrast);
+    preprocessPixels(rgba,
+        colorBoost: colorBoost,
+        autoContrast: autoContrast,
+        grayscale: grayscale,
+        grayContrast: grayContrast,
+        invert: invert,
+        threshold: threshold);
     final integral = buildIntegralImage(rgba, sampleWidth, sampleHeight);
     return ImageAnalyzer(
       sourceWidth: sourceWidth,
@@ -512,10 +522,15 @@ double _sumIntegral(
 }
 
 void preprocessPixels(Uint8List data,
-    {double colorBoost = 1.0, double autoContrast = 0}) {
+    {double colorBoost = 1.0,
+    double autoContrast = 0,
+    bool grayscale = false,
+    double grayContrast = 0,
+    bool invert = false,
+    bool threshold = false}) {
   final contrast = autoContrast;
   final saturation = colorBoost;
-  if (contrast <= 0 && saturation <= 1.0) return;
+  if (contrast <= 0 && saturation <= 1.0 && !grayscale) return;
 
   final len = data.length;
 
@@ -587,6 +602,32 @@ void preprocessPixels(Uint8List data,
           math.max(0, math.min(255, jsRound(gray + (g - gray) * saturation))).toInt();
       data[i + 2] =
           math.max(0, math.min(255, jsRound(gray + (b - gray) * saturation))).toInt();
+    }
+  }
+
+  // Text mosaic: grayscale → contrast S-curve → optional invert. Runs last so it
+  // sees any auto-contrast/color-boost already applied. The S-curve pushes
+  // midtones toward black/white as `grayContrast` rises (→ near 2-color at 1).
+  if (grayscale) {
+    final k = math.max(0.0, math.min(1.0, grayContrast));
+    final exp = 1 + 3 * k; // 1 (linear) → 4 (steep)
+    // In threshold mode, `k` is the cutoff (clamped off the extremes so the
+    // image never collapses to a single flat color).
+    final cutoff = math.max(0.1, math.min(0.9, k == 0 ? 0.5 : k));
+    for (var i = 0; i < len; i += 4) {
+      var n = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
+      if (threshold) {
+        n = n < cutoff ? 0 : 1; // hard 2-color
+      } else if (k > 0) {
+        n = n < 0.5
+            ? 0.5 * math.pow(2 * n, exp)
+            : 1 - 0.5 * math.pow(2 * (1 - n), exp);
+      }
+      if (invert) n = 1 - n;
+      final v = math.max(0, math.min(255, jsRound(n * 255))).toInt();
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
     }
   }
 }

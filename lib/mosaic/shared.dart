@@ -100,7 +100,19 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
         )
       : defaultSignalWeights();
 
-  const validModes = ['original', 'blocks', 'square', 'landscape', 'portrait'];
+  const validModes = [
+    'original',
+    'blocks',
+    'square',
+    'landscape',
+    'portrait',
+    'text',
+    'ancient',
+    'ancient-curved',
+  ];
+  const validTextOrient = ['square', 'portrait', 'landscape', 'original'];
+  const validGrout = ['dark', 'stone', 'light'];
+  const validAncientShape = ['none', 'heart', 'basketball', 'flower'];
 
   return MosaicSettings(
     mosaicMode:
@@ -116,6 +128,24 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     baseBlur: clampD(input.baseBlur, 0, 5),
     colorBoost: clampD(input.colorBoost, 1.0, 2.0),
     autoContrast: clampD(input.autoContrast, 0, 1),
+    textContrast: clampD(input.textContrast, 0, 1),
+    textInvert: input.textInvert,
+    textThreshold: input.textThreshold,
+    textOrientation: validTextOrient.contains(input.textOrientation)
+        ? input.textOrientation
+        : 'square',
+    ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
+    ancientGrout: clampD(input.ancientGrout, 0, 4),
+    ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),
+    ancientVariation: clampD(input.ancientVariation, 0, 0.35),
+    ancientBevel: clampD(input.ancientBevel, 0, 0.7),
+    ancientGroutColor: validGrout.contains(input.ancientGroutColor)
+        ? input.ancientGroutColor
+        : 'dark',
+    ancientCurviness: clampD(input.ancientCurviness, 0, 1),
+    ancientShape: validAncientShape.contains(input.ancientShape)
+        ? input.ancientShape
+        : 'none',
     signalWeights: signalWeights,
   );
 }

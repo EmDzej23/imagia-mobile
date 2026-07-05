@@ -8,6 +8,7 @@ import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/secondary_button.dart';
+import 'base_crop_screen.dart';
 
 class SourcePickerScreen extends ConsumerWidget {
   const SourcePickerScreen({super.key});
@@ -15,7 +16,6 @@ class SourcePickerScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final studio = ref.watch(studioControllerProvider);
-    final controller = ref.read(studioControllerProvider.notifier);
     final base = studio.base;
 
     return Scaffold(
@@ -48,7 +48,7 @@ class SourcePickerScreen extends ConsumerWidget {
                 icon: Icons.photo_library_outlined,
                 onPressed: studio.isUploadingBase
                     ? null
-                    : controller.pickBaseImage,
+                    : () => pickCropAndSetBase(context, ref),
               ),
               const SizedBox(height: AppSpacing.x3),
               PrimaryButton(

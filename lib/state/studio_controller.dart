@@ -5,11 +5,13 @@ import 'dart:ui' as ui;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../ancient/ancient_renderer.dart';
 import '../api/projects_api.dart';
 import '../api/tiles_api.dart';
 import '../core/config.dart';
 import '../mosaic/mosaic_engine.dart';
 import '../mosaic/shared.dart';
+import '../mosaic/text_tiles.dart' as txt;
 import '../mosaic/types.dart';
 import '../services/image_service.dart';
 import 'auth_controller.dart';
@@ -81,6 +83,13 @@ class StudioState {
     this.uploadTotal = 0,
     this.error,
     this.currentProjectId,
+    this.textInput = '',
+    this.textUppercase = false,
+    this.textColor = 0xFF000000,
+    this.isGeneratingText = false,
+    this.textDone = 0,
+    this.textTotal = 0,
+    this.ancientSeedNonce = 0,
   });
 
   final BaseImage? base;
@@ -94,6 +103,17 @@ class StudioState {
   final int uploadDone;
   final int uploadTotal;
   final String? error;
+
+  // Text-mosaic state (the phrases/uppercase/colour live here, not in settings).
+  final String textInput;
+  final bool textUppercase;
+  final int textColor;
+  final bool isGeneratingText;
+  final int textDone;
+  final int textTotal;
+
+  /// Ancient-mosaic reshuffle key — bump to get a new stone layout.
+  final int ancientSeedNonce;
 
   /// The id of the saved project currently open (null for a fresh mosaic).
   /// When set, Save updates this project instead of creating a new one.
@@ -118,6 +138,13 @@ class StudioState {
     Object? error = _noChange,
     bool clearPlan = false,
     String? currentProjectId,
+    String? textInput,
+    bool? textUppercase,
+    int? textColor,
+    bool? isGeneratingText,
+    int? textDone,
+    int? textTotal,
+    int? ancientSeedNonce,
   }) {
     return StudioState(
       base: base ?? this.base,
@@ -132,6 +159,13 @@ class StudioState {
       uploadTotal: uploadTotal ?? this.uploadTotal,
       error: error == _noChange ? this.error : error as String?,
       currentProjectId: currentProjectId ?? this.currentProjectId,
+      textInput: textInput ?? this.textInput,
+      textUppercase: textUppercase ?? this.textUppercase,
+      textColor: textColor ?? this.textColor,
+      isGeneratingText: isGeneratingText ?? this.isGeneratingText,
+      textDone: textDone ?? this.textDone,
+      textTotal: textTotal ?? this.textTotal,
+      ancientSeedNonce: ancientSeedNonce ?? this.ancientSeedNonce,
     );
   }
 
@@ -185,14 +219,21 @@ class StudioController extends Notifier<StudioState> {
     await Future.wait([for (var w = 0; w < n; w++) worker()]);
   }
 
-  Future<void> pickBaseImage() async {
+  /// Pick a base photo from the library and return its raw bytes + name without
+  /// processing it, so the UI can run the crop step first. Null if cancelled.
+  Future<({Uint8List bytes, String name})?> pickBaseBytes() async {
     final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
-    if (file == null) return;
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    return (bytes: bytes, name: _basename(file.name));
+  }
 
+  /// Compress → upload → decode a picked (already-cropped) base image and make
+  /// it the active base. Shared by the crop flow and [pickBaseImage].
+  Future<void> setBaseFromBytes(Uint8List bytes, String name) async {
     state = state.copyWith(isUploadingBase: true, error: null);
     try {
-      final original = await file.readAsBytes();
-      final compressed = await _images.compressBase(original);
+      final compressed = await _images.compressBase(bytes);
       final upload =
           await _tilesApi.uploadBase(compressed, 'base-${_ts()}.jpg');
       if (!upload.isOk || upload.data == null) {
@@ -209,7 +250,7 @@ class StudioController extends Notifier<StudioState> {
           thumbnail: thumb,
           overlay: overlay,
           blobUrl: upload.data!.blobUrl,
-          name: _basename(file.name),
+          name: name,
           width: thumb.width,
           height: thumb.height,
         ),
@@ -219,6 +260,13 @@ class StudioController extends Notifier<StudioState> {
     } catch (e) {
       state = state.copyWith(isUploadingBase: false, error: e.toString());
     }
+  }
+
+  /// Pick a base photo and process it directly (no crop step).
+  Future<void> pickBaseImage() async {
+    final picked = await pickBaseBytes();
+    if (picked == null) return;
+    await setBaseFromBytes(picked.bytes, picked.name);
   }
 
   Future<void> pickTileImages() async {
@@ -388,6 +436,135 @@ class StudioController extends Notifier<StudioState> {
   void removeTile(String id) {
     state = state.copyWith(
         tiles: state.tiles.where((t) => t.id != id).toList());
+  }
+
+  // ── Text mosaic ──────────────────────────────────────────────────────────
+
+  void setTextInput(String v) => state = state.copyWith(textInput: v);
+  void setTextUppercase(bool v) => state = state.copyWith(textUppercase: v);
+  void setTextColor(int v) => state = state.copyWith(textColor: v);
+
+  /// Rasterise the phrases into grayscale tiles (5 darkness levels each), upload
+  /// them, make them the active tile set, and rebuild the preview.
+  Future<void> generateTextTiles() async {
+    if (state.base == null) {
+      state = state.copyWith(error: 'Add a base photo first.');
+      return;
+    }
+    var phrases =
+        txt.parseTextPhrases(state.textInput, uppercase: state.textUppercase);
+    if (phrases.isEmpty) {
+      state = state.copyWith(error: 'Type at least one word or phrase.');
+      return;
+    }
+    final maxPhrases = _maxTiles ~/ 5;
+    if (phrases.length > maxPhrases) phrases = phrases.sublist(0, maxPhrases);
+
+    state = state.copyWith(
+        isGeneratingText: true, textDone: 0, textTotal: 0, error: null);
+    try {
+      final generated = await txt.generateTextTiles(
+        phrases,
+        options: txt.TextTileOptions(
+          orientation: state.settings.textOrientation,
+          color: state.textColor,
+        ),
+        gen: _ts(),
+      );
+
+      final results = List<TileAsset?>.filled(generated.length, null);
+      var done = 0;
+      state = state.copyWith(textTotal: generated.length);
+      Future<void> ingest(int i) async {
+        final g = generated[i];
+        try {
+          final upload = await _tilesApi.uploadTile(g.bytes, g.id, g.filename);
+          if (upload.isOk && upload.data != null) {
+            final analyzed =
+                await analyzeTileWithThumbnail(g.id, g.filename, g.bytes);
+            results[i] = TileAsset(
+              id: g.id,
+              descriptor: analyzed.descriptor,
+              thumbnail: analyzed.thumbnail,
+              blobUrl: upload.data!.blobUrl,
+              filename: g.filename,
+            );
+          }
+        } catch (_) {
+          // skip a failed tile; a few gaps don't ruin the mosaic
+        }
+        done++;
+        state = state.copyWith(textDone: done);
+      }
+
+      await _runPool(
+          generated.length, _uploadConcurrency, () => false, ingest);
+      final tiles = results.whereType<TileAsset>().toList();
+      // Text tiles REPLACE the current tile set (a project is only ever in one
+      // generated mode at a time).
+      state = state.copyWith(
+        tiles: tiles,
+        isGeneratingText: false,
+        clearPlan: true,
+        error: tiles.isEmpty ? 'Could not generate text tiles.' : null,
+      );
+      if (tiles.isNotEmpty) buildPlan();
+    } catch (e) {
+      state = state.copyWith(isGeneratingText: false, error: e.toString());
+    }
+  }
+
+  // ── Ancient mosaic ───────────────────────────────────────────────────────
+
+  /// Reshuffle the stone scatter (same look settings, new layout).
+  void newAncientLayout() =>
+      state = state.copyWith(ancientSeedNonce: state.ancientSeedNonce + 1);
+
+  /// Render the ancient mosaic on-device at [longSide] px and return PNG bytes.
+  /// Ancient is client-rendered (no tiles / server), so export is local.
+  Future<Uint8List?> renderAncientPng(
+      {required bool curved, required int longSide}) async {
+    final base = state.base;
+    if (base == null) return null;
+    final img = base.thumbnail;
+    final data = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) return null;
+    final rgba = data.buffer.asUint8List();
+    final sw = img.width, sh = img.height;
+    final aspect = sw / sh;
+    int w, h;
+    if (aspect >= 1) {
+      w = longSide;
+      h = (longSide / aspect).round();
+    } else {
+      h = longSide;
+      w = (longSide * aspect).round();
+    }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+
+    final s = state.settings;
+    final shape = curved ? s.ancientShape : 'none';
+    final params = AncientParams(
+      stoneSize: s.ancientStoneSize,
+      grout: s.ancientGrout,
+      irregularity: s.ancientIrregularity,
+      variation: s.ancientVariation,
+      bevel: s.ancientBevel,
+      groutColor: s.ancientGroutColor,
+      curviness: curved ? s.ancientCurviness : 0,
+      shape: shape,
+      seedNonce: state.ancientSeedNonce,
+    );
+    final geo =
+        buildAncientGeometry(rgba, sw, sh, w.toDouble(), h.toDouble(), params);
+    final sprites =
+        (shape != 'none' && shape != 'heart') ? await AncientSprites.load() : null;
+    final out = await renderAncientImage(geo, w, h,
+        baseImage: shape != 'none' ? img : null, sprites: sprites);
+    final png = await out.toByteData(format: ui.ImageByteFormat.png);
+    out.dispose();
+    return png?.buffer.asUint8List();
   }
 
   /// Updates matching settings and schedules a debounced preview rebuild.

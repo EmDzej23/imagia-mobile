@@ -135,6 +135,18 @@ class MosaicSettings {
     required this.baseBlur,
     required this.colorBoost,
     required this.autoContrast,
+    this.textContrast = 0.45,
+    this.textInvert = false,
+    this.textThreshold = false,
+    this.textOrientation = 'square',
+    this.ancientStoneSize = 14,
+    this.ancientGrout = 1.4,
+    this.ancientIrregularity = 0.85,
+    this.ancientVariation = 0.12,
+    this.ancientBevel = 0.35,
+    this.ancientGroutColor = 'dark',
+    this.ancientCurviness = 0.55,
+    this.ancientShape = 'none',
     this.signalWeights,
   });
 
@@ -150,6 +162,30 @@ class MosaicSettings {
   double baseBlur;
   double colorBoost;
   double autoContrast;
+
+  /// Text-mosaic only: contrast push on the grayscale base (0..1).
+  double textContrast;
+
+  /// Text-mosaic only: invert the grayscale base.
+  bool textInvert;
+
+  /// Text-mosaic only: hard 2-colour threshold (textContrast = cutoff).
+  bool textThreshold;
+
+  /// Text-mosaic only: tile/cell orientation ("square"|"portrait"|"landscape"|
+  /// "original"; "original" maps to the blocks layout).
+  String textOrientation;
+
+  // Ancient-mosaic (tile-less stone renderer). Look settings only.
+  double ancientStoneSize;
+  double ancientGrout;
+  double ancientIrregularity;
+  double ancientVariation;
+  double ancientBevel;
+  String ancientGroutColor; // "dark" | "stone" | "light"
+  double ancientCurviness; // curved-ancient only
+  String ancientShape; // "none" | "heart" | "basketball" | "flower"
+
   SignalWeights? signalWeights;
 
   MosaicSettings copyWith({
@@ -165,6 +201,18 @@ class MosaicSettings {
     double? baseBlur,
     double? colorBoost,
     double? autoContrast,
+    double? textContrast,
+    bool? textInvert,
+    bool? textThreshold,
+    String? textOrientation,
+    double? ancientStoneSize,
+    double? ancientGrout,
+    double? ancientIrregularity,
+    double? ancientVariation,
+    double? ancientBevel,
+    String? ancientGroutColor,
+    double? ancientCurviness,
+    String? ancientShape,
     SignalWeights? signalWeights,
   }) =>
       MosaicSettings(
@@ -180,6 +228,18 @@ class MosaicSettings {
         baseBlur: baseBlur ?? this.baseBlur,
         colorBoost: colorBoost ?? this.colorBoost,
         autoContrast: autoContrast ?? this.autoContrast,
+        textContrast: textContrast ?? this.textContrast,
+        textInvert: textInvert ?? this.textInvert,
+        textThreshold: textThreshold ?? this.textThreshold,
+        textOrientation: textOrientation ?? this.textOrientation,
+        ancientStoneSize: ancientStoneSize ?? this.ancientStoneSize,
+        ancientGrout: ancientGrout ?? this.ancientGrout,
+        ancientIrregularity: ancientIrregularity ?? this.ancientIrregularity,
+        ancientVariation: ancientVariation ?? this.ancientVariation,
+        ancientBevel: ancientBevel ?? this.ancientBevel,
+        ancientGroutColor: ancientGroutColor ?? this.ancientGroutColor,
+        ancientCurviness: ancientCurviness ?? this.ancientCurviness,
+        ancientShape: ancientShape ?? this.ancientShape,
         signalWeights: signalWeights ?? this.signalWeights,
       );
 
@@ -196,6 +256,21 @@ class MosaicSettings {
         baseBlur: (j['baseBlur'] as num).toDouble(),
         colorBoost: (j['colorBoost'] as num).toDouble(),
         autoContrast: (j['autoContrast'] as num).toDouble(),
+        textContrast:
+            j['textContrast'] == null ? 0.45 : (j['textContrast'] as num).toDouble(),
+        textInvert: j['textInvert'] as bool? ?? false,
+        textThreshold: j['textThreshold'] as bool? ?? false,
+        textOrientation: j['textOrientation'] as String? ?? 'square',
+        ancientStoneSize:
+            (j['ancientStoneSize'] as num?)?.toDouble() ?? 14,
+        ancientGrout: (j['ancientGrout'] as num?)?.toDouble() ?? 1.4,
+        ancientIrregularity:
+            (j['ancientIrregularity'] as num?)?.toDouble() ?? 0.85,
+        ancientVariation: (j['ancientVariation'] as num?)?.toDouble() ?? 0.12,
+        ancientBevel: (j['ancientBevel'] as num?)?.toDouble() ?? 0.35,
+        ancientGroutColor: j['ancientGroutColor'] as String? ?? 'dark',
+        ancientCurviness: (j['ancientCurviness'] as num?)?.toDouble() ?? 0.55,
+        ancientShape: j['ancientShape'] as String? ?? 'none',
         signalWeights: j['signalWeights'] == null
             ? null
             : SignalWeights.fromJson(
@@ -215,6 +290,18 @@ class MosaicSettings {
         'baseBlur': baseBlur,
         'colorBoost': colorBoost,
         'autoContrast': autoContrast,
+        'textContrast': textContrast,
+        'textInvert': textInvert,
+        'textThreshold': textThreshold,
+        'textOrientation': textOrientation,
+        'ancientStoneSize': ancientStoneSize,
+        'ancientGrout': ancientGrout,
+        'ancientIrregularity': ancientIrregularity,
+        'ancientVariation': ancientVariation,
+        'ancientBevel': ancientBevel,
+        'ancientGroutColor': ancientGroutColor,
+        'ancientCurviness': ancientCurviness,
+        'ancientShape': ancientShape,
         'signalWeights': signalWeights?.toJson(),
       };
 }

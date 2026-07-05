@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/config.dart';
@@ -20,6 +21,8 @@ import '../../widgets/app_progress_bar.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
+import 'ancient_preview.dart';
+import 'base_crop_screen.dart';
 import '../../widgets/segmented_selector.dart';
 
 class StudioScreen extends ConsumerStatefulWidget {
@@ -41,6 +44,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   final ScrollController _tilesScroll = ScrollController();
   String? _highlightedTileId;
   Timer? _highlightTimer;
+
+  // Text-mosaic phrase editor (seeded once from state; edits push to controller).
+  final TextEditingController _textController = TextEditingController();
+
+  bool _ancientExporting = false;
 
   // Tiles strip geometry (must match the ListView item + separator below).
   static const double _tileExtent = 56;
@@ -73,6 +81,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   void initState() {
     super.initState();
     _controller = ref.read(studioControllerProvider.notifier);
+    _textController.text = ref.read(studioControllerProvider).textInput;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final studio = ref.read(studioControllerProvider);
       if (studio.plan == null && studio.canPlan && !studio.isPlanning) {
@@ -87,12 +96,228 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     _controller.cancelRestore();
     _highlightTimer?.cancel();
     _tilesScroll.dispose();
+    _textController.dispose();
     super.dispose();
   }
 
   Future<void> _changeBase() async {
-    await _controller.pickBaseImage();
+    await pickCropAndSetBase(context, ref);
     _controller.buildPlan();
+  }
+
+  /// Text-mosaic controls: phrases + orientation + grayscale tuning + generate.
+  Widget _buildTextPanel(
+      StudioState studio, MosaicSettings settings, void Function(MosaicSettings) update) {
+    Widget toggle(String label, bool value, ValueChanged<bool> onChanged) => Row(
+          children: [
+            Expanded(child: Text(label, style: AppTypography.caption)),
+            Switch(value: value, onChanged: onChanged),
+          ],
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: AppSpacing.x4),
+        Text('Words', style: AppTypography.label),
+        const SizedBox(height: AppSpacing.x1),
+        Text('One word or phrase per line — the picture is rebuilt from them.',
+            style: AppTypography.caption),
+        const SizedBox(height: AppSpacing.x2),
+        TextField(
+          controller: _textController,
+          onChanged: _controller.setTextInput,
+          minLines: 2,
+          maxLines: 5,
+          style: AppTypography.body,
+          decoration: InputDecoration(
+            hintText: 'LOVE\nNEW YORK\n2026',
+            filled: true,
+            fillColor: AppColors.background,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppRadius.control),
+                borderSide: const BorderSide(color: AppColors.border)),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.x2),
+        toggle('UPPERCASE', studio.textUppercase, _controller.setTextUppercase),
+        const SizedBox(height: AppSpacing.x2),
+        Text('Word shape', style: AppTypography.label),
+        const SizedBox(height: AppSpacing.x2),
+        SegmentedSelector<String>(
+          selected: settings.textOrientation,
+          onSelected: (v) => update(settings.copyWith(textOrientation: v)),
+          options: const [
+            SegmentOption('square', 'Square'),
+            SegmentOption('portrait', 'Portrait'),
+            SegmentOption('landscape', 'Landscape'),
+            SegmentOption('original', 'Mixed'),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.x4),
+        LabeledSlider(
+          label: 'Contrast',
+          value: settings.textContrast,
+          min: 0,
+          max: 1,
+          valueLabel: settings.textContrast.toStringAsFixed(2),
+          onChanged: (v) => update(settings.copyWith(textContrast: v)),
+        ),
+        toggle('Invert', settings.textInvert,
+            (v) => update(settings.copyWith(textInvert: v))),
+        toggle('Two-tone (threshold)', settings.textThreshold,
+            (v) => update(settings.copyWith(textThreshold: v))),
+        const SizedBox(height: AppSpacing.x3),
+        PrimaryButton(
+          label: studio.isGeneratingText
+              ? 'Generating ${studio.textDone}/${studio.textTotal}…'
+              : 'Generate text tiles',
+          onPressed: (studio.isGeneratingText || studio.base == null)
+              ? null
+              : _controller.generateTextTiles,
+        ),
+      ],
+    );
+  }
+
+  /// Ancient-mosaic controls (tile-less stone renderer).
+  Widget _buildAncientPanel(StudioState studio, MosaicSettings settings,
+      void Function(MosaicSettings) update, {required bool curved}) {
+    Widget groutChip(String v, String label) {
+      final active = settings.ancientGroutColor == v;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => update(settings.copyWith(ancientGroutColor: v)),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.x2),
+            decoration: BoxDecoration(
+              color: active ? AppColors.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppRadius.control),
+              border: Border.all(
+                  color: active ? AppColors.primaryBright : AppColors.border),
+            ),
+            child: Center(child: Text(label, style: AppTypography.label)),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: AppSpacing.x3),
+        Text(
+            'No tiles — the picture is rebuilt from cut-stone shapes sampled from your photo.',
+            style: AppTypography.caption),
+        const SizedBox(height: AppSpacing.x3),
+        LabeledSlider(
+          label: 'Stone size',
+          value: settings.ancientStoneSize,
+          min: 7,
+          max: 34,
+          valueLabel: settings.ancientStoneSize.toStringAsFixed(0),
+          onChanged: (v) => update(settings.copyWith(ancientStoneSize: v)),
+        ),
+        LabeledSlider(
+          label: 'Grout width',
+          value: settings.ancientGrout,
+          min: 0,
+          max: 4,
+          valueLabel: settings.ancientGrout.toStringAsFixed(1),
+          onChanged: (v) => update(settings.copyWith(ancientGrout: v)),
+        ),
+        LabeledSlider(
+          label: 'Irregularity',
+          value: settings.ancientIrregularity,
+          min: 0,
+          max: 1,
+          valueLabel: settings.ancientIrregularity.toStringAsFixed(2),
+          onChanged: (v) => update(settings.copyWith(ancientIrregularity: v)),
+        ),
+        LabeledSlider(
+          label: 'Colour variation',
+          value: settings.ancientVariation,
+          min: 0,
+          max: 0.35,
+          valueLabel: settings.ancientVariation.toStringAsFixed(2),
+          onChanged: (v) => update(settings.copyWith(ancientVariation: v)),
+        ),
+        LabeledSlider(
+          label: 'Bevel',
+          value: settings.ancientBevel,
+          min: 0,
+          max: 0.7,
+          valueLabel: settings.ancientBevel.toStringAsFixed(2),
+          onChanged: (v) => update(settings.copyWith(ancientBevel: v)),
+        ),
+        if (curved)
+          LabeledSlider(
+            label: 'Curviness',
+            value: settings.ancientCurviness,
+            min: 0,
+            max: 1,
+            valueLabel: settings.ancientCurviness.toStringAsFixed(2),
+            onChanged: (v) => update(settings.copyWith(ancientCurviness: v)),
+          ),
+        if (curved) ...[
+          const SizedBox(height: AppSpacing.x2),
+          Text('Shape motif', style: AppTypography.label),
+          const SizedBox(height: AppSpacing.x2),
+          SegmentedSelector<String>(
+            selected: settings.ancientShape,
+            onSelected: (v) => update(settings.copyWith(ancientShape: v)),
+            options: const [
+              SegmentOption('none', 'Stones'),
+              SegmentOption('heart', '💗 Heart'),
+              SegmentOption('basketball', '🏀 Ball'),
+              SegmentOption('flower', '🌸 Flower'),
+            ],
+          ),
+        ],
+        const SizedBox(height: AppSpacing.x2),
+        Text('Grout colour', style: AppTypography.label),
+        const SizedBox(height: AppSpacing.x2),
+        Row(children: [
+          groutChip('dark', 'Dark'),
+          groutChip('stone', 'Stone'),
+          groutChip('light', 'Light'),
+        ]),
+        const SizedBox(height: AppSpacing.x3),
+        OutlinedButton.icon(
+          onPressed: studio.base == null ? null : _controller.newAncientLayout,
+          icon: const Icon(Icons.casino_outlined, size: 18),
+          label: const Text('New stone layout'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.textSecondary,
+            side: const BorderSide(color: AppColors.border),
+            minimumSize: const Size.fromHeight(AppSpacing.touchTarget),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _onAncientExport(bool curved) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _ancientExporting = true);
+    try {
+      final png = await _controller.renderAncientPng(curved: curved, longSide: 4000);
+      if (png == null) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('Add a base photo first.')));
+        return;
+      }
+      if (!await Gal.hasAccess()) await Gal.requestAccess();
+      await Gal.putImageBytes(png,
+          name: 'imagia-ancient-${DateTime.now().millisecondsSinceEpoch}');
+      messenger
+          .showSnackBar(const SnackBar(content: Text('Saved to your gallery.')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not save: $e')));
+    } finally {
+      if (mounted) setState(() => _ancientExporting = false);
+    }
   }
 
   Future<void> _addTiles() async {
@@ -281,6 +506,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     final rendering = ref.watch(renderControllerProvider
         .select((s) => s.phase == RenderPhase.rendering));
     final settings = studio.settings;
+    final isAncientCurved = settings.mosaicMode == 'ancient-curved';
+    final isAncient = settings.mosaicMode == 'ancient' || isAncientCurved;
 
     void update(MosaicSettings s) => _controller.updateSettings(s);
 
@@ -338,7 +565,18 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (plan != null)
+                        if (isAncient)
+                          (studio.base != null
+                              ? AncientPreview(
+                                  base: studio.base!,
+                                  params: ancientParamsFromState(studio,
+                                      curved: isAncientCurved),
+                                )
+                              : Center(
+                                  child: Text('Add a base photo',
+                                      style: AppTypography.body.copyWith(
+                                          color: AppColors.textSecondary))))
+                        else if (plan != null)
                           _AnimatedMosaicPreview(
                             plan: plan,
                             tileImages: studio.tileImages,
@@ -400,6 +638,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                       onRemoveTile: _removeTile,
                       tilesScroll: _tilesScroll,
                       highlightedTileId: _highlightedTileId,
+                      isText: settings.mosaicMode == 'text',
+                      isAncient: isAncient,
                     ),
                     const Divider(
                         color: AppColors.border, height: AppSpacing.x6),
@@ -414,53 +654,64 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                         SegmentOption('portrait', 'Portrait'),
                         SegmentOption('original', 'Original'),
                         SegmentOption('blocks', 'Blocks'),
+                        SegmentOption('text', 'Text'),
+                        SegmentOption('ancient', 'Ancient'),
+                        SegmentOption('ancient-curved', 'Curved'),
                       ],
                     ),
-                    const SizedBox(height: AppSpacing.x4),
-                    LabeledSlider(
-                      label: 'Density',
-                      value: settings.density,
-                      min: 40,
-                      max: 500,
-                      onChanged: (v) => update(settings.copyWith(density: v)),
-                    ),
-                    LabeledSlider(
-                      label: 'Variety',
-                      value: settings.reusePenalty,
-                      min: 0,
-                      max: 1,
-                      valueLabel: settings.reusePenalty.toStringAsFixed(2),
-                      onChanged: (v) =>
-                          update(settings.copyWith(reusePenalty: v)),
-                    ),
-                    LabeledSlider(
-                      label: 'Tint',
-                      value: settings.tintStrength,
-                      min: 0,
-                      max: 0.5,
-                      valueLabel: settings.tintStrength.toStringAsFixed(2),
-                      onChanged: (v) =>
-                          _controller.updateRenderParam(tintStrength: v),
-                    ),
-                    const Divider(
-                        color: AppColors.border, height: AppSpacing.x6),
-                    LabeledSlider(
-                      label: 'Color boost',
-                      value: settings.colorBoost,
-                      min: 1,
-                      max: 2,
-                      valueLabel: settings.colorBoost.toStringAsFixed(2),
-                      onChanged: (v) => update(settings.copyWith(colorBoost: v)),
-                    ),
-                    LabeledSlider(
-                      label: 'Auto contrast',
-                      value: settings.autoContrast,
-                      min: 0,
-                      max: 1,
-                      valueLabel: settings.autoContrast.toStringAsFixed(2),
-                      onChanged: (v) =>
-                          update(settings.copyWith(autoContrast: v)),
-                    ),
+                    if (settings.mosaicMode == 'text')
+                      _buildTextPanel(studio, settings, update),
+                    if (isAncient)
+                      _buildAncientPanel(studio, settings, update,
+                          curved: isAncientCurved),
+                    if (!isAncient) ...[
+                      const SizedBox(height: AppSpacing.x4),
+                      LabeledSlider(
+                        label: 'Density',
+                        value: settings.density,
+                        min: 40,
+                        max: 500,
+                        onChanged: (v) => update(settings.copyWith(density: v)),
+                      ),
+                      LabeledSlider(
+                        label: 'Variety',
+                        value: settings.reusePenalty,
+                        min: 0,
+                        max: 1,
+                        valueLabel: settings.reusePenalty.toStringAsFixed(2),
+                        onChanged: (v) =>
+                            update(settings.copyWith(reusePenalty: v)),
+                      ),
+                      LabeledSlider(
+                        label: 'Tint',
+                        value: settings.tintStrength,
+                        min: 0,
+                        max: 0.5,
+                        valueLabel: settings.tintStrength.toStringAsFixed(2),
+                        onChanged: (v) =>
+                            _controller.updateRenderParam(tintStrength: v),
+                      ),
+                      const Divider(
+                          color: AppColors.border, height: AppSpacing.x6),
+                      LabeledSlider(
+                        label: 'Color boost',
+                        value: settings.colorBoost,
+                        min: 1,
+                        max: 2,
+                        valueLabel: settings.colorBoost.toStringAsFixed(2),
+                        onChanged: (v) =>
+                            update(settings.copyWith(colorBoost: v)),
+                      ),
+                      LabeledSlider(
+                        label: 'Auto contrast',
+                        value: settings.autoContrast,
+                        min: 0,
+                        max: 1,
+                        valueLabel: settings.autoContrast.toStringAsFixed(2),
+                        onChanged: (v) =>
+                            update(settings.copyWith(autoContrast: v)),
+                      ),
+                    ],
                     // Actions live in the persistent bottom bar (see below).
                     const SizedBox(height: AppSpacing.x2),
                   ],
@@ -474,21 +725,40 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       // is "Order wall art" where prints are available (the monetised action;
       // digital export is free during the bridge); export + video are compact
       // secondary actions. Hidden until a mosaic plan exists.
-      bottomNavigationBar: studio.plan == null
-          ? null
-          : _StudioActionBar(
-              rendering: rendering,
-              printAllowed: isPrintRegionAllowed(),
-              onExport: rendering ? null : () => _onExport(context, canRender),
-              onVideo: () {
-                ref.read(videoControllerProvider.notifier).reset();
-                context.push('/create/video');
-              },
-              onPrint: () => context.push('/create/wallart'),
-            ),
+      bottomNavigationBar: isAncient
+          ? (studio.base == null
+              ? null
+              : Container(
+                  color: AppColors.surface,
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.x4,
+                      AppSpacing.x3, AppSpacing.x4, AppSpacing.x4),
+                  child: SafeArea(
+                    top: false,
+                    child: PrimaryButton(
+                      label: _ancientExporting ? 'Saving…' : 'Save mosaic',
+                      loading: _ancientExporting,
+                      icon: Icons.download,
+                      onPressed: _ancientExporting
+                          ? null
+                          : () => _onAncientExport(isAncientCurved),
+                    ),
+                  ),
+                ))
+          : (studio.plan == null
+              ? null
+              : _StudioActionBar(
+                  rendering: rendering,
+                  printAllowed: isPrintRegionAllowed(),
+                  onExport:
+                      rendering ? null : () => _onExport(context, canRender),
+                  onVideo: () {
+                    ref.read(videoControllerProvider.notifier).reset();
+                    context.push('/create/video');
+                  },
+                  onPrint: () => context.push('/create/wallart'),
+                )),
     );
   }
-
 }
 
 /// Base-photo + tile management strip shown at the top of the controls panel.
@@ -501,6 +771,8 @@ class _SourceAndTiles extends StatelessWidget {
     required this.onRemoveTile,
     required this.tilesScroll,
     required this.highlightedTileId,
+    this.isText = false,
+    this.isAncient = false,
   });
 
   final StudioState studio;
@@ -510,6 +782,13 @@ class _SourceAndTiles extends StatelessWidget {
   final void Function(String id) onRemoveTile;
   final ScrollController tilesScroll;
   final String? highlightedTileId;
+
+  /// In text mode the tiles are generated from words, so the photo-tile
+  /// add/sample buttons are hidden (the generated tiles still show below).
+  final bool isText;
+
+  /// Ancient modes use no tiles at all — the whole tiles section is hidden.
+  final bool isAncient;
 
   @override
   Widget build(BuildContext context) {
@@ -537,22 +816,28 @@ class _SourceAndTiles extends StatelessWidget {
             ),
           ],
         ),
+        if (!isAncient) ...[
         const SizedBox(height: AppSpacing.x2),
         Row(
           children: [
-            Text('Tiles (${studio.tiles.length})',
+            Text(
+                isText
+                    ? 'Text tiles (${studio.tiles.length})'
+                    : 'Tiles (${studio.tiles.length})',
                 style: AppTypography.label),
             const Spacer(),
-            TextButton.icon(
-              onPressed: studio.isUploadingTiles ? null : onLoadSamples,
-              icon: const Icon(Icons.auto_awesome_outlined, size: 18),
-              label: const Text('Samples'),
-            ),
-            TextButton.icon(
-              onPressed: studio.isUploadingTiles ? null : onAddTiles,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add'),
-            ),
+            if (!isText) ...[
+              TextButton.icon(
+                onPressed: studio.isUploadingTiles ? null : onLoadSamples,
+                icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+                label: const Text('Samples'),
+              ),
+              TextButton.icon(
+                onPressed: studio.isUploadingTiles ? null : onAddTiles,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add'),
+              ),
+            ],
           ],
         ),
         SizedBox(
@@ -622,6 +907,7 @@ class _SourceAndTiles extends StatelessWidget {
                   },
                 ),
         ),
+        ],
       ],
     );
   }

@@ -158,25 +158,59 @@ class _PlanArgs {
 /// Pure layout entry point (runs in the background isolate). Builds the integral
 /// image from RGBA bytes, runs the full pipeline, and returns a slim plan.
 SlimMosaicPlan _runLayout(_PlanArgs a) {
+  final s = a.settings;
+  final isText = s.mosaicMode == 'text';
+
+  // Text mosaic: analyse the base in grayscale (contrast / invert / threshold),
+  // ignore colour boost / auto-contrast, and don't let faces bias the layout.
   final analyzer = ImageAnalyzer.fromPixels(
     a.rgba,
     a.sampleW,
     a.sampleH,
     a.sourceW,
     a.sourceH,
-    colorBoost: a.settings.colorBoost,
-    autoContrast: a.settings.autoContrast,
+    colorBoost: isText ? 1.0 : s.colorBoost,
+    autoContrast: isText ? 0 : s.autoContrast,
+    grayscale: isText,
+    grayContrast: isText ? s.textContrast : 0,
+    invert: isText && s.textInvert,
+    threshold: isText && s.textThreshold,
   );
+
+  // "text" isn't a real layout — map it to a concrete one via the chosen text
+  // orientation, and strongly prefer tiles whose aspect matches the cell so
+  // words are never cropped/stretched.
+  final layoutSettings = isText
+      ? s.copyWith(
+          mosaicMode: _textOrientToLayout(s.textOrientation),
+          aspectWeight: 0.6,
+        )
+      : s;
+
   final placements = buildGridLayout(
     baseWidth: a.sourceW,
     baseHeight: a.sourceH,
     analyzer: analyzer,
     tiles: a.tiles,
-    settings: a.settings,
-    faceRegions: a.faces,
+    settings: layoutSettings,
+    faceRegions: isText ? const [] : a.faces,
     isMobile: a.isMobile,
   );
-  return _toSlim(a.sourceW, a.sourceH, a.settings, placements);
+  return _toSlim(a.sourceW, a.sourceH, s, placements);
+}
+
+/// Text-mosaic orientation → concrete layout mode ("original" ⇒ blocks).
+String _textOrientToLayout(String orientation) {
+  switch (orientation) {
+    case 'portrait':
+      return 'portrait';
+    case 'landscape':
+      return 'landscape';
+    case 'square':
+      return 'square';
+    default:
+      return 'blocks';
+  }
 }
 
 SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,

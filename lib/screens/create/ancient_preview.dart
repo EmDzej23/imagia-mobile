@@ -9,12 +9,13 @@ import '../../ancient/ancient_renderer.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 
-/// Long side (logical px) the on-screen ancient preview renders at.
-const double _previewLong = 860;
+/// Long side (px) the ancient preview is rasterised at.
+const double _previewLong = 900;
 
-/// Live ancient-mosaic preview: samples the base once, rebuilds the stone
-/// geometry (debounced) when the look settings change, and paints it scaled to
-/// fit. Self-contained — no tiles / matching / server.
+/// Live ancient-mosaic preview. Samples the base once, then — debounced on any
+/// look-setting change — rebuilds the stone geometry and RASTERISES it to a
+/// single [ui.Image]. The widget then just displays that static bitmap, so
+/// scrolling / compositing never re-runs the (very expensive) stone painting.
 class AncientPreview extends StatefulWidget {
   const AncientPreview({super.key, required this.base, required this.params});
 
@@ -27,18 +28,20 @@ class AncientPreview extends StatefulWidget {
 
 class _AncientPreviewState extends State<AncientPreview> {
   Uint8List? _rgba;
-  int _sw = 0, _sh = 0;
-  double _w = 0, _h = 0;
-  AncientGeometry? _geo;
+  int _sw = 0, _sh = 0, _w = 0, _h = 0;
   AncientSprites? _sprites;
+  ui.Image? _image;
   Timer? _debounce;
+  int _token = 0;
 
   @override
   void initState() {
     super.initState();
     _load();
     AncientSprites.load().then((s) {
-      if (mounted) setState(() => _sprites = s);
+      if (!mounted) return;
+      _sprites = s;
+      _scheduleBuild(); // re-render once sprites are ready (shape modes)
     });
   }
 
@@ -61,48 +64,50 @@ class _AncientPreviewState extends State<AncientPreview> {
     _sw = img.width;
     _sh = img.height;
     final scale = _previewLong / math.max(_sw, _sh);
-    _w = _sw * scale;
-    _h = _sh * scale;
+    _w = (_sw * scale).round();
+    _h = (_sh * scale).round();
     _build();
   }
 
   void _scheduleBuild() {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 90), _build);
+    _debounce = Timer(const Duration(milliseconds: 110), _build);
   }
 
-  void _build() {
+  Future<void> _build() async {
     final rgba = _rgba;
-    if (rgba == null) return;
-    final geo = buildAncientGeometry(rgba, _sw, _sh, _w, _h, widget.params);
-    if (mounted) setState(() => _geo = geo);
+    if (rgba == null || _w < 2 || _h < 2) return;
+    final token = ++_token;
+    final geo = buildAncientGeometry(
+        rgba, _sw, _sh, _w.toDouble(), _h.toDouble(), widget.params);
+    final img = await renderAncientImage(geo, _w, _h,
+        baseImage: widget.base.thumbnail, sprites: _sprites);
+    if (!mounted || token != _token) {
+      img.dispose();
+      return;
+    }
+    _image?.dispose();
+    setState(() => _image = img);
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _image?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final geo = _geo;
-    if (geo == null) {
+    final img = _image;
+    if (img == null) {
       return const Center(
           child: CircularProgressIndicator(color: AppColors.accent));
     }
-    return Center(
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: SizedBox(
-          width: _w,
-          height: _h,
-          child: CustomPaint(
-          size: Size(_w, _h),
-          painter: AncientPainter(geo,
-              baseImage: widget.base.thumbnail, sprites: _sprites),
-        ),
-        ),
+    // Contain + centred, exactly like the tile-mosaic preview.
+    return RepaintBoundary(
+      child: SizedBox.expand(
+        child: RawImage(image: img, fit: BoxFit.contain),
       ),
     );
   }

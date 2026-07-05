@@ -7,9 +7,6 @@ import 'package:flutter/widgets.dart';
 
 import 'ancient_voronoi.dart';
 
-/// Cell luminance below which the dark internal detail (seams/lines) is overlaid
-/// in a lightened hue so it stays visible on dark-coloured emoji icons.
-const double _darkDetailLum = 118;
 const int _spritePx = 128;
 
 const Map<String, String> _shapeEmoji = {
@@ -203,28 +200,23 @@ Path _heartPath(double radius, double angle) {
   return path;
 }
 
-/// Desaturated emoji sprites: a bright luminance sprite for the multiply-tinted
-/// body, and a dark-detail alpha mask for the adaptive light seams. Built once.
+/// Desaturated emoji sprites: a bright luminance sprite that is multiply-tinted
+/// to each stone's colour. Built once.
 class AncientSprites {
-  AncientSprites._(this._gray, this._detail);
+  AncientSprites._(this._gray);
   final Map<String, ui.Image> _gray;
-  final Map<String, ui.Image> _detail;
 
   ui.Image gray(String kind) => _gray[kind]!;
-  ui.Image detail(String kind) => _detail[kind]!;
 
   static AncientSprites? _cache;
 
   static Future<AncientSprites> load() async {
     if (_cache != null) return _cache!;
     final gray = <String, ui.Image>{};
-    final detail = <String, ui.Image>{};
     for (final entry in _shapeEmoji.entries) {
-      final masks = await _spriteMasks(entry.value);
-      gray[entry.key] = masks.$1;
-      detail[entry.key] = masks.$2;
+      gray[entry.key] = await _graySprite(entry.value);
     }
-    return _cache = AncientSprites._(gray, detail);
+    return _cache = AncientSprites._(gray);
   }
 }
 
@@ -241,36 +233,27 @@ Future<ui.Image> _renderEmoji(String emoji, int px) async {
   return img;
 }
 
-Future<ui.Image> _decodePixels(Uint8List pixels, int w, int h) {
-  final c = Completer<ui.Image>();
-  ui.decodeImageFromPixels(pixels, w, h, ui.PixelFormat.rgba8888, c.complete);
-  return c.future;
-}
-
-Future<(ui.Image, ui.Image)> _spriteMasks(String emoji) async {
+/// Draw the emoji through a colour matrix that outputs the lifted luminance
+/// (0.55·lum + 100) per channel, keeping alpha. Letting Skia do this via
+/// drawImage keeps the antialiased edges premultiplied correctly (raw pixels +
+/// decodeImageFromPixels would mismatch premultiply and fringe every icon).
+Future<ui.Image> _graySprite(String emoji) async {
   const px = _spritePx;
   final base = await _renderEmoji(emoji, px);
-  final data = await base.toByteData(format: ui.ImageByteFormat.rawRgba);
+  const k = 0.55, off = 100.0;
+  final matrix = <double>[
+    0.299 * k, 0.587 * k, 0.114 * k, 0, off,
+    0.299 * k, 0.587 * k, 0.114 * k, 0, off,
+    0.299 * k, 0.587 * k, 0.114 * k, 0, off,
+    0, 0, 0, 1, 0,
+  ];
+  final recorder = ui.PictureRecorder();
+  final canvas =
+      Canvas(recorder, Rect.fromLTWH(0, 0, px.toDouble(), px.toDouble()));
+  canvas.drawImage(
+      base, Offset.zero, Paint()..colorFilter = ColorFilter.matrix(matrix));
   base.dispose();
-  final s = data!.buffer.asUint8List();
-  final gray = Uint8List(px * px * 4);
-  final detail = Uint8List(px * px * 4);
-  for (var i = 0; i < s.length; i += 4) {
-    final a = s[i + 3];
-    if (a == 0) continue;
-    final lum = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    final l = math.min(255.0, lum * 0.55 + 100).round();
-    gray[i] = gray[i + 1] = gray[i + 2] = l;
-    gray[i + 3] = a;
-    var dk = 1 - lum / 255;
-    dk = dk < 0.4 ? 0 : (dk - 0.4) / 0.6;
-    detail[i] = detail[i + 1] = detail[i + 2] = 255;
-    detail[i + 3] = (a * dk).round();
-  }
-  return (
-    await _decodePixels(gray, px, px),
-    await _decodePixels(detail, px, px),
-  );
+  return recorder.endRecording().toImage(px, px);
 }
 
 /// Build the stone geometry for a base sampled into [rgba] (`sw`×`sh`) rendered
@@ -519,8 +502,7 @@ class AncientPainter extends CustomPainter {
 
   void _drawSprite(Canvas canvas, AncientStone s, double scale,
       {required bool backing}) {
-    final sp = sprites!;
-    final gray = sp.gray(geo.shape), det = sp.detail(geo.shape);
+    final gray = sprites!.gray(geo.shape);
     final ts = backing ? 0.9 : 1.0;
     final cr = _clamp255(s.r * ts), cg = _clamp255(s.g * ts), cb = _clamp255(s.b * ts);
     final tint = Color.fromARGB(255, cr, cg, cb);
@@ -535,30 +517,11 @@ class AncientPainter extends CustomPainter {
       _fullSrc(gray),
       dst,
       Paint()
-        ..colorFilter = ColorFilter.mode(tint, BlendMode.multiply)
+        // modulate = multiply INCLUDING alpha, so the glyph's transparent area
+        // stays transparent (BlendMode.multiply would fill it opaque → a square).
+        ..colorFilter = ColorFilter.mode(tint, BlendMode.modulate)
         ..filterQuality = FilterQuality.medium,
     );
-
-    // On dark cells the multiplied dark seams vanish — overlay light seams.
-    final lum = 0.299 * cr + 0.587 * cg + 0.114 * cb;
-    if (lum < _darkDetailLum) {
-      final k = math.min(1.0, (_darkDetailLum - lum) / _darkDetailLum);
-      final light = Color.fromARGB(
-          255,
-          (cr + (255 - cr) * 0.75).round(),
-          (cg + (255 - cg) * 0.75).round(),
-          (cb + (255 - cb) * 0.75).round());
-      canvas.saveLayer(dst, Paint()..color = Color.fromRGBO(0, 0, 0, k));
-      canvas.drawImageRect(
-        det,
-        _fullSrc(det),
-        dst,
-        Paint()
-          ..colorFilter = ColorFilter.mode(light, BlendMode.srcIn)
-          ..filterQuality = FilterQuality.medium,
-      );
-      canvas.restore();
-    }
     canvas.restore();
   }
 

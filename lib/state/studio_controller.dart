@@ -571,6 +571,10 @@ class StudioController extends Notifier<StudioState> {
   void updateSettings(MosaicSettings settings) {
     state = state.copyWith(settings: settings);
     _debounce?.cancel();
+    // Ancient modes render themselves (no tiles / matching), so never kick off
+    // the heavy layout isolate — it would run pointlessly and jank the UI.
+    final m = settings.mosaicMode;
+    if (m == 'ancient' || m == 'ancient-curved') return;
     _debounce = Timer(const Duration(milliseconds: 180), buildPlan);
   }
 

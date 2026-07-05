@@ -80,32 +80,49 @@ Future<Uint8List?> _renderTile(
   canvas.drawRect(
       Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFFFFFFFF));
 
+  final words =
+      phrase.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+  TextStyle styleAt(double fs) => TextStyle(
+        color: Color(color),
+        fontSize: fs,
+        fontWeight: level.weight,
+        letterSpacing: fs * level.spacing,
+        height: 1.05,
+      );
+
   final maxW = w * 0.9, maxH = h * 0.9;
   var fontSize = h * level.scale;
   late TextPainter tp;
   while (true) {
+    // No single word may exceed the line width — otherwise the layout would
+    // break a word mid-way. Shrink until the widest word fits on one line, so
+    // wrapping can only ever happen between words (at spaces).
+    var widest = 0.0;
+    for (final word in words) {
+      final wp = TextPainter(
+        text: TextSpan(text: word, style: styleAt(fontSize)),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      if (wp.width > widest) widest = wp.width;
+      wp.dispose();
+    }
     tp = TextPainter(
-      text: TextSpan(
-        text: phrase,
-        style: TextStyle(
-          color: Color(color),
-          fontSize: fontSize,
-          fontWeight: level.weight,
-          letterSpacing: fontSize * level.spacing,
-          height: 1.05,
-        ),
-      ),
+      text: TextSpan(text: phrase, style: styleAt(fontSize)),
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxW);
-    if ((tp.height <= maxH && tp.width <= maxW) || fontSize <= 6) break;
-    fontSize *= 0.92;
+    if ((widest <= maxW && tp.height <= maxH && tp.width <= maxW) ||
+        fontSize <= 6) {
+      break;
+    }
+    fontSize *= 0.9;
   }
 
   final dx = (w - tp.width) / 2, dy = (h - tp.height) / 2;
   // Thicken the darker levels with a stroke underlay (more ink → darker gray).
   if (level.stroke > 0) {
-    TextPainter(
+    final strokeTp = TextPainter(
       text: TextSpan(
         text: phrase,
         style: TextStyle(
@@ -121,9 +138,8 @@ Future<Uint8List?> _renderTile(
       ),
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
-    )
-      ..layout(maxWidth: maxW)
-      ..paint(canvas, Offset(dx, dy));
+    )..layout(maxWidth: maxW);
+    strokeTp.paint(canvas, Offset(dx, dy));
   }
   tp.paint(canvas, Offset(dx, dy));
 

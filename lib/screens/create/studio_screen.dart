@@ -542,7 +542,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
               child: LayoutBuilder(builder: (context, constraints) {
                 final plan = studio.plan;
                 return GestureDetector(
-                  onTapUp: plan == null
+                  onTapUp: (isAncient || plan == null)
                       ? null
                       : (details) {
                           final fit = computeMosaicFit(constraints.biggest,
@@ -595,7 +595,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                                   .copyWith(color: AppColors.textSecondary),
                             ),
                           ),
-                        if (plan != null)
+                        if (!isAncient && plan != null)
                           const Positioned(
                             bottom: AppSpacing.x2,
                             right: AppSpacing.x2,

@@ -64,13 +64,76 @@ PrintOption? printOption(PrintType type) => switch (type) {
       PrintType.poster => null,
     };
 
-/// Product types currently offered in the app (those with a real Prodigi SKU).
-/// Poster is excluded until it's configured.
+/// Product types currently offered in the app. Framed / canvas / metal ship via
+/// Prodigi; **poster ships via Gelato** (multiple sizes, live Creem pricing).
 const List<PrintType> kAvailablePrintTypes = [
+  PrintType.poster,
   PrintType.framedPrint,
   PrintType.canvas,
   PrintType.metal,
 ];
+
+/// True for the print types fulfilled by Gelato (currently just poster). The rest
+/// go through Prodigi. Drives which API/checkout the order screen uses.
+bool isGelatoType(PrintType type) => type == PrintType.poster;
+
+/// A Gelato poster size — mirrors the web `POSTER_SIZES` catalog. [aspectPortrait]
+/// is width/height in portrait (< 1); landscape uses its reciprocal. [longEdgeCm]
+/// drives the "actual size" loupe.
+class PosterSizeDef {
+  const PosterSizeDef(
+      this.size, this.longEdgeCm, this.aspectPortrait, this.orientations);
+
+  /// Size code shared with the server, e.g. `50x70`.
+  final String size;
+  final double longEdgeCm;
+  final double aspectPortrait;
+  final List<PrintOrientation> orientations;
+}
+
+/// The Gelato poster sizes (identical set + aspects to the web catalog).
+const List<PosterSizeDef> kPosterSizes = [
+  PosterSizeDef('40x50', 50, 4 / 5,
+      [PrintOrientation.portrait, PrintOrientation.landscape]),
+  PosterSizeDef('50x70', 70, 5 / 7,
+      [PrintOrientation.portrait, PrintOrientation.landscape]),
+  PosterSizeDef('70x70', 70, 1, [PrintOrientation.square]),
+  PosterSizeDef('70x100', 100, 7 / 10,
+      [PrintOrientation.portrait, PrintOrientation.landscape]),
+];
+
+/// Poster sizes valid for [orientation].
+List<PosterSizeDef> posterSizesFor(PrintOrientation orientation) =>
+    kPosterSizes.where((s) => s.orientations.contains(orientation)).toList();
+
+PosterSizeDef? posterSizeByCode(String? code) {
+  for (final s in kPosterSizes) {
+    if (s.size == code) return s;
+  }
+  return null;
+}
+
+/// Crop aspect (w/h) for a poster size in a given orientation — matches the
+/// server's `posterCropAspect` exactly (landscape = reciprocal).
+double posterCropAspect(PosterSizeDef def, PrintOrientation orientation) =>
+    switch (orientation) {
+      PrintOrientation.landscape => 1 / def.aspectPortrait,
+      _ => def.aspectPortrait,
+    };
+
+/// Server product key, e.g. `poster_50x70_portrait` (matches the Gelato catalogue).
+String posterProductKey(String size, PrintOrientation orientation) =>
+    'poster_${size}_${orientation.name}';
+
+/// e.g. portrait "50 × 70 cm", landscape "70 × 50 cm".
+String posterSizeLabelCm(PosterSizeDef def, PrintOrientation orientation) {
+  final parts = def.size.split('x');
+  if (parts.length != 2) return '${def.longEdgeCm.round()} cm';
+  final a = parts[0], b = parts[1];
+  return orientation == PrintOrientation.landscape
+      ? '$b × $a cm'
+      : '$a × $b cm';
+}
 
 /// Device screen density used to map print-cm → on-screen size. Flutter's
 /// logical pixel baseline is ~160 px/inch, so ~63 px/cm. This makes the loupe

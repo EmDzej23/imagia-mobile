@@ -54,6 +54,7 @@ class PrintJobController extends Notifier<PrintJobState> {
   Future<void> start({
     required String orderId,
     required String productName,
+    String provider = 'prodigi',
   }) async {
     if (state.isProcessing) return;
     state = PrintJobState(
@@ -63,7 +64,10 @@ class PrintJobController extends Notifier<PrintJobState> {
       step: 'Rendering & placing your order…',
     );
     try {
-      final res = await ref.read(printApiProvider).fulfill(orderId);
+      final api = provider == 'gelato'
+          ? ref.read(gelatoApiProvider)
+          : ref.read(printApiProvider);
+      final res = await api.fulfill(orderId);
       if (!res.isOk) {
         state = state.copyWith(
           phase: PrintJobPhase.failed,

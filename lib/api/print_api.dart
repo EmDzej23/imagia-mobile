@@ -1,6 +1,6 @@
 import 'api_client.dart';
 
-/// A Prodigi POD product from `GET /api/print/prodigi/products`.
+/// A POD product from `GET /api/print/<provider>/products`.
 class PrintProductDto {
   PrintProductDto({
     required this.key,
@@ -11,6 +11,7 @@ class PrintProductDto {
     required this.priceCents,
     required this.priceFormatted,
     required this.sellable,
+    this.size,
   });
 
   final String key;
@@ -22,6 +23,9 @@ class PrintProductDto {
   final String priceFormatted;
   final bool sellable;
 
+  /// Poster size code (e.g. `50x70`), null for the single-size Prodigi products.
+  final String? size;
+
   factory PrintProductDto.fromJson(Map<String, dynamic> j) => PrintProductDto(
         key: j['key'] as String,
         name: j['name'] as String? ?? '',
@@ -31,16 +35,20 @@ class PrintProductDto {
         priceCents: (j['priceCents'] as num?)?.toInt() ?? 0,
         priceFormatted: j['priceFormatted'] as String? ?? '',
         sellable: j['sellable'] as bool? ?? false,
+        size: j['size'] as String?,
       );
 }
 
-/// A placed print order from `GET /api/print/prodigi/orders`.
+/// A placed print order from `GET /api/print/<provider>/orders`. Prodigi returns
+/// `prodigiOrderId`/`prodigiStatus`; Gelato returns the generic
+/// `providerOrderId`/`providerStatus` — [fromJson] reads whichever is present.
 class PrintOrderDto {
   PrintOrderDto({
     required this.id,
     required this.productName,
     required this.status,
     required this.totalFormatted,
+    this.provider = 'prodigi',
     this.productKey,
     this.attributes,
     this.thumbnailUrl,
@@ -53,6 +61,7 @@ class PrintOrderDto {
   });
 
   final String id;
+  final String provider;
   final String productName;
   final String status;
   final String totalFormatted;
@@ -60,13 +69,15 @@ class PrintOrderDto {
   final Map<String, String>? attributes;
   final String? thumbnailUrl;
   final String? prodigiStatus;
+
+  /// The provider's own order id (Prodigi or Gelato). Null until fulfilled.
   final String? prodigiOrderId;
   final String? errorMessage;
   final String? trackingNumber;
   final String? trackingUrl;
   final String? createdAt;
 
-  /// Paid but not yet handed to Prodigi — can be re-submitted (resumed).
+  /// Paid but not yet handed to the provider — can be re-submitted (resumed).
   bool get isResumable =>
       prodigiOrderId == null &&
       (status == 'paid' ||
@@ -103,8 +114,11 @@ class PrintOrderDto {
   static String _cap(String s) =>
       s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
-  factory PrintOrderDto.fromJson(Map<String, dynamic> j) => PrintOrderDto(
+  factory PrintOrderDto.fromJson(Map<String, dynamic> j,
+          {String provider = 'prodigi'}) =>
+      PrintOrderDto(
         id: j['id'] as String,
+        provider: provider,
         productName: j['productName'] as String? ?? 'Print',
         status: j['status'] as String? ?? 'pending',
         totalFormatted: j['totalFormatted'] as String? ?? '',
@@ -112,8 +126,10 @@ class PrintOrderDto {
         attributes: (j['attributes'] as Map?)
             ?.map((k, v) => MapEntry(k.toString(), v.toString())),
         thumbnailUrl: j['thumbnailUrl'] as String?,
-        prodigiStatus: j['prodigiStatus'] as String?,
-        prodigiOrderId: j['prodigiOrderId'] as String?,
+        prodigiStatus:
+            j['prodigiStatus'] as String? ?? j['providerStatus'] as String?,
+        prodigiOrderId:
+            j['prodigiOrderId'] as String? ?? j['providerOrderId'] as String?,
         errorMessage: j['errorMessage'] as String?,
         trackingNumber: j['trackingNumber'] as String?,
         trackingUrl: j['trackingUrl'] as String?,
@@ -172,15 +188,20 @@ class CheckoutSession {
   final String orderId;
 }
 
-/// Prodigi print-on-demand client. Talks to the new `/api/print/prodigi/*`
-/// endpoints (independent of the web's Printful flow).
+/// Print-on-demand client. One class serves both providers — the endpoints under
+/// `/api/print/prodigi/*` and `/api/print/gelato/*` share the same request/response
+/// shape; only the [base] path (and provider label) differ.
 class PrintApi {
-  PrintApi(this._client);
+  PrintApi(this._client,
+      {this.base = '/api/print/prodigi', this.provider = 'prodigi'});
   final ApiClient _client;
 
+  /// Provider endpoint prefix, e.g. `/api/print/prodigi` or `/api/print/gelato`.
+  final String base;
+  final String provider;
+
   Future<ApiResult<List<PrintProductDto>>> products() async {
-    final res =
-        await _client.get<Map<String, dynamic>>('/api/print/prodigi/products');
+    final res = await _client.get<Map<String, dynamic>>('$base/products');
     if (!res.isOk || res.data == null) {
       return ApiResult.fail(res.error ?? 'Could not load products.', res.status);
     }
@@ -201,7 +222,7 @@ class PrintApi {
     Map<String, String>? attributes,
   }) async {
     final res = await _client.post<Map<String, dynamic>>(
-      '/api/print/prodigi/checkout',
+      '$base/checkout',
       body: {
         'productKey': productKey,
         'sessionId': sessionId,
@@ -226,25 +247,29 @@ class PrintApi {
   }
 
   Future<ApiResult<String>> fulfill(String orderId) async {
-    final res = await _client.post<Map<String, dynamic>>(
-        '/api/print/prodigi/fulfill',
+    final res = await _client.post<Map<String, dynamic>>('$base/fulfill',
         body: {'orderId': orderId});
     if (!res.isOk || res.data == null || res.data!['success'] != true) {
       return ApiResult.fail(
           res.error ?? (res.data?['error'] as String?) ?? 'Fulfilment failed.',
           res.status);
     }
-    return ApiResult.ok(res.data!['prodigiOrderId'] as String? ?? '', res.status);
+    // Prodigi → prodigiOrderId, Gelato → providerOrderId.
+    final id = (res.data!['prodigiOrderId'] ?? res.data!['providerOrderId'])
+            as String? ??
+        '';
+    return ApiResult.ok(id, res.status);
   }
 
   Future<ApiResult<List<PrintOrderDto>>> orders() async {
-    final res =
-        await _client.get<Map<String, dynamic>>('/api/print/prodigi/orders');
+    final res = await _client.get<Map<String, dynamic>>('$base/orders');
     if (!res.isOk || res.data == null) {
       return ApiResult.fail(res.error ?? 'Could not load orders.', res.status);
     }
     final list = (res.data!['orders'] as List? ?? [])
-        .map((e) => PrintOrderDto.fromJson((e as Map).cast<String, dynamic>()))
+        .map((e) => PrintOrderDto.fromJson(
+            (e as Map).cast<String, dynamic>(),
+            provider: provider))
         .toList();
     return ApiResult.ok(list, res.status);
   }

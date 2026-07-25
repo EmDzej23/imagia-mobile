@@ -15,10 +15,17 @@ class PrintOrderDraft {
     required this.cropSrc,
     required this.priceEur,
     this.option,
+    this.posterSize,
   });
 
   final PrintType type;
   final PrintOrientation orientation;
+
+  /// For posters only: the chosen Gelato size code (e.g. `50x70`). Null otherwise.
+  final String? posterSize;
+
+  /// Posters are fulfilled by Gelato; everything else by Prodigi.
+  bool get isPoster => type == PrintType.poster;
 
   /// Chosen product option (frame colour / canvas wrap / metal finish).
   final PrintOptionChoice? option;
@@ -31,8 +38,16 @@ class PrintOrderDraft {
   final double priceEur;
 
   PrintSpec get spec => printSpec(type, orientation);
-  double get aspect => spec.aspect;
-  String get sizeLabel => spec.sizeLabel;
+
+  PosterSizeDef? get _posterDef => posterSizeByCode(posterSize);
+
+  double get aspect => isPoster && _posterDef != null
+      ? posterCropAspect(_posterDef!, orientation)
+      : spec.aspect;
+
+  String get sizeLabel => isPoster && _posterDef != null
+      ? posterSizeLabelCm(_posterDef!, orientation)
+      : spec.sizeLabel;
 
   /// Frame colour for the framed mockup (defaults to black).
   Color get frameColor => type == PrintType.framedPrint
@@ -46,8 +61,11 @@ class PrintOrderDraft {
     return {opt.attrKey: option!.value};
   }
 
-  /// Server catalogue key, e.g. `framed_portrait`.
-  String get productKey => printProductKey(type, orientation);
+  /// Server catalogue key — `poster_50x70_portrait` for posters (Gelato), else
+  /// `framed_portrait` etc. (Prodigi).
+  String get productKey => isPoster && posterSize != null
+      ? posterProductKey(posterSize!, orientation)
+      : printProductKey(type, orientation);
 
   /// Resolution-independent crop the server applies to the high-res render.
   PrintCrop get cropNormalized => PrintCrop(

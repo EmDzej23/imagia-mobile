@@ -39,11 +39,42 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   PrintOrientation _orientation = PrintOrientation.portrait;
   PrintOptionChoice? _option =
       printOption(PrintType.framedPrint)?.defaultChoice;
+
+  /// Chosen Gelato poster size code (posters only), e.g. `50x70`.
+  String? _posterSize;
   ui.Rect? _cropSrc; // in mosaic pixels
 
   Color get _frameColor => _type == PrintType.framedPrint
       ? (_option?.swatch ?? const Color(0xFF1C1C1E))
       : const Color(0xFF1C1C1E);
+
+  // ── Poster vs Prodigi: the crop aspect, physical size, and label all come
+  //    from the poster-size catalogue when poster is selected, else the spec. ──
+  bool get _isPoster => _type == PrintType.poster;
+  PosterSizeDef? get _posterDef => posterSizeByCode(_posterSize);
+
+  double get _aspect => _isPoster && _posterDef != null
+      ? posterCropAspect(_posterDef!, _orientation)
+      : printSpec(_type, _orientation).aspect;
+
+  double get _longEdgeCm => _isPoster && _posterDef != null
+      ? _posterDef!.longEdgeCm
+      : printSpec(_type, _orientation).longEdgeCm;
+
+  String get _sizeLabel => _isPoster && _posterDef != null
+      ? posterSizeLabelCm(_posterDef!, _orientation)
+      : printSpec(_type, _orientation).sizeLabel;
+
+  /// Keep [_posterSize] valid for the current orientation (posters only), picking
+  /// the first compatible size when the current one doesn't fit (e.g. 70×70 is
+  /// square-only, so switching to portrait moves to a portrait size).
+  void _ensurePosterSize() {
+    final valid = posterSizesFor(_orientation);
+    if (valid.isEmpty) return;
+    if (_posterSize == null || !valid.any((s) => s.size == _posterSize)) {
+      _posterSize = valid.first.size;
+    }
+  }
 
   @override
   void initState() {
@@ -106,8 +137,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   void _setOrientation(PrintOrientation o) {
     setState(() {
       _orientation = o;
+      if (_isPoster) _ensurePosterSize();
       if (_mosaic != null) {
-        _cropSrc = _centerCrop(_mosaic!, printSpec(_type, o).aspect);
+        _cropSrc = _centerCrop(_mosaic!, _aspect);
       }
     });
   }
@@ -116,9 +148,23 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
     setState(() {
       _type = t;
       _option = printOption(t)?.defaultChoice; // reset to the type's default
+      if (t == PrintType.poster) {
+        _ensurePosterSize();
+      } else {
+        _posterSize = null;
+      }
       // Different products have different aspects — re-fit the crop.
       if (_mosaic != null) {
-        _cropSrc = _centerCrop(_mosaic!, printSpec(t, _orientation).aspect);
+        _cropSrc = _centerCrop(_mosaic!, _aspect);
+      }
+    });
+  }
+
+  void _setPosterSize(String size) {
+    setState(() {
+      _posterSize = size;
+      if (_mosaic != null) {
+        _cropSrc = _centerCrop(_mosaic!, _aspect);
       }
     });
   }
@@ -145,7 +191,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
         overlay: studio.base?.overlay,
         tintStrength: studio.settings.tintStrength,
         cropNormalized: cropN,
-        printLongEdgeCm: printSpec(_type, _orientation).longEdgeCm,
+        printLongEdgeCm: _longEdgeCm,
       ),
     ));
   }
@@ -160,7 +206,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
             _cropSrc!.width / iw, _cropSrc!.height / ih);
     final result = await Navigator.of(context).push<Rect>(MaterialPageRoute(
       builder: (_) => CropScreen(
-          image: img, aspect: printSpec(_type, _orientation).aspect, initialCrop: initial),
+          image: img, aspect: _aspect, initialCrop: initial),
     ));
     if (result != null && mounted) {
       setState(() => _cropSrc = ui.Rect.fromLTWH(result.left * iw,
@@ -200,11 +246,32 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
     final byKey = {
       for (final p in liveProducts ?? const <PrintProductDto>[]) p.key: p,
     };
+    // Poster prices come from the Gelato catalogue (live Creem prices per size).
+    final liveGelato = ref.watch(gelatoProductsProvider).asData?.value;
+    final gByKey = {
+      for (final p in liveGelato ?? const <PrintProductDto>[]) p.key: p,
+    };
     double priceEurFor(PrintType t, PrintOrientation o) {
       final live = byKey[printProductKey(t, o)];
       if (live != null && live.priceCents > 0) return live.priceCents / 100;
       return printPriceEur(t, o);
     }
+    // Exact poster price for a size+orientation, or null while it loads.
+    double? posterPrice(String size, PrintOrientation o) {
+      final p = gByKey[posterProductKey(size, o)];
+      return (p != null && p.priceCents > 0) ? p.priceCents / 100 : null;
+    }
+    // Cheapest poster price for an orientation — the "from" price on the card.
+    double? posterFromPrice(PrintOrientation o) {
+      final prices = <double>[
+        for (final s in posterSizesFor(o)) ?posterPrice(s.size, o),
+      ]..sort();
+      return prices.isEmpty ? null : prices.first;
+    }
+    // Price for the current selection (poster uses the chosen size).
+    final double? currentPrice = _isPoster
+        ? (_posterSize == null ? null : posterPrice(_posterSize!, _orientation))
+        : priceEurFor(_type, _orientation);
 
     return Column(
       children: [
@@ -218,7 +285,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                 mosaic: mosaic,
                 cropSrc: crop,
                 type: _type,
-                aspect: printSpec(_type, _orientation).aspect,
+                aspect: _aspect,
                 frameColor: _frameColor,
                 canvasWrap:
                     _type == PrintType.canvas ? _option?.value : null,
@@ -251,9 +318,13 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                           const SizedBox(width: AppSpacing.x2),
                       itemBuilder: (_, i) {
                         final t = kAvailablePrintTypes[i];
+                        final poster = t == PrintType.poster;
                         return _TypeCard(
                           type: t,
-                          priceEur: priceEurFor(t, _orientation),
+                          priceEur: poster
+                              ? posterFromPrice(_orientation)
+                              : priceEurFor(t, _orientation),
+                          pricePrefix: poster ? 'from ' : '',
                           selected: t == _type,
                           onTap: () => _setType(t),
                         );
@@ -269,6 +340,31 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         SegmentOption(o, o.label),
                     ],
                   ),
+                  // Poster (Gelato) size picker — posters have a size dimension
+                  // the Prodigi types don't; each size drives aspect + price.
+                  if (_isPoster) ...[
+                    const SizedBox(height: AppSpacing.x3),
+                    Text('Size', style: AppTypography.caption),
+                    const SizedBox(height: AppSpacing.x2),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (final s in posterSizesFor(_orientation))
+                            Padding(
+                              padding:
+                                  const EdgeInsets.only(right: AppSpacing.x2),
+                              child: _SizeChip(
+                                label: posterSizeLabelCm(s, _orientation),
+                                priceEur: posterPrice(s.size, _orientation),
+                                selected: s.size == _posterSize,
+                                onTap: () => _setPosterSize(s.size),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                   // Product option (frame colour / canvas wrap / metal finish).
                   if (printOption(_type) case final opt?) ...[
                     const SizedBox(height: AppSpacing.x3),
@@ -295,7 +391,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                   ],
                   const SizedBox(height: AppSpacing.x3),
                   Text(
-                    '${_type.label} · ${printSpec(_type, _orientation).sizeLabel}\n${_type.blurb}',
+                    '${_type.label} · $_sizeLabel\n${_type.blurb}',
                     style: AppTypography.caption,
                   ),
                   const SizedBox(height: AppSpacing.x1),
@@ -319,8 +415,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                   ),
                   const SizedBox(height: AppSpacing.x3),
                   PrimaryButton(
-                    label:
-                        'Order · €${priceEurFor(_type, _orientation).toStringAsFixed(0)}',
+                    label: currentPrice == null
+                        ? 'Order'
+                        : 'Order · €${currentPrice.toStringAsFixed(0)}',
                     icon: Icons.shopping_bag_outlined,
                     onPressed: () {
                       final draft = PrintOrderDraft(
@@ -328,8 +425,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         orientation: _orientation,
                         mosaic: mosaic,
                         cropSrc: crop,
-                        priceEur: priceEurFor(_type, _orientation),
+                        priceEur: currentPrice ?? 0,
                         option: _option,
+                        posterSize: _posterSize,
                       );
                       Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => ShippingAddressScreen(draft: draft),
@@ -398,9 +496,13 @@ class _TypeCard extends StatelessWidget {
       {required this.type,
       required this.priceEur,
       required this.selected,
-      required this.onTap});
+      required this.onTap,
+      this.pricePrefix = ''});
   final PrintType type;
-  final double priceEur;
+
+  /// Null while a live price is still loading.
+  final double? priceEur;
+  final String pricePrefix;
   final bool selected;
   final VoidCallback onTap;
 
@@ -427,9 +529,55 @@ class _TypeCard extends StatelessWidget {
                 style: AppTypography.label,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis),
-            Text('€${priceEur.toStringAsFixed(0)}',
+            Text(
+                priceEur == null
+                    ? '—'
+                    : '$pricePrefix€${priceEur!.toStringAsFixed(0)}',
                 style: AppTypography.number(AppTypography.caption)
                     .copyWith(color: AppColors.accent)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A poster-size chip: the physical size label + its live price.
+class _SizeChip extends StatelessWidget {
+  const _SizeChip(
+      {required this.label,
+      required this.priceEur,
+      required this.selected,
+      required this.onTap});
+  final String label;
+  final double? priceEur;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceRaised,
+          borderRadius: BorderRadius.circular(AppRadius.chip),
+          border: Border.all(
+            color: selected ? AppColors.accent : AppColors.border,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: AppTypography.caption),
+            if (priceEur != null)
+              Text('€${priceEur!.toStringAsFixed(0)}',
+                  style: AppTypography.number(AppTypography.caption)
+                      .copyWith(color: AppColors.accent)),
           ],
         ),
       ),

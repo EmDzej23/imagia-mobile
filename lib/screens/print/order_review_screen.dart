@@ -47,7 +47,11 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
       // The print mosaic is rendered server-side after payment (no render
       // token), so we just send the design to checkout.
       final tileUrls = {for (final t in studio.tiles) t.id: t.blobUrl};
-      final checkout = await ref.read(printApiProvider).checkout(
+      // Posters ship via Gelato, everything else via Prodigi.
+      final api = widget.draft.isPoster
+          ? ref.read(gelatoApiProvider)
+          : ref.read(printApiProvider);
+      final checkout = await api.checkout(
             productKey: widget.draft.productKey,
             sessionId: 'mobile-${DateTime.now().millisecondsSinceEpoch}',
             plan: plan.toJson(),
@@ -84,7 +88,8 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
       ref.read(printJobControllerProvider.notifier).start(
             orderId: checkout.data!.orderId,
             productName:
-                '${widget.draft.type.label} · ${widget.draft.orientation.label}',
+                '${widget.draft.type.label} · ${widget.draft.sizeLabel}',
+            provider: widget.draft.isPoster ? 'gelato' : 'prodigi',
           );
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(

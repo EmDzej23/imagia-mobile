@@ -72,6 +72,7 @@ class _OrderTile extends ConsumerWidget {
     ref.read(printJobControllerProvider.notifier).start(
           orderId: order.id,
           productName: order.productName,
+          provider: order.provider,
         );
     Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => const OrderProcessingScreen()));

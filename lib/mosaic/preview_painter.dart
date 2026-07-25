@@ -33,17 +33,21 @@ MosaicFit computeMosaicFit(Size size, double baseW, double baseH) {
   );
 }
 
-/// Source rect that center-crops [img] to the target [cellAR] (w/h).
-Rect centerCropSrc(ui.Image img, double cellAR) {
+/// Source rect that cover-crops [img] to the target [cellAR] (w/h). When [topCrop]
+/// is set (square layout), a PORTRAIT tile is cropped to its TOP (keeps faces/heads)
+/// instead of its centre; landscape tiles are unaffected (still centred horizontally).
+Rect centerCropSrc(ui.Image img, double cellAR, {bool topCrop = false}) {
   final tw = img.width.toDouble();
   final th = img.height.toDouble();
   final tileAR = tw / th;
   if (tileAR > cellAR) {
+    // Wider than the cell → crop the sides, keep full height (landscape → centre).
     final srcW = th * cellAR;
     return Rect.fromLTWH((tw - srcW) / 2, 0, srcW, th);
   }
+  // Taller than the cell → crop top/bottom. Anchor to the top in square layout.
   final srcH = tw / cellAR;
-  return Rect.fromLTWH(0, (th - srcH) / 2, tw, srcH);
+  return Rect.fromLTWH(0, topCrop ? 0 : (th - srcH) / 2, tw, srcH);
 }
 
 /// Renders a [SlimMosaicPlan] on a canvas: each placement draws its matched
@@ -125,7 +129,11 @@ class MosaicPreviewPainter extends CustomPainter {
       }
       paint.color = Color.fromRGBO(255, 255, 255, opacity);
       canvas.drawImageRect(
-          img, centerCropSrc(img, p.width / p.height), drawRect, paint);
+          img,
+          centerCropSrc(img, p.width / p.height,
+              topCrop: plan.cropPortraitTop),
+          drawRect,
+          paint);
     }
 
     if (baseImage != null && tintStrength > 0) {
@@ -210,7 +218,11 @@ class MosaicZoomPainter extends CustomPainter {
         }
         continue;
       }
-      canvas.drawImageRect(img, centerCropSrc(img, p.width / p.height), dst, paint);
+      canvas.drawImageRect(
+          img,
+          centerCropSrc(img, p.width / p.height, topCrop: plan.cropPortraitTop),
+          dst,
+          paint);
     }
 
     if (baseImage != null && tintStrength > 0) {

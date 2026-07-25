@@ -84,4 +84,38 @@ class RenderApi {
     }
     return ApiResult.ok(RenderResult.fromJson(data), res.status);
   }
+
+  /// Tile-less high-res render via `POST /api/render-generative` (word-art /
+  /// ancient shapes). Rendered in-Node with @napi-rs/canvas — no tiles, no plan,
+  /// and FREE (no tokens). Same response shape as [render], so it reuses
+  /// [RenderResult] and the export screen's download flow.
+  Future<ApiResult<RenderResult>> renderGenerative({
+    required String mode, // 'wordart' | 'ancient' | 'ancient-curved'
+    required String baseUrl,
+    required Map<String, dynamic> params,
+    String? fileName,
+    int longSide = 10000,
+  }) async {
+    final res = await _client.post<Map<String, dynamic>>(
+      '/api/render-generative',
+      body: {
+        'mode': mode,
+        'baseUrl': baseUrl,
+        'params': params,
+        'longSide': longSide,
+        'fileName': ?fileName,
+      },
+      receiveTimeout: _renderTimeout,
+      sendTimeout: const Duration(minutes: 2),
+    );
+    if (!res.isOk || res.data == null) {
+      return ApiResult.fail(res.error ?? 'Render failed.', res.status);
+    }
+    final data = res.data!;
+    if (data['success'] != true || data['downloadUrl'] == null) {
+      return ApiResult.fail(
+          data['error'] as String? ?? 'Render failed.', res.status);
+    }
+    return ApiResult.ok(RenderResult.fromJson(data), res.status);
+  }
 }

@@ -118,7 +118,7 @@ class AncientGeometry {
 /// Quadratic control point for a shared cell edge, computed identically from
 /// either adjacent cell so the curved border stays watertight (see web renderer).
 List<double> _edgeControl(double ax, double ay, double bx, double by,
-    double curviness, int nonce, double maxBow) {
+    double curviness, int nonce, double maxBow, double unit) {
   double x0 = ax, y0 = ay, x1 = bx, y1 = by;
   if (x0 > x1 || (x0 == x1 && y0 > y1)) {
     x0 = bx;
@@ -130,7 +130,12 @@ List<double> _edgeControl(double ax, double ay, double bx, double by,
   final len0 = math.sqrt(ex * ex + ey * ey);
   final len = len0 == 0 ? 1.0 : len0;
   final nx = -ey / len, ny = ex / len;
-  int q(double v) => (v * 8).round();
+  // Quantise in units of the stone size (`unit`), NOT raw pixels: the Voronoi
+  // scales linearly with output resolution, so raw-pixel buckets differ between
+  // the on-device preview and the 10k server export, giving each edge a
+  // different bow. Normalising by `unit` makes the hash — and the curve —
+  // resolution-invariant (matches the web renderer).
+  int q(double v) => ((v / unit) * 64).round();
   var h = (q(x0) * 73856093) ^
       (q(y0) * 19349663) ^
       (q(x1) * 83492791) ^
@@ -273,17 +278,25 @@ AncientGeometry buildAncientGeometry(
   final maxBow = 0.7 * s;
   final shapeMode = p.shape != 'none';
 
-  var jstate = (4096 + p.seedNonce * 131) & 0xFFFFFFFF;
-  double jr() {
-    jstate = _lcg(jstate);
-    return jstate / 4294967296.0;
-  }
+  // NB: per-stone randomness (colour jitter, shape size + rotation) is seeded by
+  // each stone's grid index INSIDE the loop below — deliberately NOT a shared
+  // sequential stream (see the note there).
 
   final stones = <AncientStone>[];
   final n = seeds.count;
   for (var i = 0; i < n; i++) {
     final cell = cellPolygon(seeds, i, w, h);
     if (cell == null || cell.length < 3) continue;
+
+    // Seeded by the stone's grid index → identical draws regardless of how many
+    // earlier cells were skipped or the output resolution. A shared sequential
+    // stream would desync (and shift every later stone's colour/size/rotation)
+    // whenever preview vs export drop a different degenerate cell. Matches web.
+    var jstate = (i * 2654435761 + p.seedNonce * 131 + 4096) & 0xFFFFFFFF;
+    double jr() {
+      jstate = _lcg(jstate);
+      return jstate / 4294967296.0;
+    }
 
     final sxp = seeds.x(i), syp = seeds.y(i);
 
@@ -337,7 +350,7 @@ AncientGeometry buildAncientGeometry(
       if (d > maxR) maxR = d;
       if (curviness > 0 &&
           !(_onEdge(a.dx, a.dy, w, h) && _onEdge(b.dx, b.dy, w, h))) {
-        final c = _edgeControl(a.dx, a.dy, b.dx, b.dy, curviness, p.seedNonce, maxBow);
+        final c = _edgeControl(a.dx, a.dy, b.dx, b.dy, curviness, p.seedNonce, maxBow, s);
         path.quadraticBezierTo(c[0] - ccx, c[1] - ccy, b.dx - ccx, b.dy - ccy);
       } else {
         path.lineTo(b.dx - ccx, b.dy - ccy);

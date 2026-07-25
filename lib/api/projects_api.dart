@@ -53,6 +53,7 @@ class ProjectDetail {
     this.baseImageName,
     required this.tiles,
     this.settings,
+    this.texts,
   });
 
   final String id;
@@ -62,6 +63,10 @@ class ProjectDetail {
   final List<ProjectTileRef> tiles;
   final MosaicSettings? settings;
 
+  /// Word-art phrases — the raw newline-separated blob (server `texts` column,
+  /// same format as [StudioState.textInput]). Shared with the web app.
+  final String? texts;
+
   factory ProjectDetail.fromJson(Map<String, dynamic> p) {
     return ProjectDetail(
       id: p['id'] as String,
@@ -70,6 +75,7 @@ class ProjectDetail {
       baseImageName: p['baseImageName'] as String?,
       tiles: _parseTiles(p['tileUrls']),
       settings: _parseSettings(p['settings']),
+      texts: p['texts'] as String?,
     );
   }
 
@@ -148,6 +154,7 @@ class ProjectsApi {
     String? baseImageName,
     required List<ProjectTileRef> tiles,
     MosaicSettings? settings,
+    String? texts,
   }) async {
     final res = await _client.post<Map<String, dynamic>>('/api/projects', body: {
       'name': name,
@@ -155,6 +162,7 @@ class ProjectsApi {
       if (baseImageName != null) 'baseImageName': baseImageName,
       'tileUrls': _tilePayload(tiles),
       if (settings != null) 'settings': settings.toJson(),
+      if (texts != null && texts.isNotEmpty) 'texts': texts,
     });
     if (!res.isOk || res.data == null) {
       return ApiResult.fail(res.error ?? 'Failed to save project.', res.status);
@@ -171,6 +179,7 @@ class ProjectsApi {
     String? baseImageName,
     List<ProjectTileRef>? tiles,
     MosaicSettings? settings,
+    String? texts,
   }) async {
     final res = await _client.put<Map<String, dynamic>>('/api/projects/$id', body: {
       if (name != null) 'name': name,
@@ -178,6 +187,7 @@ class ProjectsApi {
       if (baseImageName != null) 'baseImageName': baseImageName,
       if (tiles != null) 'tileUrls': _tilePayload(tiles),
       if (settings != null) 'settings': settings.toJson(),
+      'texts': ?texts,
     });
     if (!res.isOk) {
       return ApiResult.fail(res.error ?? 'Failed to update project.', res.status);

@@ -4,11 +4,13 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../api/print_api.dart';
 import '../../mosaic/preview_painter.dart';
 import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
 import '../../print/wall_image_provider.dart';
+import '../../state/print_providers.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -192,6 +194,18 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   Widget _content() {
     final mosaic = _mosaic!;
     final crop = _cropSrc!;
+    // Live prices come from the web API (which now reads them from Creem). Fall
+    // back to the static catalog price only while they load / if offline.
+    final liveProducts = ref.watch(printProductsProvider).asData?.value;
+    final byKey = {
+      for (final p in liveProducts ?? const <PrintProductDto>[]) p.key: p,
+    };
+    double priceEurFor(PrintType t, PrintOrientation o) {
+      final live = byKey[printProductKey(t, o)];
+      if (live != null && live.priceCents > 0) return live.priceCents / 100;
+      return printPriceEur(t, o);
+    }
+
     return Column(
       children: [
         // Mockup preview.
@@ -239,7 +253,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         final t = kAvailablePrintTypes[i];
                         return _TypeCard(
                           type: t,
-                          orientation: _orientation,
+                          priceEur: priceEurFor(t, _orientation),
                           selected: t == _type,
                           onTap: () => _setType(t),
                         );
@@ -306,7 +320,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                   const SizedBox(height: AppSpacing.x3),
                   PrimaryButton(
                     label:
-                        'Order · €${printPriceEur(_type, _orientation).toStringAsFixed(0)}',
+                        'Order · €${priceEurFor(_type, _orientation).toStringAsFixed(0)}',
                     icon: Icons.shopping_bag_outlined,
                     onPressed: () {
                       final draft = PrintOrderDraft(
@@ -314,7 +328,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         orientation: _orientation,
                         mosaic: mosaic,
                         cropSrc: crop,
-                        priceEur: printPriceEur(_type, _orientation),
+                        priceEur: priceEurFor(_type, _orientation),
                         option: _option,
                       );
                       Navigator.of(context).push(MaterialPageRoute(
@@ -382,11 +396,11 @@ class _OptionChip extends StatelessWidget {
 class _TypeCard extends StatelessWidget {
   const _TypeCard(
       {required this.type,
-      required this.orientation,
+      required this.priceEur,
       required this.selected,
       required this.onTap});
   final PrintType type;
-  final PrintOrientation orientation;
+  final double priceEur;
   final bool selected;
   final VoidCallback onTap;
 
@@ -413,7 +427,7 @@ class _TypeCard extends StatelessWidget {
                 style: AppTypography.label,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis),
-            Text('€${printPriceEur(type, orientation).toStringAsFixed(0)}',
+            Text('€${priceEur.toStringAsFixed(0)}',
                 style: AppTypography.number(AppTypography.caption)
                     .copyWith(color: AppColors.accent)),
           ],

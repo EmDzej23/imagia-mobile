@@ -11,7 +11,6 @@ import '../api/tiles_api.dart';
 import '../core/config.dart';
 import '../mosaic/mosaic_engine.dart';
 import '../mosaic/shared.dart';
-import '../mosaic/text_tiles.dart' as txt;
 import '../mosaic/types.dart';
 import '../services/image_service.dart';
 import 'auth_controller.dart';
@@ -85,11 +84,8 @@ class StudioState {
     this.currentProjectId,
     this.textInput = '',
     this.textUppercase = false,
-    this.textColor = 0xFF000000,
-    this.isGeneratingText = false,
-    this.textDone = 0,
-    this.textTotal = 0,
     this.ancientSeedNonce = 0,
+    this.wordartSeedNonce = 0,
   });
 
   final BaseImage? base;
@@ -104,16 +100,15 @@ class StudioState {
   final int uploadTotal;
   final String? error;
 
-  // Text-mosaic state (the phrases/uppercase/colour live here, not in settings).
+  // Word-art phrase state (the phrases + uppercase live here, not in settings).
   final String textInput;
   final bool textUppercase;
-  final int textColor;
-  final bool isGeneratingText;
-  final int textDone;
-  final int textTotal;
 
   /// Ancient-mosaic reshuffle key — bump to get a new stone layout.
   final int ancientSeedNonce;
+
+  /// Word-art reshuffle key — bump to get a new word arrangement.
+  final int wordartSeedNonce;
 
   /// The id of the saved project currently open (null for a fresh mosaic).
   /// When set, Save updates this project instead of creating a new one.
@@ -140,11 +135,8 @@ class StudioState {
     String? currentProjectId,
     String? textInput,
     bool? textUppercase,
-    int? textColor,
-    bool? isGeneratingText,
-    int? textDone,
-    int? textTotal,
     int? ancientSeedNonce,
+    int? wordartSeedNonce,
   }) {
     return StudioState(
       base: base ?? this.base,
@@ -161,11 +153,8 @@ class StudioState {
       currentProjectId: currentProjectId ?? this.currentProjectId,
       textInput: textInput ?? this.textInput,
       textUppercase: textUppercase ?? this.textUppercase,
-      textColor: textColor ?? this.textColor,
-      isGeneratingText: isGeneratingText ?? this.isGeneratingText,
-      textDone: textDone ?? this.textDone,
-      textTotal: textTotal ?? this.textTotal,
       ancientSeedNonce: ancientSeedNonce ?? this.ancientSeedNonce,
+      wordartSeedNonce: wordartSeedNonce ?? this.wordartSeedNonce,
     );
   }
 
@@ -438,80 +427,16 @@ class StudioController extends Notifier<StudioState> {
         tiles: state.tiles.where((t) => t.id != id).toList());
   }
 
-  // ── Text mosaic ──────────────────────────────────────────────────────────
+  // ── Word-art phrases ─────────────────────────────────────────────────────
 
-  void setTextInput(String v) => state = state.copyWith(textInput: v);
-  void setTextUppercase(bool v) => state = state.copyWith(textUppercase: v);
-  void setTextColor(int v) => state = state.copyWith(textColor: v);
+  void setTextInput(String v) {
+    state = state.copyWith(textInput: v);
+    _scheduleAutoSave();
+  }
 
-  /// Rasterise the phrases into grayscale tiles (5 darkness levels each), upload
-  /// them, make them the active tile set, and rebuild the preview.
-  Future<void> generateTextTiles() async {
-    if (state.base == null) {
-      state = state.copyWith(error: 'Add a base photo first.');
-      return;
-    }
-    var phrases =
-        txt.parseTextPhrases(state.textInput, uppercase: state.textUppercase);
-    if (phrases.isEmpty) {
-      state = state.copyWith(error: 'Type at least one word or phrase.');
-      return;
-    }
-    final maxPhrases = _maxTiles ~/ 5;
-    if (phrases.length > maxPhrases) phrases = phrases.sublist(0, maxPhrases);
-
-    state = state.copyWith(
-        isGeneratingText: true, textDone: 0, textTotal: 0, error: null);
-    try {
-      final generated = await txt.generateTextTiles(
-        phrases,
-        options: txt.TextTileOptions(
-          orientation: state.settings.textOrientation,
-          color: state.textColor,
-        ),
-        gen: _ts(),
-      );
-
-      final results = List<TileAsset?>.filled(generated.length, null);
-      var done = 0;
-      state = state.copyWith(textTotal: generated.length);
-      Future<void> ingest(int i) async {
-        final g = generated[i];
-        try {
-          final upload = await _tilesApi.uploadTile(g.bytes, g.id, g.filename);
-          if (upload.isOk && upload.data != null) {
-            final analyzed =
-                await analyzeTileWithThumbnail(g.id, g.filename, g.bytes);
-            results[i] = TileAsset(
-              id: g.id,
-              descriptor: analyzed.descriptor,
-              thumbnail: analyzed.thumbnail,
-              blobUrl: upload.data!.blobUrl,
-              filename: g.filename,
-            );
-          }
-        } catch (_) {
-          // skip a failed tile; a few gaps don't ruin the mosaic
-        }
-        done++;
-        state = state.copyWith(textDone: done);
-      }
-
-      await _runPool(
-          generated.length, _uploadConcurrency, () => false, ingest);
-      final tiles = results.whereType<TileAsset>().toList();
-      // Text tiles REPLACE the current tile set (a project is only ever in one
-      // generated mode at a time).
-      state = state.copyWith(
-        tiles: tiles,
-        isGeneratingText: false,
-        clearPlan: true,
-        error: tiles.isEmpty ? 'Could not generate text tiles.' : null,
-      );
-      if (tiles.isNotEmpty) buildPlan();
-    } catch (e) {
-      state = state.copyWith(isGeneratingText: false, error: e.toString());
-    }
+  void setTextUppercase(bool v) {
+    state = state.copyWith(textUppercase: v);
+    _scheduleAutoSave();
   }
 
   // ── Ancient mosaic ───────────────────────────────────────────────────────
@@ -519,6 +444,10 @@ class StudioController extends Notifier<StudioState> {
   /// Reshuffle the stone scatter (same look settings, new layout).
   void newAncientLayout() =>
       state = state.copyWith(ancientSeedNonce: state.ancientSeedNonce + 1);
+
+  /// Reshuffle the word arrangement (same look settings, new layout).
+  void newWordartLayout() =>
+      state = state.copyWith(wordartSeedNonce: state.wordartSeedNonce + 1);
 
   /// Render the ancient mosaic on-device at [longSide] px and return PNG bytes.
   /// Ancient is client-rendered (no tiles / server), so export is local.
@@ -574,7 +503,13 @@ class StudioController extends Notifier<StudioState> {
     // Ancient modes render themselves (no tiles / matching), so never kick off
     // the heavy layout isolate — it would run pointlessly and jank the UI.
     final m = settings.mosaicMode;
-    if (m == 'ancient' || m == 'ancient-curved') return;
+    // Tile-less modes render themselves (no tiles / matching), so never kick off
+    // the heavy layout isolate — it would run pointlessly and jank the UI. Still
+    // persist their look settings (+ word-art phrases) via autosave.
+    if (m == 'ancient' || m == 'ancient-curved' || m == 'wordart') {
+      _scheduleAutoSave();
+      return;
+    }
     _debounce = Timer(const Duration(milliseconds: 180), buildPlan);
   }
 
@@ -622,8 +557,14 @@ class StudioController extends Notifier<StudioState> {
   }
 
   Future<void> _autoSaveProject() async {
-    if (!state.canPlan) return;
     final base = state.base;
+    if (base == null) return;
+    final m = state.settings.mosaicMode;
+    final isTileless =
+        m == 'ancient' || m == 'ancient-curved' || m == 'wordart';
+    // Tile modes need a tile set to be worth saving; tile-less modes persist
+    // base + settings + word-art phrases only (they have no tiles).
+    if (!isTileless && state.tiles.isEmpty) return;
     final tiles =
         state.tiles.map((t) => ProjectTileRef(t.blobUrl, t.filename)).toList();
     final api = ref.read(projectsApiProvider);
@@ -635,14 +576,16 @@ class StudioController extends Notifier<StudioState> {
             baseImageUrl: base?.blobUrl,
             baseImageName: base?.name,
             tiles: tiles,
-            settings: state.settings);
+            settings: state.settings,
+            texts: state.textInput);
       } else {
         final res = await api.create(
             name: base?.name ?? 'My mosaic',
             baseImageUrl: base?.blobUrl,
             baseImageName: base?.name,
             tiles: tiles,
-            settings: state.settings);
+            settings: state.settings,
+            texts: state.textInput);
         if (res.isOk && res.data != null && res.data!.isNotEmpty) {
           state = state.copyWith(currentProjectId: res.data);
         }
@@ -671,6 +614,7 @@ class StudioController extends Notifier<StudioState> {
         baseImageName: base?.name,
         tiles: tiles,
         settings: state.settings,
+        texts: state.textInput,
       );
       if (!res.isOk) {
         state = state.copyWith(error: res.error);
@@ -686,6 +630,7 @@ class StudioController extends Notifier<StudioState> {
       baseImageName: base?.name,
       tiles: tiles,
       settings: state.settings,
+      texts: state.textInput,
     );
     if (!res.isOk || res.data == null || res.data!.isEmpty) {
       state = state.copyWith(error: res.error);
@@ -743,6 +688,7 @@ class StudioController extends Notifier<StudioState> {
       state = state.copyWith(
           base: base,
           settings: settings,
+          textInput: p.texts ?? '',
           uploadTotal: p.tiles.length,
           uploadDone: 0);
 

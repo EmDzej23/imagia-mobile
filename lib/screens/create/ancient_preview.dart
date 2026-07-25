@@ -8,9 +8,11 @@ import 'package:flutter/material.dart';
 import '../../ancient/ancient_renderer.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
+import 'loupe_preview.dart';
 
-/// Long side (px) the ancient preview is rasterised at.
-const double _previewLong = 900;
+/// Long side (px) the ancient preview is rasterised at. High enough that the
+/// tap-to-zoom loupe (≈4.5×) stays crisp rather than upscaling the bitmap.
+const double _previewLong = 1400;
 
 /// Live ancient-mosaic preview. Samples the base once, then — debounced on any
 /// look-setting change — rebuilds the stone geometry and RASTERISES it to a
@@ -104,11 +106,9 @@ class _AncientPreviewState extends State<AncientPreview> {
       return const Center(
           child: CircularProgressIndicator(color: AppColors.accent));
     }
-    // Contain + centred, exactly like the tile-mosaic preview.
+    // Contain + centred, with a tap-to-zoom loupe like the tile-mosaic preview.
     return RepaintBoundary(
-      child: SizedBox.expand(
-        child: RawImage(image: img, fit: BoxFit.contain),
-      ),
+      child: LoupePreviewImage(image: img),
     );
   }
 }

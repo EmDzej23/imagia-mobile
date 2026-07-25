@@ -199,7 +199,10 @@ class _LoupePainter extends CustomPainter {
         continue;
       }
       canvas.drawImageRect(
-          img, centerCropSrc(img, p.width / p.height), dst, paint);
+          img,
+          centerCropSrc(img, p.width / p.height, topCrop: plan.cropPortraitTop),
+          dst,
+          paint);
     }
 
     if (overlay != null && tintStrength > 0) {

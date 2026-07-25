@@ -106,11 +106,10 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     'square',
     'landscape',
     'portrait',
-    'text',
     'ancient',
     'ancient-curved',
+    'wordart',
   ];
-  const validTextOrient = ['square', 'portrait', 'landscape', 'original'];
   const validGrout = ['dark', 'stone', 'light'];
   const validAncientShape = ['none', 'heart', 'basketball', 'flower'];
 
@@ -128,12 +127,6 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     baseBlur: clampD(input.baseBlur, 0, 5),
     colorBoost: clampD(input.colorBoost, 1.0, 2.0),
     autoContrast: clampD(input.autoContrast, 0, 1),
-    textContrast: clampD(input.textContrast, 0, 1),
-    textInvert: input.textInvert,
-    textThreshold: input.textThreshold,
-    textOrientation: validTextOrient.contains(input.textOrientation)
-        ? input.textOrientation
-        : 'square',
     ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
     ancientGrout: clampD(input.ancientGrout, 0, 4),
     ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),
@@ -146,6 +139,13 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     ancientShape: validAncientShape.contains(input.ancientShape)
         ? input.ancientShape
         : 'none',
+    wordartDensity: clampD(input.wordartDensity, 18, 100),
+    wordartRotation: clampD(input.wordartRotation, 0, 80),
+    wordartContrast: clampD(input.wordartContrast, -1, 1),
+    wordartPalette: clampD(jsRound(input.wordartPalette), 2, 64),
+    wordartGround: clampD(input.wordartGround, 0, 1),
+    wordartVivid: clampD(input.wordartVivid, 0, 1),
+    wordartEmpty: clampD(input.wordartEmpty, 0, 1),
     signalWeights: signalWeights,
   );
 }

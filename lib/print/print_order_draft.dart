@@ -47,20 +47,7 @@ class PrintOrderDraft {
   }
 
   /// Server catalogue key, e.g. `framed_portrait`.
-  String get productKey {
-    final t = switch (type) {
-      PrintType.framedPrint => 'framed',
-      PrintType.canvas => 'canvas',
-      PrintType.poster => 'poster',
-      PrintType.metal => 'metal',
-    };
-    final o = switch (orientation) {
-      PrintOrientation.square => 'square',
-      PrintOrientation.portrait => 'portrait',
-      PrintOrientation.landscape => 'landscape',
-    };
-    return '${t}_$o';
-  }
+  String get productKey => printProductKey(type, orientation);
 
   /// Resolution-independent crop the server applies to the high-res render.
   PrintCrop get cropNormalized => PrintCrop(

@@ -180,6 +180,24 @@ double printPriceEur(PrintType type, PrintOrientation orientation) {
   }
 }
 
+/// The server catalogue key for a product, e.g. `framed_portrait` — matches the
+/// `key` field returned by `GET /api/print/<provider>/products`, so the live
+/// (Creem-backed) price can be looked up per product.
+String printProductKey(PrintType type, PrintOrientation orientation) {
+  final t = switch (type) {
+    PrintType.framedPrint => 'framed',
+    PrintType.canvas => 'canvas',
+    PrintType.poster => 'poster',
+    PrintType.metal => 'metal',
+  };
+  final o = switch (orientation) {
+    PrintOrientation.square => 'square',
+    PrintOrientation.portrait => 'portrait',
+    PrintOrientation.landscape => 'landscape',
+  };
+  return '${t}_$o';
+}
+
 extension PrintOrientationInfo on PrintOrientation {
   String get label => switch (this) {
         PrintOrientation.square => 'Square',

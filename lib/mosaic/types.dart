@@ -135,10 +135,6 @@ class MosaicSettings {
     required this.baseBlur,
     required this.colorBoost,
     required this.autoContrast,
-    this.textContrast = 0.45,
-    this.textInvert = false,
-    this.textThreshold = false,
-    this.textOrientation = 'square',
     this.ancientStoneSize = 14,
     this.ancientGrout = 1.4,
     this.ancientIrregularity = 0.85,
@@ -147,6 +143,13 @@ class MosaicSettings {
     this.ancientGroutColor = 'dark',
     this.ancientCurviness = 0.55,
     this.ancientShape = 'none',
+    this.wordartDensity = 40,
+    this.wordartRotation = 0,
+    this.wordartContrast = 1,
+    this.wordartPalette = 64,
+    this.wordartGround = 0,
+    this.wordartVivid = 0.5,
+    this.wordartEmpty = 1,
     this.signalWeights,
   });
 
@@ -163,19 +166,6 @@ class MosaicSettings {
   double colorBoost;
   double autoContrast;
 
-  /// Text-mosaic only: contrast push on the grayscale base (0..1).
-  double textContrast;
-
-  /// Text-mosaic only: invert the grayscale base.
-  bool textInvert;
-
-  /// Text-mosaic only: hard 2-colour threshold (textContrast = cutoff).
-  bool textThreshold;
-
-  /// Text-mosaic only: tile/cell orientation ("square"|"portrait"|"landscape"|
-  /// "original"; "original" maps to the blocks layout).
-  String textOrientation;
-
   // Ancient-mosaic (tile-less stone renderer). Look settings only.
   double ancientStoneSize;
   double ancientGrout;
@@ -185,6 +175,15 @@ class MosaicSettings {
   String ancientGroutColor; // "dark" | "stone" | "light"
   double ancientCurviness; // curved-ancient only
   String ancientShape; // "none" | "heart" | "basketball" | "flower"
+
+  // Word-art (tile-less typographic renderer). Look settings only.
+  double wordartDensity; // largest word size at the reference long side (18..100)
+  double wordartRotation; // max tilt degrees (0..80)
+  double wordartContrast; // signed: >=0 light-on-dark, <0 dark-on-white (-1..1)
+  double wordartPalette; // quantise to N colours; 64 = full (photo) colours (2..64)
+  double wordartGround; // 0..1 ground / dark-floor brightness
+  double wordartVivid; // 0..1 letter vividness
+  double wordartEmpty; // 0..1 empty space (1 = leave dark areas bare)
 
   SignalWeights? signalWeights;
 
@@ -201,10 +200,6 @@ class MosaicSettings {
     double? baseBlur,
     double? colorBoost,
     double? autoContrast,
-    double? textContrast,
-    bool? textInvert,
-    bool? textThreshold,
-    String? textOrientation,
     double? ancientStoneSize,
     double? ancientGrout,
     double? ancientIrregularity,
@@ -213,6 +208,13 @@ class MosaicSettings {
     String? ancientGroutColor,
     double? ancientCurviness,
     String? ancientShape,
+    double? wordartDensity,
+    double? wordartRotation,
+    double? wordartContrast,
+    double? wordartPalette,
+    double? wordartGround,
+    double? wordartVivid,
+    double? wordartEmpty,
     SignalWeights? signalWeights,
   }) =>
       MosaicSettings(
@@ -228,10 +230,6 @@ class MosaicSettings {
         baseBlur: baseBlur ?? this.baseBlur,
         colorBoost: colorBoost ?? this.colorBoost,
         autoContrast: autoContrast ?? this.autoContrast,
-        textContrast: textContrast ?? this.textContrast,
-        textInvert: textInvert ?? this.textInvert,
-        textThreshold: textThreshold ?? this.textThreshold,
-        textOrientation: textOrientation ?? this.textOrientation,
         ancientStoneSize: ancientStoneSize ?? this.ancientStoneSize,
         ancientGrout: ancientGrout ?? this.ancientGrout,
         ancientIrregularity: ancientIrregularity ?? this.ancientIrregularity,
@@ -240,6 +238,13 @@ class MosaicSettings {
         ancientGroutColor: ancientGroutColor ?? this.ancientGroutColor,
         ancientCurviness: ancientCurviness ?? this.ancientCurviness,
         ancientShape: ancientShape ?? this.ancientShape,
+        wordartDensity: wordartDensity ?? this.wordartDensity,
+        wordartRotation: wordartRotation ?? this.wordartRotation,
+        wordartContrast: wordartContrast ?? this.wordartContrast,
+        wordartPalette: wordartPalette ?? this.wordartPalette,
+        wordartGround: wordartGround ?? this.wordartGround,
+        wordartVivid: wordartVivid ?? this.wordartVivid,
+        wordartEmpty: wordartEmpty ?? this.wordartEmpty,
         signalWeights: signalWeights ?? this.signalWeights,
       );
 
@@ -256,11 +261,6 @@ class MosaicSettings {
         baseBlur: (j['baseBlur'] as num).toDouble(),
         colorBoost: (j['colorBoost'] as num).toDouble(),
         autoContrast: (j['autoContrast'] as num).toDouble(),
-        textContrast:
-            j['textContrast'] == null ? 0.45 : (j['textContrast'] as num).toDouble(),
-        textInvert: j['textInvert'] as bool? ?? false,
-        textThreshold: j['textThreshold'] as bool? ?? false,
-        textOrientation: j['textOrientation'] as String? ?? 'square',
         ancientStoneSize:
             (j['ancientStoneSize'] as num?)?.toDouble() ?? 14,
         ancientGrout: (j['ancientGrout'] as num?)?.toDouble() ?? 1.4,
@@ -271,6 +271,13 @@ class MosaicSettings {
         ancientGroutColor: j['ancientGroutColor'] as String? ?? 'dark',
         ancientCurviness: (j['ancientCurviness'] as num?)?.toDouble() ?? 0.55,
         ancientShape: j['ancientShape'] as String? ?? 'none',
+        wordartDensity: (j['wordartDensity'] as num?)?.toDouble() ?? 40,
+        wordartRotation: (j['wordartRotation'] as num?)?.toDouble() ?? 0,
+        wordartContrast: (j['wordartContrast'] as num?)?.toDouble() ?? 1,
+        wordartPalette: (j['wordartPalette'] as num?)?.toDouble() ?? 64,
+        wordartGround: (j['wordartGround'] as num?)?.toDouble() ?? 0,
+        wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 0.5,
+        wordartEmpty: (j['wordartEmpty'] as num?)?.toDouble() ?? 1,
         signalWeights: j['signalWeights'] == null
             ? null
             : SignalWeights.fromJson(
@@ -290,10 +297,6 @@ class MosaicSettings {
         'baseBlur': baseBlur,
         'colorBoost': colorBoost,
         'autoContrast': autoContrast,
-        'textContrast': textContrast,
-        'textInvert': textInvert,
-        'textThreshold': textThreshold,
-        'textOrientation': textOrientation,
         'ancientStoneSize': ancientStoneSize,
         'ancientGrout': ancientGrout,
         'ancientIrregularity': ancientIrregularity,
@@ -302,6 +305,13 @@ class MosaicSettings {
         'ancientGroutColor': ancientGroutColor,
         'ancientCurviness': ancientCurviness,
         'ancientShape': ancientShape,
+        'wordartDensity': wordartDensity,
+        'wordartRotation': wordartRotation,
+        'wordartContrast': wordartContrast,
+        'wordartPalette': wordartPalette,
+        'wordartGround': wordartGround,
+        'wordartVivid': wordartVivid,
+        'wordartEmpty': wordartEmpty,
         'signalWeights': signalWeights?.toJson(),
       };
 }
@@ -558,6 +568,7 @@ class SlimMosaicPlan {
     required this.tintStrength,
     required this.baseBlur,
     required this.placements,
+    this.cropPortraitTop = false,
   });
 
   double baseWidth;
@@ -568,6 +579,11 @@ class SlimMosaicPlan {
   double baseBlur;
   List<SlimPlacement> placements;
 
+  /// Square layout only: crop PORTRAIT tiles to the top (keeps faces/heads) instead of
+  /// the centre; landscape tiles stay centre-cropped. Honoured by the on-device preview
+  /// painters AND sent to the server compositor (which reads the same flag).
+  bool cropPortraitTop;
+
   Map<String, dynamic> toJson() => {
         'baseWidth': baseWidth,
         'baseHeight': baseHeight,
@@ -575,6 +591,7 @@ class SlimMosaicPlan {
         'outputHeight': outputHeight,
         'tintStrength': tintStrength,
         'baseBlur': baseBlur,
+        'cropPortraitTop': cropPortraitTop,
         'placements': placements.map((p) => p.toJson()).toList(),
       };
 }

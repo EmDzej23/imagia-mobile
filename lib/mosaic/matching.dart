@@ -1589,14 +1589,34 @@ const int _coverageCandidates = 24;
 /// Cells sampled when ranking how hard each missing tile is to place.
 const int _coverageHardnessSamples = 512;
 
+/// Largest share of the mosaic this pass may rewrite. Coverage is worth having only
+/// while it is nearly free; past this the picture is being spent to seat photos that
+/// fit nowhere. With a library at or above the cell count, an unbounded pass consumes
+/// EVERY duplicated cell — measured at 6600 tiles / 6500 cells it rewrote 40% of the
+/// mosaic and doubled mean colour error (ΔE 2.6 → 5.7).
+const double _coverageMaxRewrite = 0.15;
+
+/// A swap may not land a tile more than this many times further (in colour) from the
+/// cell than the tile it displaces. `_visualScoreFast` deltas CANNOT police this — a
+/// ΔE≈40 miss costs only ~0.1 score units — so the guard is on colour distance.
+const double _coverageMaxDistRatioSq = 4;
+
+/// Absolute slack so cells that already match near-perfectly still accept a tile
+/// (brightness-weighted squared Lab; ~ΔL 5 at brightnessEmphasis 3.5).
+const double _coverageDistFloorSq = 300;
+
 class TileCoverageResult {
-  const TileCoverageResult(this.missing, this.introduced);
+  const TileCoverageResult(this.missing, this.introduced, this.budget);
 
   /// Tiles that were absent when the pass started.
   final int missing;
 
   /// Of those, how many it managed to place.
   final int introduced;
+
+  /// Cap on [introduced] (see `_coverageMaxRewrite`). If introduced == budget the
+  /// pass stopped early and some tiles were deliberately left out.
+  final int budget;
 }
 
 TileCoverageResult ensureTileCoverage(
@@ -1607,7 +1627,7 @@ TileCoverageResult ensureTileCoverage(
   Float64List? saliency,
 }) {
   final n = placements.length;
-  if (n < 2 || pool.length < 2) return const TileCoverageResult(0, 0);
+  if (n < 2 || pool.length < 2) return const TileCoverageResult(0, 0, 0);
 
   // Usage is counted by BASE id — a mirrored placement still spends its source photo.
   // Ids are interned to dense integers up front: the donor scan below runs
@@ -1639,7 +1659,7 @@ TileCoverageResult ensureTileCoverage(
   final missingTiles = pool
       .where((t) => useCount[idIndex[getBaseTileId(t.id)]!] == 0)
       .toList(growable: false);
-  if (missingTiles.isEmpty) return const TileCoverageResult(0, 0);
+  if (missingTiles.isEmpty) return const TileCoverageResult(0, 0, 0);
 
   // Region constants — same shape as in optimizePlacementSwaps / balanceGlobalPalette.
   final regionConsts = <RegionConstants>[];
@@ -1720,7 +1740,9 @@ TileCoverageResult ensureTileCoverage(
     }
     return (tile: tile, hardness: best);
   }).toList()
-    ..sort((a, b) => b.hardness.compareTo(a.hardness));
+    // Easiest-first: seat the tiles that cost nothing, and let the budget cut off the
+    // ones that would only land as wrong-colour blobs.
+    ..sort((a, b) => a.hardness.compareTo(b.hardness));
 
   // Bounded top-K by colour distance, kept in typed arrays so the scan over every
   // cell stays allocation-free.
@@ -1731,6 +1753,21 @@ TileCoverageResult ensureTileCoverage(
   // costs the library nothing. A cell can only ever LOSE eligibility here (this pass
   // never raises a usage count), so the list is compacted in place while it is scanned
   // and shrinks monotonically — the later, tighter iterations get progressively cheaper.
+  // How far each cell's CURRENT tile sits from it, in the same units as `d` below —
+  // the yardstick a candidate has to stay near.
+  final cellCurDist = Float64List(n);
+  for (var i = 0; i < n; i++) {
+    final cur = tileMap[baseTileIds[cellTile[i]]];
+    if (cur == null) {
+      cellCurDist[i] = double.infinity;
+      continue;
+    }
+    final dL = (cellL[i] - cur.averageLabColor.L) * be;
+    final da = cellA[i] - cur.averageLabColor.a;
+    final db = cellB[i] - cur.averageLabColor.b;
+    cellCurDist[i] = dL * dL + da * da + db * db;
+  }
+
   final donors = Int32List(n);
   var donorCount = 0;
   for (var i = 0; i < n; i++) {
@@ -1738,9 +1775,10 @@ TileCoverageResult ensureTileCoverage(
   }
 
   var introduced = 0;
+  final budget = (n * _coverageMaxRewrite).floor();
 
   for (final entry in order) {
-    if (donorCount == 0) break;
+    if (donorCount == 0 || introduced >= budget) break;
 
     final tile = entry.tile;
     final forbidden = forbiddenShapeMask(tile.aspectRatio);
@@ -1762,6 +1800,10 @@ TileCoverageResult ensureTileCoverage(
       final da = cellA[i] - tA;
       final db = cellB[i] - tB;
       final d = dL * dL + da * da + db * db;
+      // Colour guard: never make a cell dramatically worse than it already is.
+      if (d > cellCurDist[i] * _coverageMaxDistRatioSq + _coverageDistFloorSq) {
+        continue;
+      }
       if (candCount < _coverageCandidates) {
         candIdx[candCount] = i;
         candDist[candCount] = d;
@@ -1816,5 +1858,5 @@ TileCoverageResult ensureTileCoverage(
     introduced++;
   }
 
-  return TileCoverageResult(missingTiles.length, introduced);
+  return TileCoverageResult(missingTiles.length, introduced, budget);
 }

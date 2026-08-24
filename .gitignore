@@ -31,6 +31,10 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+# Flutter writes its output to `build` RELATIVE TO THE WORKING DIRECTORY, so a build
+# started from a subfolder (e.g. `assets/`) lands in `assets/build/` — which the
+# root-anchored rule above does not match. Unanchored, so any stray one is covered.
+build/
 /coverage/
 
 # Symbolication related

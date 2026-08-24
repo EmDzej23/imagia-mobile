@@ -191,6 +191,7 @@ SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
     outputHeight: getOutputHeight(baseWidth, baseHeight, settings.outputWidth),
     tintStrength: settings.tintStrength,
     baseBlur: settings.baseBlur,
+    outputSaturation: settings.outputSaturation,
     // Square cells are ambiguous about which part of a non-square tile to keep — anchor
     // portrait tiles to the top (faces) and leave landscape tiles centred.
     cropPortraitTop: settings.mosaicMode == 'square',

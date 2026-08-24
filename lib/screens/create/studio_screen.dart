@@ -7,6 +7,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/config.dart';
 import '../../mosaic/preview_painter.dart';
+import '../../mosaic/shared.dart'
+    show maxOutputSaturation, minOutputSaturation;
 import '../../mosaic/types.dart';
 import '../../print/print_catalog.dart' show isPrintRegionAllowed;
 import '../../services/haptics.dart';
@@ -616,6 +618,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                           tileImages: studio.tileImages,
                           baseImage: studio.base?.overlay,
                           tintStrength: studio.settings.tintStrength,
+                          outputSaturation: studio.settings.outputSaturation,
                           focusX: fx,
                           focusY: fy,
                           windowSize: windowSize,
@@ -744,6 +747,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                             tileImages: studio.tileImages,
                             baseImage: studio.base?.overlay,
                             tintStrength: settings.tintStrength,
+                            outputSaturation: settings.outputSaturation,
                           )
                         else
                           Center(
@@ -839,6 +843,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                         valueLabel: settings.tintStrength.toStringAsFixed(2),
                         onChanged: (v) =>
                             _controller.updateRenderParam(tintStrength: v),
+                      ),
+                      LabeledSlider(
+                        label: 'Saturation',
+                        value: settings.outputSaturation,
+                        min: minOutputSaturation,
+                        max: maxOutputSaturation,
+                        valueLabel:
+                            settings.outputSaturation.toStringAsFixed(2),
+                        onChanged: (v) =>
+                            _controller.updateRenderParam(outputSaturation: v),
                       ),
                       const Divider(
                           color: AppColors.border, height: AppSpacing.x6),
@@ -1190,12 +1204,14 @@ class _AnimatedMosaicPreview extends StatefulWidget {
     required this.tileImages,
     required this.baseImage,
     required this.tintStrength,
+    required this.outputSaturation,
   });
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
   final ui.Image? baseImage;
   final double tintStrength;
+  final double outputSaturation;
 
   @override
   State<_AnimatedMosaicPreview> createState() => _AnimatedMosaicPreviewState();
@@ -1226,6 +1242,7 @@ class _AnimatedMosaicPreviewState extends State<_AnimatedMosaicPreview> {
         tileImages: widget.tileImages,
         baseImage: widget.baseImage,
         tintStrength: widget.tintStrength,
+        outputSaturation: widget.outputSaturation,
         reveal: reveal,
       ),
     );
@@ -1242,6 +1259,7 @@ class _PlanLayer extends StatefulWidget {
     required this.tileImages,
     required this.baseImage,
     required this.tintStrength,
+    required this.outputSaturation,
     required this.reveal,
   });
 
@@ -1249,6 +1267,7 @@ class _PlanLayer extends StatefulWidget {
   final Map<String, ui.Image> tileImages;
   final ui.Image? baseImage;
   final double tintStrength;
+  final double outputSaturation;
   final bool reveal;
 
   @override
@@ -1283,6 +1302,7 @@ class _PlanLayerState extends State<_PlanLayer>
           tileImages: widget.tileImages,
           baseImage: widget.baseImage,
           tintStrength: widget.tintStrength,
+          outputSaturation: widget.outputSaturation,
           appear: appear,
         ),
       );

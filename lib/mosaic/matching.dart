@@ -1564,3 +1564,257 @@ void balanceGlobalPalette(
     scores[i] = candidateScore;
   }
 }
+
+// ── Full-library coverage ───────────────────────────────────────────────────
+//
+// Every pass before this one optimises per-cell fit, so a tile that is never any
+// cell's best match simply never appears — with a large library a big share of the
+// user's photos can be missing from the finished mosaic. This final pass takes the
+// tiles that got left out and moves each into the single cell where it costs the
+// least, always taking that cell from a tile that is already placed somewhere else,
+// so filling one hole can never open another.
+//
+// Runs LAST, after SA and the palette balance, because "every photo appears" is a
+// hard constraint: no later pass is allowed to evict what it just placed.
+// Port of `foto-mozaik/lib/mosaic/matching.ts: ensureTileCoverage`.
+
+/// `_visualScoreFast` returns exactly 100 for an orientation-illegal pairing. Real
+/// scores stay well under 10 (the colour-reject term is capped), so anything at or
+/// above this is the sentinel, not a merely bad match.
+const double _coverageRejectScore = 50;
+
+/// Fully score this many colour-nearest legal donor cells per missing tile.
+const int _coverageCandidates = 24;
+
+/// Cells sampled when ranking how hard each missing tile is to place.
+const int _coverageHardnessSamples = 512;
+
+class TileCoverageResult {
+  const TileCoverageResult(this.missing, this.introduced);
+
+  /// Tiles that were absent when the pass started.
+  final int missing;
+
+  /// Of those, how many it managed to place.
+  final int introduced;
+}
+
+TileCoverageResult ensureTileCoverage(
+  List<MosaicPlacement> placements,
+  List<TileDescriptor> pool,
+  Map<String, TileDescriptor> tileMap,
+  MosaicSettings settings, {
+  Float64List? saliency,
+}) {
+  final n = placements.length;
+  if (n < 2 || pool.length < 2) return const TileCoverageResult(0, 0);
+
+  // Usage is counted by BASE id — a mirrored placement still spends its source photo.
+  // Ids are interned to dense integers up front: the donor scan below runs
+  // (missing tiles x cells) times, and string hashing there dominates the pass.
+  final idIndex = <String, int>{};
+  final baseTileIds = <String>[];
+  int intern(String baseId) {
+    final existing = idIndex[baseId];
+    if (existing != null) return existing;
+    final idx = baseTileIds.length;
+    idIndex[baseId] = idx;
+    baseTileIds.add(baseId);
+    return idx;
+  }
+
+  final cellTile = Int32List(n);
+  for (var i = 0; i < n; i++) {
+    cellTile[i] = intern(getBaseTileId(placements[i].tileId));
+  }
+  for (final t in pool) {
+    intern(getBaseTileId(t.id));
+  }
+
+  final useCount = Int32List(baseTileIds.length);
+  for (var i = 0; i < n; i++) {
+    useCount[cellTile[i]]++;
+  }
+
+  final missingTiles = pool
+      .where((t) => useCount[idIndex[getBaseTileId(t.id)]!] == 0)
+      .toList(growable: false);
+  if (missingTiles.isEmpty) return const TileCoverageResult(0, 0);
+
+  // Region constants — same shape as in optimizePlacementSwaps / balanceGlobalPalette.
+  final regionConsts = <RegionConstants>[];
+  for (var i = 0; i < n; i++) {
+    final p = placements[i];
+    final regionAR = p.width / p.height;
+    final regionEdgeMean = _weightedEdgeMean(p.subregionEdges, null);
+    final rA = p.averageLabColor.a;
+    final rB = p.averageLabColor.b;
+    regionConsts.add(RegionConstants(
+      regionAR: regionAR,
+      cellIsPortrait: regionAR < 0.85,
+      cellIsLandscape: regionAR > 1.18,
+      regionEdgeMean: regionEdgeMean,
+      texThreshold: _adaptiveTextureThreshold(regionEdgeMean),
+      regionChroma: math.sqrt(rA * rA + rB * rB),
+      regionL: p.averageLabColor.L,
+      saliency: saliency != null ? saliency[i] : clampD(p.detailScore, 0, 1),
+    ));
+  }
+
+  final td = ResolvedTile();
+
+  // Baseline cost of what is currently in each cell — the swap price is measured
+  // against this, so we always give up the cell that loses the least.
+  final scores = Float64List(n);
+  for (var i = 0; i < n; i++) {
+    final tile = tileMap[baseTileIds[cellTile[i]]];
+    // A cell whose tile is unknown (shouldn't happen) is treated as free to take:
+    // a zero baseline makes every swap look expensive, so it is picked last.
+    scores[i] = tile != null
+        ? _visualScoreFast(placements[i], tile, settings, regionConsts[i], td)
+        : 0;
+  }
+
+  final be = (settings.signalWeights ?? defaultSignalWeights()).brightnessEmphasis;
+
+  // Per-cell scalars pulled out of the placement objects — the donor scan touches
+  // every one of these per missing tile.
+  final cellL = Float64List(n);
+  final cellA = Float64List(n);
+  final cellB = Float64List(n);
+  // Bit 1 = cell is landscape, bit 2 = portrait. Mirrors the hard orientation
+  // rejection at the top of `_visualScoreFast`, so the cheap pre-filter only ever
+  // shortlists cells the full scorer would accept.
+  final cellShape = Uint8List(n);
+  for (var i = 0; i < n; i++) {
+    final c = placements[i].averageLabColor;
+    cellL[i] = c.L;
+    cellA[i] = c.a;
+    cellB[i] = c.b;
+    final rc = regionConsts[i];
+    cellShape[i] = (rc.cellIsLandscape ? 1 : 0) | (rc.cellIsPortrait ? 2 : 0);
+  }
+
+  /// Cell-shape bits a tile of this aspect ratio may NOT go into.
+  int forbiddenShapeMask(double aspectRatio) {
+    if (aspectRatio < 0.85) return 1; // portrait tile: no landscape cell
+    if (aspectRatio > 1.18) return 2; // landscape tile: no portrait cell
+    return 1 | 2; // square tile: neither
+  }
+
+  // Hardest-first: a tile whose colour appears nowhere in the picture has the fewest
+  // tolerable homes, so it gets first pick before the good cells are taken. This only
+  // decides the ORDER, so a strided sample of the cells is enough.
+  final hardnessStride = math.max(1, (n / _coverageHardnessSamples).ceil());
+  final order = missingTiles.map((tile) {
+    final tL = tile.averageLabColor.L;
+    final tA = tile.averageLabColor.a;
+    final tB = tile.averageLabColor.b;
+    var best = double.infinity;
+    for (var i = 0; i < n; i += hardnessStride) {
+      final dL = (cellL[i] - tL) * be;
+      final da = cellA[i] - tA;
+      final db = cellB[i] - tB;
+      final d = dL * dL + da * da + db * db;
+      if (d < best) best = d;
+    }
+    return (tile: tile, hardness: best);
+  }).toList()
+    ..sort((a, b) => b.hardness.compareTo(a.hardness));
+
+  // Bounded top-K by colour distance, kept in typed arrays so the scan over every
+  // cell stays allocation-free.
+  final candIdx = Int32List(_coverageCandidates);
+  final candDist = Float64List(_coverageCandidates);
+
+  // Live donor list: cells whose tile is placed elsewhere too, so giving this one up
+  // costs the library nothing. A cell can only ever LOSE eligibility here (this pass
+  // never raises a usage count), so the list is compacted in place while it is scanned
+  // and shrinks monotonically — the later, tighter iterations get progressively cheaper.
+  final donors = Int32List(n);
+  var donorCount = 0;
+  for (var i = 0; i < n; i++) {
+    if (useCount[cellTile[i]] > 1) donors[donorCount++] = i;
+  }
+
+  var introduced = 0;
+
+  for (final entry in order) {
+    if (donorCount == 0) break;
+
+    final tile = entry.tile;
+    final forbidden = forbiddenShapeMask(tile.aspectRatio);
+    final tL = tile.averageLabColor.L;
+    final tA = tile.averageLabColor.a;
+    final tB = tile.averageLabColor.b;
+
+    var candCount = 0;
+    var worstSlot = 0;
+    var write = 0;
+    for (var d0 = 0; d0 < donorCount; d0++) {
+      final i = donors[d0];
+      // Drop cells that have stopped being donors since the list was built.
+      if (useCount[cellTile[i]] <= 1) continue;
+      donors[write++] = i;
+      if ((cellShape[i] & forbidden) != 0) continue;
+
+      final dL = (cellL[i] - tL) * be;
+      final da = cellA[i] - tA;
+      final db = cellB[i] - tB;
+      final d = dL * dL + da * da + db * db;
+      if (candCount < _coverageCandidates) {
+        candIdx[candCount] = i;
+        candDist[candCount] = d;
+        candCount++;
+        if (candCount == _coverageCandidates) {
+          worstSlot = 0;
+          for (var k = 1; k < _coverageCandidates; k++) {
+            if (candDist[k] > candDist[worstSlot]) worstSlot = k;
+          }
+        }
+      } else if (d < candDist[worstSlot]) {
+        candIdx[worstSlot] = i;
+        candDist[worstSlot] = d;
+        worstSlot = 0;
+        for (var k = 1; k < _coverageCandidates; k++) {
+          if (candDist[k] > candDist[worstSlot]) worstSlot = k;
+        }
+      }
+    }
+    donorCount = write;
+    // No legal cell anywhere (e.g. a portrait photo in a landscape-only grid).
+    if (candCount == 0) continue;
+
+    var bestIdx = -1;
+    var bestScore = 0.0;
+    var bestDelta = double.infinity;
+    for (var k = 0; k < candCount; k++) {
+      final i = candIdx[k];
+      final score =
+          _visualScoreFast(placements[i], tile, settings, regionConsts[i], td);
+      if (score >= _coverageRejectScore) continue;
+      final delta = score - scores[i];
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestIdx = i;
+        bestScore = score;
+      }
+    }
+    if (bestIdx < 0) continue;
+
+    // Commit: the displaced tile loses one use, the missing tile gains its first.
+    useCount[cellTile[bestIdx]]--;
+    final newTileIdx = idIndex[getBaseTileId(tile.id)]!;
+    placements[bestIdx].tileId = tile.id;
+    placements[bestIdx].tileName = tile.name;
+    // Raw, not _toFixed4 — matches the web pass (and balanceGlobalPalette); only the
+    // initial selectors round to 4dp.
+    placements[bestIdx].score = bestScore;
+    scores[bestIdx] = bestScore;
+    cellTile[bestIdx] = newTileIdx;
+    useCount[newTileIdx] = 1;
+    introduced++;
+  }
+
+  return TileCoverageResult(missingTiles.length, introduced);
+}

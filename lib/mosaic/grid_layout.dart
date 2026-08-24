@@ -287,12 +287,17 @@ List<MosaicPlacement> buildGridLayout({
       ? totalGridCells
       : jsRound(totalGridCells / cellsPerTile).toInt();
 
+  // The tiles this layout is actually allowed to draw from — landscape/portrait grids
+  // exclude cross-orientation photos outright, so those can never be "missing".
+  // Everything else can draw on the whole library. Used by the coverage pass below.
+  var eligibleTiles = tiles;
   if (uniformMode) {
     final cellAR =
         mode == 'landscape' ? 3 / 2 : mode == 'portrait' ? 2 / 3 : 1.0;
     final pool = (mode == 'landscape' || mode == 'portrait')
         ? (tilePools[cellAR] ?? tiles)
         : tiles;
+    eligibleTiles = pool;
     final resolved = preResolveTiles(pool, cellAR);
     _fillUniformGrid(M, N, cellW, cellH, cellSaliency, resolved, analyzer,
         settings, placements, grid, pool.length, estimatedPlacements);
@@ -329,11 +334,17 @@ List<MosaicPlacement> buildGridLayout({
   final saliency = _computePlacementSaliency(
       placements, adjacency, baseWidth, baseHeight, faceRegions);
 
-  final saBudgetFactor = placements.isNotEmpty &&
-          placements.length <= _optimalAssignmentMaxRegions
-      ? 0.25
-      : 1.0;
-  if (saBudgetFactor < 1.0) {
+  // Vogel + best-of-N seeded SA path is gated purely on region count. The SA iteration
+  // BUDGET is separate and admin-overridable (settings.saBudgetFactor) so it can be A/B'd
+  // without also toggling Vogel on/off.
+  final isOptimalPath = placements.isNotEmpty &&
+      placements.length <= _optimalAssignmentMaxRegions;
+  // Measured on web: 0.5 lifts raw composition SSIM over the old 0.25 with acceptable
+  // cost on desktop. Mobile stays 0.25 (SA is main-thread + its iteration cap is already
+  // lower, so doubling it there would hurt build time on low-end phones).
+  final defaultSaBudget = isOptimalPath ? (isMobile ? 0.25 : 0.5) : 1.0;
+  final saBudgetFactor = settings.saBudgetFactor ?? defaultSaBudget;
+  if (isOptimalPath) {
     try {
       _vogelAssign(placements, tiles, settings, saliency);
     } catch (_) {
@@ -388,6 +399,12 @@ List<MosaicPlacement> buildGridLayout({
     balanceGlobalPalette(placements, tileMap, settings,
         adjacency: adjacency, saliency: saliency);
   }
+
+  // Every tile in the library appears at least once. Runs last so nothing can evict
+  // what it places; each hole is filled from a cell whose tile is used elsewhere, so
+  // it can never open a new one. A no-op when the library is already fully used.
+  ensureTileCoverage(placements, eligibleTiles, tileMap, settings,
+      saliency: saliency);
 
   return placements;
 }

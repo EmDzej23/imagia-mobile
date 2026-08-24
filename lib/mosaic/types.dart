@@ -153,6 +153,8 @@ class MosaicSettings {
     this.wordartCoverage = 0.5,
     this.wordartCaption = '',
     this.wordartTitleColor = '',
+    this.outputSaturation = 1.2,
+    this.saBudgetFactor,
     this.signalWeights,
   });
 
@@ -191,6 +193,15 @@ class MosaicSettings {
   String wordartCaption; // in-artwork photo title (upper-cased); '' = off
   String wordartTitleColor; // CSS colour ('#rrggbb'/'rgb(..)') for the title; '' = auto
 
+  /// Output saturation grade applied to the FINISHED composite (tiles + tint), not to
+  /// any single layer. 1 = untouched; above 1 punches the colour up. Same matrix the
+  /// server applies via Sharp `.recomb()`, so preview / video / export all match.
+  double outputSaturation;
+
+  /// Admin override for the simulated-annealing iteration budget. Null = use the
+  /// per-platform default in `buildGridLayout`.
+  double? saBudgetFactor;
+
   SignalWeights? signalWeights;
 
   MosaicSettings copyWith({
@@ -224,6 +235,8 @@ class MosaicSettings {
     double? wordartCoverage,
     String? wordartCaption,
     String? wordartTitleColor,
+    double? outputSaturation,
+    double? saBudgetFactor,
     SignalWeights? signalWeights,
   }) =>
       MosaicSettings(
@@ -257,6 +270,8 @@ class MosaicSettings {
         wordartCoverage: wordartCoverage ?? this.wordartCoverage,
         wordartCaption: wordartCaption ?? this.wordartCaption,
         wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
+        outputSaturation: outputSaturation ?? this.outputSaturation,
+        saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
         signalWeights: signalWeights ?? this.signalWeights,
       );
 
@@ -293,6 +308,8 @@ class MosaicSettings {
         wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
         wordartCaption: j['wordartCaption'] as String? ?? '',
         wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
+        outputSaturation: (j['outputSaturation'] as num?)?.toDouble() ?? 1.2,
+        saBudgetFactor: (j['saBudgetFactor'] as num?)?.toDouble(),
         signalWeights: j['signalWeights'] == null
             ? null
             : SignalWeights.fromJson(
@@ -330,6 +347,8 @@ class MosaicSettings {
         'wordartCoverage': wordartCoverage,
         'wordartCaption': wordartCaption,
         'wordartTitleColor': wordartTitleColor,
+        'outputSaturation': outputSaturation,
+        if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
         'signalWeights': signalWeights?.toJson(),
       };
 }
@@ -566,6 +585,7 @@ class MosaicPlan {
     required this.tintStrength,
     required this.baseBlur,
     required this.placements,
+    this.outputSaturation = 1.0,
   });
 
   double baseWidth;
@@ -574,6 +594,9 @@ class MosaicPlan {
   double outputHeight;
   double tintStrength;
   double baseBlur;
+
+  /// See [MosaicSettings.outputSaturation]. 1 = untouched.
+  double outputSaturation;
   List<MosaicPlacement> placements;
 }
 
@@ -587,6 +610,7 @@ class SlimMosaicPlan {
     required this.baseBlur,
     required this.placements,
     this.cropPortraitTop = false,
+    this.outputSaturation = 1.0,
   });
 
   double baseWidth;
@@ -602,6 +626,11 @@ class SlimMosaicPlan {
   /// painters AND sent to the server compositor (which reads the same flag).
   bool cropPortraitTop;
 
+  /// Output saturation grade over the FINISHED composite (see
+  /// [MosaicSettings.outputSaturation]). Sent to the server compositor so the
+  /// high-res export carries the same grade as the on-device preview.
+  double outputSaturation;
+
   Map<String, dynamic> toJson() => {
         'baseWidth': baseWidth,
         'baseHeight': baseHeight,
@@ -610,6 +639,7 @@ class SlimMosaicPlan {
         'tintStrength': tintStrength,
         'baseBlur': baseBlur,
         'cropPortraitTop': cropPortraitTop,
+        'outputSaturation': outputSaturation,
         'placements': placements.map((p) => p.toJson()).toList(),
       };
 }

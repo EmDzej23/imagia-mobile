@@ -108,6 +108,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
         tileImages: s.tileImages,
         baseImage: s.base?.overlay,
         tintStrength: s.settings.tintStrength,
+        outputSaturation: s.settings.outputSaturation,
       ).paint(canvas, Size(w.toDouble(), h.toDouble()));
       final img = await rec.endRecording().toImage(w, h);
       if (!mounted) {

@@ -3,7 +3,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import '../mosaic/shared.dart' show getBaseTileId, isTileFlipped;
+import '../mosaic/shared.dart'
+    show getBaseTileId, isTileFlipped, saturationColorFilter;
 import '../mosaic/types.dart';
 
 /// Curated mobile animation styles. All output a 9:16 branded "poster": the
@@ -114,6 +115,7 @@ class VideoAnim {
     required this.states,
     required this.tintStrength,
     required this.contentRect,
+    this.outputSaturation = 1.0,
     this.focusX,
     this.focusY,
     this.caption,
@@ -124,6 +126,10 @@ class VideoAnim {
   final List<VideoTile> tiles;
   final List<TileAnimState> states;
   final double tintStrength;
+
+  /// Output saturation grade over the finished mosaic — applied on EVERY frame so
+  /// the clip is colour-matched to the still export from the first frame to the last.
+  final double outputSaturation;
 
   /// Where the mosaic sits within the centre band (for the tint overlay + frame).
   final Rect contentRect;
@@ -186,6 +192,7 @@ VideoAnim buildVideoAnim({
     tiles: tiles,
     states: states,
     tintStrength: plan.tintStrength,
+    outputSaturation: plan.outputSaturation,
     contentRect: Rect.fromLTWH(
         fit.ox, fit.oy, plan.baseWidth * fit.scale, plan.baseHeight * fit.scale),
     focusX: fx,
@@ -386,9 +393,17 @@ void _drawTile(
   ui.Image? overlay,
   ui.Rect? overlaySrc,
   double overlayAlpha = 0,
+  double bleed = 0,
 }) {
   final src = _centerCrop(img, w / h);
-  final dst = ui.Rect.fromLTWH(-w / 2, -h / 2, w, h);
+  // Sub-pixel seam guard. Neighbouring cells meet on a FRACTIONAL device pixel, so
+  // the wall behind shows through the shared edge — and because the camera zoom moves
+  // every frame, those seams strobe. That is the flicker between tiles. Overdrawing
+  // each cell by ~one device pixel makes neighbours overlap so nothing can show
+  // through; the overlap stays under a pixel on screen, hidden by the cover-crop.
+  final bw = w + bleed * 2;
+  final bh = h + bleed * 2;
+  final dst = ui.Rect.fromLTWH(-bw / 2, -bh / 2, bw, bh);
   canvas.save();
   canvas.translate(x + w / 2, y + h / 2);
   if (rotation != 0) canvas.rotate(rotation);
@@ -572,14 +587,24 @@ void _drawPoster(
   canvas.save();
   canvas.clipRRect(
       RRect.fromRectAndRadius(c, Radius.circular(c.width * 0.012)));
+  // Grade the FINISHED mosaic (tiles + tint), not the mat or the wall — same order
+  // and same matrix as the still export, so the poster in the video is the poster
+  // the user downloads.
+  final grade = saturationColorFilter(anim.outputSaturation);
+  if (grade != null) {
+    canvas.saveLayer(c, ui.Paint()..colorFilter = grade);
+  }
+  final bleed = 0.75 / math.max(1.0, s);
   for (final t in anim.tiles) {
     final img = tileImages[getBaseTileId(t.tileId)];
     if (img == null) continue;
-    _drawTile(canvas, img, isTileFlipped(t.tileId), t.x, t.y, t.w, t.h, 0, 1);
+    _drawTile(canvas, img, isTileFlipped(t.tileId), t.x, t.y, t.w, t.h, 0, 1,
+        bleed: bleed);
   }
   if (anim.tintStrength > 0 && overlay != null) {
     _drawTint(canvas, overlay, c, anim.tintStrength);
   }
+  if (grade != null) canvas.restore();
   canvas.restore();
   canvas.restore(); // saveLayer
 }
@@ -665,6 +690,12 @@ void _drawAnimatedTiles(
   canvas.scale(zoom, zoom);
   canvas.translate(-fx, -fy);
 
+  // Grade the finished mosaic on every frame — including the deep-zoom opening, which
+  // is drawn straight from the source tiles. Grading only at the settled end would pop
+  // the colour mid-clip. The wall behind stays untouched.
+  final grade = saturationColorFilter(anim.outputSaturation);
+  if (grade != null) canvas.saveLayer(null, ui.Paint()..colorFilter = grade);
+
   if (anim.style == VideoStyle.morph && morphBase != null) {
     final a = math.max(0, 1.0 - progress * 2.2).toDouble();
     if (a > 0) {
@@ -693,6 +724,9 @@ void _drawAnimatedTiles(
   final oh = overlay?.height.toDouble() ?? 0;
 
   const scaleOvershoot = 0.15;
+  // Device-pixel seam bleed converted to world units — the tiles are drawn inside
+  // the camera transform, so it shrinks as the camera zooms in.
+  final tileBleed = 0.75 / math.max(1.0, zoom);
   for (final st in anim.states) {
     final t = _tileEased(progress, st.stagger, anim.style);
     var scale = 1.0;
@@ -705,7 +739,16 @@ void _drawAnimatedTiles(
     final y = st.startY + (st.endY - st.startY) * t;
     final dw = st.startW + (st.endW - st.startW) * t;
     final dh = st.startH + (st.endH - st.startH) * t;
-    if (x + dw < visL || x > visR || y + dh < visT || y > visB) continue;
+    // Cull margin covers the extra reach a rotated / overshoot-scaled tile has beyond
+    // its axis-aligned box — without it a tile at the frame edge is dropped while still
+    // partly on screen, which reads as a corner popping in and out as the camera drifts.
+    final cullMargin = math.max(dw, dh) * 0.75;
+    if (x + dw + cullMargin < visL ||
+        x - cullMargin > visR ||
+        y + dh + cullMargin < visT ||
+        y - cullMargin > visB) {
+      continue;
+    }
     final img = tileImages[getBaseTileId(st.tileId)];
     if (img == null) continue;
 
@@ -724,7 +767,8 @@ void _drawAnimatedTiles(
         st.startRotation * (1 - t), scale,
         overlay: perTileOverlay ? overlay : null,
         overlaySrc: overlaySrc,
-        overlayAlpha: perTileOverlay ? anim.tintStrength : 0);
+        overlayAlpha: perTileOverlay ? anim.tintStrength : 0,
+        bleed: tileBleed);
   }
 
   // Full-band overlay for the styles that don't carry it per-tile (deepZoom &
@@ -733,6 +777,7 @@ void _drawAnimatedTiles(
     _drawTint(canvas, overlay, anim.contentRect, anim.tintStrength);
   }
 
+  if (grade != null) canvas.restore();
   canvas.restore();
 }
 

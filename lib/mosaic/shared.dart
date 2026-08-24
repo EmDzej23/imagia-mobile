@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show ColorFilter;
 
 import 'types.dart';
 
@@ -16,6 +17,10 @@ const double overlayBlurCellFactor = 0.7;
 
 const double _originalCellsPerTile = 3.0;
 const double _minTilesOriginalThreshold = 250;
+
+/// Output-saturation slider bounds. 1 = untouched (the floor); above 1 punches up.
+const double minOutputSaturation = 1.0;
+const double maxOutputSaturation = 1.5;
 
 // ── JS-faithful numeric helpers ─────────────────────────────────────────────
 
@@ -70,8 +75,28 @@ MosaicSettings defaultSettings() => MosaicSettings(
       baseBlur: 1,
       colorBoost: 1.0,
       autoContrast: 0,
+      outputSaturation: 1.2,
       signalWeights: defaultSignalWeights(),
     );
+
+/// Luminance-preserving saturation matrix (the SVG/CSS `saturate()` matrix, Rec.709
+/// weights) as a Flutter 4x5 colour matrix. Shared so the preview painters, the loupe
+/// and the video all run the SAME maths the server compositor runs via Sharp
+/// `.recomb()` — see `foto-mozaik/lib/mosaic/shared.ts: saturationMatrix`.
+///
+/// Returns null at s == 1 so callers can skip the layer entirely (the default-off path
+/// costs nothing).
+ColorFilter? saturationColorFilter(double saturation) {
+  final s = clampD(saturation, minOutputSaturation, maxOutputSaturation);
+  if (s == 1) return null;
+  const r = 0.213, g = 0.715, b = 0.072;
+  return ColorFilter.matrix(<double>[
+    r + (1 - r) * s, g - g * s, b - b * s, 0, 0, //
+    r - r * s, g + (1 - g) * s, b - b * s, 0, 0, //
+    r - r * s, g - g * s, b + (1 - b) * s, 0, 0, //
+    0, 0, 0, 1, 0, //
+  ]);
+}
 
 bool isMinimumDetailOriginalMode(MosaicSettings settings) {
   if (settings.mosaicMode != 'original') return false;
@@ -131,6 +156,8 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     baseBlur: clampD(input.baseBlur, 0, 5),
     colorBoost: clampD(input.colorBoost, 1.0, 2.0),
     autoContrast: clampD(input.autoContrast, 0, 1),
+    outputSaturation: clampD(
+        input.outputSaturation, minOutputSaturation, maxOutputSaturation),
     ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
     ancientGrout: clampD(input.ancientGrout, 0, 4),
     ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),

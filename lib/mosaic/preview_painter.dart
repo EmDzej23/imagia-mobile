@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'shared.dart' show saturationColorFilter;
 import 'types.dart';
 
 /// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
@@ -59,8 +60,10 @@ class MosaicPreviewPainter extends CustomPainter {
     required this.tileImages,
     this.baseImage,
     double? tintStrength,
+    double? outputSaturation,
     this.appear = 1.0,
-  }) : tintStrength = tintStrength ?? plan.tintStrength;
+  })  : tintStrength = tintStrength ?? plan.tintStrength,
+        outputSaturation = outputSaturation ?? plan.outputSaturation;
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
@@ -69,6 +72,10 @@ class MosaicPreviewPainter extends CustomPainter {
   /// The tint overlay strength. Kept separate from [plan] so adjusting the tint
   /// slider repaints instantly without rebuilding the (matching) plan.
   final double tintStrength;
+
+  /// Output saturation grade. Also kept separate from [plan] so the slider repaints
+  /// without a replan.
+  final double outputSaturation;
 
   /// Reveal progress 0→1. At 1 the steady-state fast path runs (no per-tile
   /// transform); below 1 tiles fade + scale + drift into place, staggered.
@@ -86,6 +93,16 @@ class MosaicPreviewPainter extends CustomPainter {
 
     canvas.save();
     canvas.translate(fit.ox, fit.oy);
+
+    // Output-saturation grade over the FINISHED composite (tiles + tint) so it reads
+    // as one photographic grade rather than a per-layer effect — the same order the
+    // server compositor uses, so the export matches what is on screen. One layer for
+    // the whole mosaic; skipped entirely at saturation 1.
+    final grade = saturationColorFilter(outputSaturation);
+    if (grade != null) {
+      canvas.saveLayer(
+          Rect.fromLTWH(0, 0, fit.drawW, fit.drawH), Paint()..colorFilter = grade);
+    }
 
     final paint = Paint()
       ..filterQuality = FilterQuality.medium
@@ -152,6 +169,7 @@ class MosaicPreviewPainter extends CustomPainter {
       );
     }
 
+    if (grade != null) canvas.restore();
     canvas.restore();
   }
 
@@ -160,6 +178,7 @@ class MosaicPreviewPainter extends CustomPainter {
       old.plan != plan ||
       old.baseImage != baseImage ||
       old.tintStrength != tintStrength ||
+      old.outputSaturation != outputSaturation ||
       old.appear != appear ||
       old.tileImages.length != tileImages.length;
 }
@@ -176,7 +195,8 @@ class MosaicZoomPainter extends CustomPainter {
     required this.windowSize,
     this.baseImage,
     this.tintStrength = 0,
-  });
+    double? outputSaturation,
+  }) : outputSaturation = outputSaturation ?? plan.outputSaturation;
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
@@ -185,6 +205,7 @@ class MosaicZoomPainter extends CustomPainter {
   final double focusY;
   final double windowSize;
   final double tintStrength;
+  final double outputSaturation;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -193,6 +214,12 @@ class MosaicZoomPainter extends CustomPainter {
     final oy = size.height / 2 - focusY * s;
 
     canvas.clipRect(Offset.zero & size);
+    // Same grade as the full preview, so the loupe never reads a different colour
+    // from the picture behind it.
+    final grade = saturationColorFilter(outputSaturation);
+    if (grade != null) {
+      canvas.saveLayer(Offset.zero & size, Paint()..colorFilter = grade);
+    }
     final paint = Paint()
       ..filterQuality = FilterQuality.high
       ..isAntiAlias = false;
@@ -239,6 +266,8 @@ class MosaicZoomPainter extends CustomPainter {
           ..filterQuality = FilterQuality.high,
       );
     }
+
+    if (grade != null) canvas.restore();
   }
 
   @override
@@ -247,5 +276,6 @@ class MosaicZoomPainter extends CustomPainter {
       old.focusX != focusX ||
       old.focusY != focusY ||
       old.windowSize != windowSize ||
-      old.tintStrength != tintStrength;
+      old.tintStrength != tintStrength ||
+      old.outputSaturation != outputSaturation;
 }

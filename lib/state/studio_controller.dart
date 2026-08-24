@@ -513,16 +513,20 @@ class StudioController extends Notifier<StudioState> {
     _debounce = Timer(const Duration(milliseconds: 180), buildPlan);
   }
 
-  /// Updates a render-overlay parameter (tint / blur). These don't affect tile
-  /// matching, so no replan — the preview repaints instantly and the value is
-  /// synced into the plan so the server render matches.
-  void updateRenderParam({double? tintStrength, double? baseBlur}) {
-    final settings = state.settings
-        .copyWith(tintStrength: tintStrength, baseBlur: baseBlur);
+  /// Updates a render-overlay parameter (tint / blur / output saturation). These
+  /// don't affect tile matching, so no replan — the preview repaints instantly and
+  /// the value is synced into the plan so the server render matches.
+  void updateRenderParam(
+      {double? tintStrength, double? baseBlur, double? outputSaturation}) {
+    final settings = state.settings.copyWith(
+        tintStrength: tintStrength,
+        baseBlur: baseBlur,
+        outputSaturation: outputSaturation);
     final plan = state.plan;
     if (plan != null) {
       if (tintStrength != null) plan.tintStrength = tintStrength;
       if (baseBlur != null) plan.baseBlur = baseBlur;
+      if (outputSaturation != null) plan.outputSaturation = outputSaturation;
     }
     state = state.copyWith(settings: settings);
   }

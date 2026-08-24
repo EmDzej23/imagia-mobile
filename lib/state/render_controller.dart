@@ -1,7 +1,11 @@
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/render_api.dart';
 import '../wordart/parse_texts.dart';
+import '../wordart/wordart_renderer.dart';
 import '../services/haptics.dart';
 import '../services/notifications.dart';
 import 'auth_controller.dart';
@@ -138,11 +142,15 @@ class RenderController extends Notifier<RenderUiState> {
 
     final s = studio.settings;
     final Map<String, dynamic> params;
+    Map<String, dynamic>? bakedLayout;
     if (isWord) {
       final phrases =
           parseTextPhrases(studio.textInput, uppercase: studio.textUppercase);
+      final phraseList = phrases.isEmpty ? const ['WORD'] : phrases;
+      final caption = s.wordartCaption.trim();
+      final titleColor = s.wordartTitleColor.trim();
       params = {
-        'phrases': phrases.isEmpty ? const ['WORD'] : phrases,
+        'phrases': phraseList,
         'density': s.wordartDensity,
         'rotation': s.wordartRotation,
         'contrast': s.wordartContrast,
@@ -150,8 +158,49 @@ class RenderController extends Notifier<RenderUiState> {
         'ground': s.wordartGround,
         'vivid': s.wordartVivid,
         'empty': s.wordartEmpty,
+        'coverage': s.wordartCoverage,
         'seedNonce': studio.wordartSeedNonce,
+        'caption': caption,
+        'captionColor': titleColor.isEmpty ? null : titleColor,
       };
+      // Bake the layout in-app (identical to the preview) so the 10K export reproduces THIS
+      // exact arrangement instead of re-packing on the server (which diverges by engine).
+      try {
+        final img = base.thumbnail;
+        final data = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (data != null) {
+          final sw = img.width, sh = img.height;
+          const previewLong = 1400.0; // must match wordart_preview._previewLong
+          final scale = previewLong / math.max(sw, sh);
+          final lw = (sw * scale).round(), lh = (sh * scale).round();
+          if (lw >= 2 && lh >= 2) {
+            final geo = buildWordArtGeometry(
+              data.buffer.asUint8List(),
+              sw,
+              sh,
+              lw.toDouble(),
+              lh.toDouble(),
+              WordArtParams(
+                phrases: phraseList,
+                density: s.wordartDensity,
+                rotation: s.wordartRotation,
+                contrast: s.wordartContrast,
+                palette: s.wordartPalette.round(),
+                ground: s.wordartGround,
+                vivid: s.wordartVivid,
+                empty: s.wordartEmpty,
+                coverage: s.wordartCoverage,
+                seedNonce: studio.wordartSeedNonce,
+                caption: caption,
+                captionColor: titleColor.isEmpty ? null : titleColor,
+              ),
+            );
+            bakedLayout = wordArtLayoutJson(geo, lw, lh);
+          }
+        }
+      } catch (_) {
+        /* baking failed — server will re-render from params */
+      }
     } else {
       final curved = mode == 'ancient-curved';
       params = {
@@ -172,6 +221,7 @@ class RenderController extends Notifier<RenderUiState> {
       mode: mode,
       baseUrl: baseUrl,
       params: params,
+      bakedLayout: bakedLayout,
       fileName: '${base.name}-$suffix',
       longSide: 10000,
     );

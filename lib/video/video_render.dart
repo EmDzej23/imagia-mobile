@@ -24,11 +24,16 @@ extension VideoStyleInfo on VideoStyle {
   bool get isInPlace => this == VideoStyle.morph;
 }
 
-// Layout of the 9:16 frame: top strip = caption, centre band = mosaic, bottom
-// strip = branding. Fractions of the video height/width.
-const double _topBand = 0.135;
-const double _bottomBand = 0.20;
+// Layout of the 9:16 frame: a small top margin, the mosaic sitting HIGH, then the
+// caption directly below the image, then the branding at the bottom. Keeping the
+// caption right under the image (not in a top strip) keeps it in Instagram/TikTok's
+// safe centre zone — their Reels UI covers the top header and the bottom third.
+// Fractions of the video height/width.
+const double _topBand = 0.06;
+const double _bottomBand = 0.30;
 const double _sidePad = 0.05;
+// The caption's baseline must stay above this (the branding lockup + IG's overlay).
+const double _captionMaxBottom = 0.80;
 
 const String _brandTitle = 'Imagia';
 const String _brandSlogan = 'Made of moments';
@@ -425,11 +430,11 @@ void _drawTint(ui.Canvas canvas, ui.Image overlay, Rect content, double alpha) {
   );
 }
 
-void _drawCaption(
-    ui.Canvas canvas, double vw, double vh, String text, double appear) {
+void _drawCaption(ui.Canvas canvas, double vw, double vh, String text,
+    double appear, double contentBottom) {
   if (appear <= 0 || text.isEmpty) return;
   final a = appear.clamp(0.0, 1.0);
-  final slide = (1 - a) * vh * 0.03; // ease down from above
+  final slide = (1 - a) * vh * 0.02; // ease up from just below the image
   final size = vw * 0.055;
   final para = (ui.ParagraphBuilder(ui.ParagraphStyle(
     textAlign: TextAlign.center,
@@ -450,9 +455,12 @@ void _drawCaption(
         ..addText(text))
       .build()
     ..layout(ui.ParagraphConstraints(width: vw * 0.86));
-  final centerY = vh * _topBand * 0.52;
-  canvas.drawParagraph(
-      para, ui.Offset(vw * 0.07, centerY - para.height / 2 - slide));
+  // Sit right beneath the mosaic image, but never let it slip into the bottom
+  // branding / Instagram's overlay.
+  final gap = vh * 0.022;
+  final maxTop = vh * _captionMaxBottom - para.height;
+  final top = math.min(contentBottom + gap, maxTop) + slide;
+  canvas.drawParagraph(para, ui.Offset(vw * 0.07, top));
 }
 
 void _drawBranding(
@@ -603,11 +611,11 @@ void drawVideoFrame(
     _drawAnimatedTiles(canvas, anim, tileImages, morphBase, overlay, progress);
   }
 
-  // Animated overlays: caption above, branding below.
+  // Animated overlays: caption directly below the image, branding at the bottom.
   final timing = _overlayTiming(anim.style);
   if (anim.caption != null && anim.caption!.isNotEmpty) {
     _drawCaption(canvas, vw, vh, anim.caption!,
-        _appearSeg(progress, timing.cap, 0.14));
+        _appearSeg(progress, timing.cap, 0.14), anim.contentRect.bottom);
   }
   _drawBranding(
       canvas, vw, vh, logo, _appearSeg(progress, timing.brand, 0.16));

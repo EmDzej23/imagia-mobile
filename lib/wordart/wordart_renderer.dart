@@ -34,8 +34,42 @@ const double _gradEps = 0.02; // below this gradient → keep word upright
 const int _fullPalette = 64; // palette ≥ this → no quantisation
 const double _readMargin = 62; // min luminance gap the ink keeps from the ground
 const double _mute = 0.55; // desaturate the ground toward its own grey
+// Detail-aware composition: words shrink where the photo has fine detail
+// (eyes/lips/contours) so features resolve; big words fill the flat masses; and
+// each word's colour is averaged over its footprint (less speckle). Must match
+// the web renderer's V2_* constants exactly.
+const double _detailShrink = 0.62; // max fraction a word's size is cut in busy areas
+const double _detailGamma = 0.85; // <1 lifts mid detail so features (not just hard edges) shrink
+const double _dartBoost = 1.6; // extra dart-acceptance in detailed areas
+const double _detailNorm = 2.2; // detail normalised against this × the image mean edge energy
 
 int _c255(double v) => v < 0 ? 0 : (v > 255 ? 255 : v.toInt());
+
+/// Parse a CSS colour ('#rgb', '#rrggbb', 'rgb(r,g,b)') to a [Color], or null.
+Color? _parseCssColor(String? s) {
+  if (s == null) return null;
+  final str = s.trim();
+  if (str.isEmpty) return null;
+  final rgb = RegExp(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)').firstMatch(str);
+  if (rgb != null) {
+    return Color.fromARGB(255, int.parse(rgb.group(1)!),
+        int.parse(rgb.group(2)!), int.parse(rgb.group(3)!));
+  }
+  final hex = RegExp(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$').firstMatch(str);
+  if (hex != null) {
+    var h = hex.group(1)!;
+    if (h.length == 3) {
+      h = '${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}';
+    }
+    return Color.fromARGB(
+      255,
+      int.parse(h.substring(0, 2), radix: 16),
+      int.parse(h.substring(2, 4), radix: 16),
+      int.parse(h.substring(4, 6), radix: 16),
+    );
+  }
+  return null;
+}
 
 /// Look settings for the word-art renderer.
 class WordArtParams {
@@ -48,7 +82,10 @@ class WordArtParams {
     this.ground = 0.3,
     this.vivid = 0.3,
     this.empty = 1,
+    this.coverage = 0,
     this.seedNonce = 0,
+    this.caption = '',
+    this.captionColor,
   });
 
   /// Phrases — each kept whole per placement (multi-word phrases wrap).
@@ -78,8 +115,20 @@ class WordArtParams {
   /// with shaded local colour so no area stays empty (0 = fully covered).
   final double empty;
 
+  /// 0..1 coverage — packs whole phrases into the between-word gaps so the subject
+  /// fills in denser (0 = as-was). The true background stays bare.
+  final double coverage;
+
   /// Reshuffle key — change to get a new arrangement with the same settings.
   final int seedNonce;
+
+  /// Optional photo title — drawn ONCE (upper-cased), larger than every word, in the
+  /// bottom-left; the words pack around its reserved box. Empty = off.
+  final String caption;
+
+  /// Explicit title colour as a CSS string ('#rrggbb' or 'rgb(r,g,b)'). Null = auto
+  /// (the base photo's colour at the title's position).
+  final String? captionColor;
 
   @override
   bool operator ==(Object other) =>
@@ -92,7 +141,10 @@ class WordArtParams {
       other.ground == ground &&
       other.vivid == vivid &&
       other.empty == empty &&
-      other.seedNonce == seedNonce;
+      other.coverage == coverage &&
+      other.seedNonce == seedNonce &&
+      other.caption == caption &&
+      other.captionColor == captionColor;
 
   @override
   int get hashCode => Object.hash(
@@ -104,7 +156,10 @@ class WordArtParams {
         ground,
         vivid,
         empty,
+        coverage,
         seedNonce,
+        caption,
+        captionColor,
       );
 
   static bool _listEq(List<String> a, List<String> b) {
@@ -347,6 +402,62 @@ WordArtGeometry buildWordArtGeometry(
         (0.299 * base[j] + 0.587 * base[j + 1] + 0.114 * base[j + 2]) / 255.0;
   }
 
+  // Integral images over R,G,B (footprint-averaged colour) + a normalised local
+  // detail map (edge energy) for detail-aware word sizing — the port of the web
+  // renderer's composition precompute. (sw+1)×(sh+1); row/col 0 are zero.
+  final iw = sw + 1;
+  final intR = Float64List(iw * (sh + 1));
+  final intG = Float64List(iw * (sh + 1));
+  final intB = Float64List(iw * (sh + 1));
+  final intD = Float64List(iw * (sh + 1));
+  double detailScale = 1;
+  {
+    final detA = Float32List(np);
+    var dsum = 0.0;
+    for (var y = 0; y < sh; y++) {
+      final yt = math.max(0, y - 1), yb = math.min(sh - 1, y + 1);
+      for (var x = 0; x < sw; x++) {
+        final xl = math.max(0, x - 1), xr = math.min(sw - 1, x + 1);
+        final gx = lumA[y * sw + xr] - lumA[y * sw + xl];
+        final gy = lumA[yb * sw + x] - lumA[yt * sw + x];
+        final d = math.sqrt(gx * gx + gy * gy);
+        detA[y * sw + x] = d;
+        dsum += d;
+      }
+    }
+    final dmean = (dsum / np) == 0 ? 1e-4 : dsum / np;
+    detailScale = 1 / (_detailNorm * dmean);
+    for (var y = 0; y < sh; y++) {
+      var rowR = 0.0, rowG = 0.0, rowB = 0.0, rowD = 0.0;
+      final oRow = (y + 1) * iw;
+      final pRow = y * iw;
+      for (var x = 0; x < sw; x++) {
+        final j = (y * sw + x) * 4;
+        rowR += base[j];
+        rowG += base[j + 1];
+        rowB += base[j + 2];
+        rowD += detA[y * sw + x];
+        intR[oRow + x + 1] = intR[pRow + x + 1] + rowR;
+        intG[oRow + x + 1] = intG[pRow + x + 1] + rowG;
+        intB[oRow + x + 1] = intB[pRow + x + 1] + rowB;
+        intD[oRow + x + 1] = intD[pRow + x + 1] + rowD;
+      }
+    }
+  }
+  // Average of an integral image over the inclusive sample-pixel rect.
+  double rectAvg(Float64List img, int x0, int y0, int x1, int y1) {
+    x0 = x0 < 0 ? 0 : (x0 > sw - 1 ? sw - 1 : x0);
+    x1 = x1 < 0 ? 0 : (x1 > sw - 1 ? sw - 1 : x1);
+    y0 = y0 < 0 ? 0 : (y0 > sh - 1 ? sh - 1 : y0);
+    y1 = y1 < 0 ? 0 : (y1 > sh - 1 ? sh - 1 : y1);
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    final a = img[y0 * iw + x0], b = img[y0 * iw + (x1 + 1)];
+    final c = img[(y1 + 1) * iw + x0], d = img[(y1 + 1) * iw + (x1 + 1)];
+    final cnt = (x1 - x0 + 1) * (y1 - y0 + 1);
+    return (d - b - c + a) / cnt;
+  }
+
   final dark = p.contrast >= 0;
 
   // Ground colour derived from the photo: muted tint of its average colour,
@@ -397,6 +508,29 @@ WordArtGeometry buildWordArtGeometry(
   int by(double py) {
     final v = ((py * sh) / h).toInt();
     return v < 0 ? 0 : (v > sh - 1 ? sh - 1 : v);
+  }
+
+  // Normalised local detail (0 = flat, 1 = busy) over an OUTPUT-coord window
+  // `halfOut` around (px,py). Drives detail-aware word sizing.
+  final oxToS = sw / w, oyToS = sh / h;
+  double detailNormAt(double px, double py, double halfOut) {
+    final cx = bx(px), cy = by(py);
+    final hx = math.max(0, (halfOut * oxToS).round());
+    final hy = math.max(0, (halfOut * oyToS).round());
+    final d = rectAvg(intD, cx - hx, cy - hy, cx + hx, cy + hy) * detailScale;
+    return d <= 0 ? 0.0 : (d >= 1 ? 1.0 : math.pow(d, _detailGamma).toDouble());
+  }
+
+  // Mean photo colour over a word's footprint (OUTPUT-coord AABB) — less speckle.
+  List<double> footprintColor(
+      double px, double py, double exOut, double eyOut) {
+    final x0 = bx(px - exOut), x1 = bx(px + exOut);
+    final y0 = by(py - eyOut), y1 = by(py + eyOut);
+    return [
+      rectAvg(intR, x0, y0, x1, y1),
+      rectAvg(intG, x0, y0, x1, y1),
+      rectAvg(intB, x0, y0, x1, y1),
+    ];
   }
 
   double flowAngle(double px, double py) {
@@ -520,46 +654,65 @@ WordArtGeometry buildWordArtGeometry(
   }
 
   final placements = <WordArtPlacement>[];
-  final attempts = ((w * h) / (minWord * minWord) * _attemptFactor).ceil();
+  final fillAmt = (1 - emptyAmt) * 0.5;
+  // Fair phrase distribution: round-robin on placement count (pick the least-used, random
+  // among ties) so no phrase hogs the big/medium slots. Matches the web renderer.
+  final useCount = List<int>.filled(phrases.length, 0);
 
-  for (var a = 0; a < attempts; a++) {
-    final px = rnd() * w;
-    final py = rnd() * h;
-    final ci = (by(py) * sw + bx(px)) * 4;
-    final cover0 = dark
-        ? math.max(base[ci], math.max(base[ci + 1], base[ci + 2])) / 255.0
-        : 1 - math.min(base[ci], math.min(base[ci + 1], base[ci + 2])) / 255.0;
-    final fillAmt = (1 - emptyAmt) * 0.5;
-    final tone0 = _applyContrast(cover0.toDouble(), k);
-    double tone;
-    var cellLift = 0.0;
-    var cellVivid = vivid;
-    if (tone0 >= _skipTone) {
-      tone = tone0;
-      cellVivid = vivid + fillAmt * 0.7;
-      if (rnd() > math.pow(tone, _toneGamma)) continue;
-    } else {
-      if (fillAmt <= 0) continue;
-      if (rnd() > fillAmt) continue;
-      tone = _skipTone + fillAmt * (0.55 - _skipTone);
-      cellLift = fillAmt * 0.4;
-    }
-
+  // Place ONE word at (px,py), trying sizes from [startSizeIdx] down. Shared by the main
+  // pass and the gap-fill pass. Returns true if a word landed.
+  bool placeWordAt(double px, double py, double tone, double cellVivid,
+      double cellLift, int startSizeIdx,
+      [List<double>? sizeList, bool skipToneGate = false]) {
+    final useSizes = sizeList ?? sizes;
     final ang = flowAngle(px, py);
     final cAbs = math.cos(ang).abs(), sAbs = math.sin(ang).abs();
     final cosA = math.cos(ang), sinA = math.sin(ang);
-    final phrase = phrases[(rnd() * phrases.length).toInt().clamp(0, phrases.length - 1)];
+    var pick = 0;
+    if (phrases.length > 1) {
+      var mn = 1 << 30;
+      for (var i = 0; i < phrases.length; i++) {
+        if (useCount[i] < mn) mn = useCount[i];
+      }
+      var cnt = 0;
+      for (var i = 0; i < phrases.length; i++) {
+        if (useCount[i] == mn) cnt++;
+      }
+      var r = (rnd() * cnt).toInt();
+      for (var i = 0; i < phrases.length; i++) {
+        if (useCount[i] == mn) {
+          if (r == 0) {
+            pick = i;
+            break;
+          }
+          r--;
+        }
+      }
+    }
+    final phrase = phrases[pick];
     final weight = tone > 0.45 ? 900 : 800;
     final m = measurePhrase(weight, phrase);
     final maxL = math.min(_maxLines, m.words.length);
 
-    for (var si = 0; si < sizes.length; si++) {
-      final s = sizes[si];
-      final scaleNorm = (s - minWord) / denom;
-      final toneMin = _skipTone + (0.55 - _skipTone) * scaleNorm;
-      if (tone < toneMin) continue;
+    // Cap the starting word size by local detail — busy areas (features) start
+    // smaller so they resolve; flat masses keep the big words.
+    var si0 = startSizeIdx;
+    {
+      final dRel = detailNormAt(px, py, math.max(minWord, maxWord * 0.2));
+      final cap = maxWord * (1 - _detailShrink * dRel);
+      while (si0 < useSizes.length - 1 && useSizes[si0] > cap) {
+        si0++;
+      }
+    }
 
-      // Fit the phrase so its oriented box's largest side ≈ s.
+    for (var si = si0; si < useSizes.length; si++) {
+      final s = useSizes[si];
+      if (!skipToneGate) {
+        final scaleNorm = (s - minWord) / denom;
+        final toneMin = _skipTone + (0.55 - _skipTone) * scaleNorm;
+        if (tone < toneMin) continue;
+      }
+
       var bF = 0.0;
       var bLines = <_Line>[];
       var bMw = 0.0, bHPer = 0.0;
@@ -580,25 +733,50 @@ WordArtGeometry buildWordArtGeometry(
           bHPer = hPer;
         }
       }
-      if (bF < 3) break; // this and every smaller size too tiny
+      if (bF < 3) break;
 
+      // Reserve the placement's footprint (+ a hair of margin for the stroke).
+      // A wrapped phrase reserves ONE box PER LINE, each only as wide as THAT line
+      // (single-line → one box, identical to a whole-phrase box). This frees the
+      // empty gutters beside a short line (e.g. "ME" under "POLJUBI") so later,
+      // smaller words can fill them. Matches the web renderer.
       final margin = bF * _inkStroke * 0.5 + 1;
-      final obb = _Obb(
-        px,
-        py,
-        (bMw * bF) / 2 + margin,
-        (bHPer * bF) / 2 + margin,
-        cosA,
-        sinA,
-      );
-      final eX = (obb.hw * cosA).abs() + (obb.hh * sinA).abs();
-      final eY = (obb.hw * sinA).abs() + (obb.hh * cosA).abs();
+      final fullHw = (bMw * bF) / 2 + margin;
+      final fullHh = (bHPer * bF) / 2 + margin;
+      final cellBoxes = <_Obb>[];
+      if (bLines.length > 1) {
+        final lineStepPx = bF * _lineStep;
+        final lineHh = (_lineInk * bF) / 2 + margin;
+        var lyc = -((bLines.length - 1) * lineStepPx) / 2; // line centre (local y)
+        for (final ln in bLines) {
+          // local (0, lyc) → world via the word rotation (cs=cosA, sn=sinA).
+          cellBoxes.add(_Obb(px - lyc * sinA, py + lyc * cosA,
+              (ln.w * bF) / 2 + margin, lineHh, cosA, sinA));
+          lyc += lineStepPx;
+        }
+      } else {
+        cellBoxes.add(_Obb(px, py, fullHw, fullHh, cosA, sinA));
+      }
+      // Bounds check uses the full envelope (the whole phrase must fit on-canvas).
+      final eX = (fullHw * cosA).abs() + (fullHh * sinA).abs();
+      final eY = (fullHw * sinA).abs() + (fullHh * cosA).abs();
       if (px - eX < 0 || py - eY < 0 || px + eX > w || py + eY > h) continue;
-      if (collides(obb)) continue;
-      insert(obb);
+      var blocked = false;
+      for (final cb in cellBoxes) {
+        if (collides(cb)) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      for (final cb in cellBoxes) {
+        insert(cb);
+      }
+      useCount[pick]++;
 
-      final j = (by(py) * sw + bx(px)) * 4;
-      var cr = base[j].toDouble(), cg = base[j + 1].toDouble(), cb = base[j + 2].toDouble();
+      // Average the photo colour over the placed word's footprint (less speckle).
+      final fc = footprintColor(px, py, eX, eY);
+      var cr = fc[0], cg = fc[1], cb = fc[2];
       if (palette != null) {
         final pcol = _nearest(palette, cr, cg, cb);
         cr = pcol[0];
@@ -615,7 +793,171 @@ WordArtGeometry buildWordArtGeometry(
         lines: [for (final ln in bLines) ln.text],
         color: col,
       ));
-      break; // placed → next dart
+      return true;
+    }
+    return false;
+  }
+
+  // Optional photo title — one large horizontal word reserved in the bottom-left; the fill
+  // packs around its box (inserted BEFORE the loop). Always upper-cased.
+  final caption =
+      p.caption.trim().replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
+  if (caption.isNotEmpty) {
+    double measureCap(String str) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: str,
+          style: const TextStyle(
+              fontFamily: 'Inter', fontWeight: FontWeight.w900, fontSize: 100),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      return tp.width / 100.0;
+    }
+
+    final capUnitW = math.max(1e-3, measureCap(caption));
+    final pad = longSide * 0.04;
+    final targetW = w * 0.42;
+    final maxCapW = w - 2 * pad;
+    var capSize = maxWord * 1.8;
+    if (capUnitW * capSize > targetW) capSize = targetW / capUnitW;
+    capSize = math.max(capSize, maxWord * 1.05);
+    if (capUnitW * capSize > maxCapW) capSize = maxCapW / capUnitW;
+    capSize = math.max(8.0, capSize);
+
+    final capW = capUnitW * capSize;
+    final capH = capSize * _lineInk;
+    final capCx = pad + capW / 2;
+    final capCy = h - pad - capH / 2;
+    final capMargin = capSize * _inkStroke * 0.5 + 1;
+    insert(_Obb(capCx, capCy, capW / 2 + capMargin, capH / 2 + capMargin, 1, 0));
+
+    Color capCol;
+    final chosen = _parseCssColor(p.captionColor);
+    if (chosen != null) {
+      capCol = chosen;
+    } else {
+      final cj = (by(capCy) * sw + bx(capCx)) * 4;
+      var ccr = base[cj].toDouble(),
+          ccg = base[cj + 1].toDouble(),
+          ccb = base[cj + 2].toDouble();
+      if (palette != null) {
+        final pc = _nearest(palette, ccr, ccg, ccb);
+        ccr = pc[0];
+        ccg = pc[1];
+        ccb = pc[2];
+      }
+      capCol = _inkColor(ccr, ccg, ccb, vivid, 1, dark, bgLum, 0);
+    }
+    placements.add(WordArtPlacement(
+      cx: capCx,
+      cy: capCy,
+      size: capSize,
+      angle: 0,
+      weight: 900,
+      lines: [caption],
+      color: capCol,
+    ));
+  }
+
+  final attempts = ((w * h) / (minWord * minWord) * _attemptFactor).ceil();
+
+  for (var a = 0; a < attempts; a++) {
+    final px = rnd() * w;
+    final py = rnd() * h;
+    final ci = (by(py) * sw + bx(px)) * 4;
+    final cover0 = dark
+        ? math.max(base[ci], math.max(base[ci + 1], base[ci + 2])) / 255.0
+        : 1 - math.min(base[ci], math.min(base[ci + 1], base[ci + 2])) / 255.0;
+    final tone0 = _applyContrast(cover0.toDouble(), k);
+    double tone;
+    var cellLift = 0.0;
+    var cellVivid = vivid;
+    if (tone0 >= _skipTone) {
+      tone = tone0;
+      cellVivid = vivid + fillAmt * 0.7;
+      // denser where stronger; also lands more darts on detailed areas (features).
+      final keep = math.min(
+          1.0,
+          math.pow(tone, _toneGamma).toDouble() *
+              (1 + _dartBoost * detailNormAt(px, py, math.max(minWord, maxWord * 0.2))));
+      if (rnd() > keep) continue;
+    } else {
+      if (fillAmt <= 0) continue;
+      if (rnd() > fillAmt) continue;
+      tone = _skipTone + fillAmt * (0.55 - _skipTone);
+      cellLift = fillAmt * 0.4;
+    }
+
+    placeWordAt(px, py, tone, cellVivid, cellLift, 0);
+  }
+
+  // GAP-FILL PASS: sweep a grid; where a pocket is uncovered AND inkable (same rules as the
+  // main pass), drop the biggest word that fits — tighter tiling, fewer visible gaps.
+  var fillStartIdx = 0;
+  while (fillStartIdx < sizes.length - 1 &&
+      sizes[fillStartIdx] > maxWord * 0.55) {
+    fillStartIdx++;
+  }
+  final fillStep = math.max(minWord * 1.4, bucket);
+  final probeHalf = minWord * 0.45;
+  for (var gy = fillStep * 0.5; gy < h; gy += fillStep) {
+    for (var gx = fillStep * 0.5; gx < w; gx += fillStep) {
+      final px = gx + (rnd() - 0.5) * fillStep;
+      final py = gy + (rnd() - 0.5) * fillStep;
+      if (px < 0 || py < 0 || px >= w || py >= h) continue;
+      if (collides(_Obb(px, py, probeHalf, probeHalf, 1, 0))) continue;
+      final ci = (by(py) * sw + bx(px)) * 4;
+      final cover0 = dark
+          ? math.max(base[ci], math.max(base[ci + 1], base[ci + 2])) / 255.0
+          : 1 - math.min(base[ci], math.min(base[ci + 1], base[ci + 2])) / 255.0;
+      final tone0 = _applyContrast(cover0.toDouble(), k);
+      double tone;
+      var cellLift = 0.0;
+      var cellVivid = vivid;
+      if (tone0 >= _skipTone) {
+        tone = tone0;
+        cellVivid = vivid + fillAmt * 0.7;
+      } else {
+        if (fillAmt <= 0) continue;
+        tone = _skipTone + fillAmt * (0.55 - _skipTone);
+        cellLift = fillAmt * 0.4;
+      }
+      placeWordAt(px, py, tone, cellVivid, cellLift, fillStartIdx);
+    }
+  }
+
+  // COVERAGE PASS: packs WHOLE PHRASES (down to a small-but-readable size) into the
+  // between-word gaps and pushes ink into the subject's mid/shadow tones, so the
+  // picture reads as a denser field of words. Reuses placeWordAt with a smaller size
+  // ladder + no tone gate; the true background stays bare. Mirrors the web renderer.
+  final coverage = math.max(0.0, math.min(1.0, p.coverage));
+  if (coverage > 0) {
+    final covMin = math.max(5.0, minWord * (1 - 0.55 * coverage));
+    final covTop = math.max(covMin + 1, maxWord * 0.45);
+    final covSizes = <double>[];
+    for (var s = covTop; s >= covMin; s *= _scaleStep) {
+      covSizes.add(s);
+    }
+    final covStep = math.max(covMin, minWord * (1.25 - 0.95 * coverage));
+    final covFloor = _skipTone * (1 - 0.6 * coverage);
+    final covProbeHalf = covMin * 0.4;
+    final covRnd = _makeRng(4271 + p.seedNonce * 613);
+    for (var gy = covStep * 0.5; gy < h; gy += covStep) {
+      for (var gx = covStep * 0.5; gx < w; gx += covStep) {
+        final px = gx + (covRnd() - 0.5) * covStep;
+        final py = gy + (covRnd() - 0.5) * covStep;
+        if (px < 0 || py < 0 || px >= w || py >= h) continue;
+        if (collides(_Obb(px, py, covProbeHalf, covProbeHalf, 1, 0))) continue;
+        final ci = (by(py) * sw + bx(px)) * 4;
+        final cover0 = dark
+            ? math.max(base[ci], math.max(base[ci + 1], base[ci + 2])) / 255.0
+            : 1 - math.min(base[ci], math.min(base[ci + 1], base[ci + 2])) / 255.0;
+        final tone0 = _applyContrast(cover0.toDouble(), k);
+        if (tone0 < covFloor) continue; // leave the true background bare
+        final tone = math.max(tone0, _skipTone);
+        placeWordAt(px, py, tone, vivid, 0, 0, covSizes, true);
+      }
     }
   }
 
@@ -699,4 +1041,90 @@ Future<ui.Image> renderWordArtImage(
   final img = await pic.toImage(w, h);
   pic.dispose();
   return img;
+}
+
+/// Serialise a computed layout into the shape the server's `bakedLayout` expects
+/// (`{ ground, words:[{cx,cy,angle,size,weight,color,strokeWidth,lines:[{text,y}]}], w, h }`),
+/// so the high-res export reproduces THIS exact arrangement instead of re-packing.
+Map<String, dynamic> wordArtLayoutJson(WordArtGeometry geo, int w, int h) {
+  String css(Color c) {
+    final v = c.toARGB32();
+    return 'rgb(${(v >> 16) & 0xFF},${(v >> 8) & 0xFF},${v & 0xFF})';
+  }
+
+  final words = <Map<String, dynamic>>[];
+  for (final pl in geo.placements) {
+    final lineH = pl.size * _lineStep;
+    var ly = -((pl.lines.length - 1) * lineH) / 2;
+    final lines = <Map<String, dynamic>>[];
+    for (final ln in pl.lines) {
+      lines.add({'text': ln, 'y': ly});
+      ly += lineH;
+    }
+    words.add({
+      'cx': pl.cx,
+      'cy': pl.cy,
+      'angle': pl.angle,
+      'size': pl.size,
+      'weight': pl.weight,
+      'color': css(pl.color),
+      'strokeWidth': pl.size * _inkStroke,
+      'lines': lines,
+    });
+  }
+  return {'ground': css(geo.ground), 'words': words, 'w': w, 'h': h};
+}
+
+/// Suggest a small set of dominant colours from a decoded RGBA buffer, for the
+/// word-art title-colour picker. Dart port of the web `suggestColorsFromImage`
+/// (`foto-mozaik/lib/wordart/suggest-colors.ts`): coarse 4-bit/channel quantise
+/// → frequency-rank → greedily drop near-duplicates. Returns `#rrggbb` strings,
+/// most dominant first. [rgba] is row-major RGBA for a [w]×[h] image.
+List<String> suggestColorsFromRgba(Uint8List rgba, int w, int h,
+    {int count = 6}) {
+  if (w < 1 || h < 1 || rgba.length < w * h * 4) return const [];
+  // Coarse sampling stride so we scan ~64×64 pixels regardless of source size.
+  final stepX = math.max(1, w ~/ 64);
+  final stepY = math.max(1, h ~/ 64);
+  final buckets = <int, List<int>>{}; // key -> [n, rSum, gSum, bSum]
+  for (var y = 0; y < h; y += stepY) {
+    final row = y * w * 4;
+    for (var x = 0; x < w; x += stepX) {
+      final i = row + x * 4;
+      if (rgba[i + 3] < 128) continue; // skip transparent
+      final r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      final key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+      final e = buckets[key];
+      if (e != null) {
+        e[0]++;
+        e[1] += r;
+        e[2] += g;
+        e[3] += b;
+      } else {
+        buckets[key] = [1, r, g, b];
+      }
+    }
+  }
+
+  final list = buckets.values
+      .map((e) => [
+            e[0],
+            (e[1] / e[0]).round(),
+            (e[2] / e[0]).round(),
+            (e[3] / e[0]).round(),
+          ])
+      .toList()
+    ..sort((a, b) => b[0] - a[0]);
+
+  final picked = <List<int>>[];
+  for (final bk in list) {
+    if (picked.length >= count) break;
+    final tooClose = picked.any((p) =>
+        (p[1] - bk[1]).abs() + (p[2] - bk[2]).abs() + (p[3] - bk[3]).abs() < 56);
+    if (tooClose) continue;
+    picked.add(bk);
+  }
+
+  String hex(int v) => v.toRadixString(16).padLeft(2, '0');
+  return picked.map((p) => '#${hex(p[1])}${hex(p[2])}${hex(p[3])}').toList();
 }

@@ -43,14 +43,18 @@ double _cbrt(double t) {
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
+// Structure-leaning (measured on web): raised luminance/edge/contrast, lowered
+// colour — tiles "fit the shape" better (raw-composition SSIM 0.424 vs 0.410),
+// and the colour gap is closed by tint + transfer downstream. Mirrors the web
+// DEFAULT_SIGNAL_WEIGHTS.
 SignalWeights defaultSignalWeights() => SignalWeights(
-      color: 0.55,
-      luminancePattern: 0.15,
+      color: 0.45, // was 0.55
+      luminancePattern: 0.22, // was 0.15
       chromaPattern: 0.06,
-      edgePattern: 0.12,
+      edgePattern: 0.18, // was 0.12
       tonalHistogram: 0.05,
       brightnessEmphasis: 3.5,
-      contrastPattern: 0.08,
+      contrastPattern: 0.12, // was 0.08
     );
 
 MosaicSettings defaultSettings() => MosaicSettings(

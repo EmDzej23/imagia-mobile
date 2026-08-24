@@ -137,6 +137,7 @@ WordArtParams wordartParamsFromState(StudioState studio) {
   final s = studio.settings;
   final phrases =
       parseTextPhrases(studio.textInput, uppercase: studio.textUppercase);
+  final titleColor = s.wordartTitleColor.trim();
   return WordArtParams(
     phrases: phrases.isEmpty ? const ['WORD'] : phrases,
     palette: s.wordartPalette.round(),
@@ -146,6 +147,9 @@ WordArtParams wordartParamsFromState(StudioState studio) {
     ground: s.wordartGround,
     vivid: s.wordartVivid,
     empty: s.wordartEmpty,
+    coverage: s.wordartCoverage,
     seedNonce: studio.wordartSeedNonce,
+    caption: s.wordartCaption.trim(),
+    captionColor: titleColor.isEmpty ? null : titleColor,
   );
 }

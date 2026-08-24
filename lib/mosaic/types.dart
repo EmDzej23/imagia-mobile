@@ -143,13 +143,16 @@ class MosaicSettings {
     this.ancientGroutColor = 'dark',
     this.ancientCurviness = 0.55,
     this.ancientShape = 'none',
-    this.wordartDensity = 40,
+    this.wordartDensity = 43,
     this.wordartRotation = 0,
     this.wordartContrast = 1,
     this.wordartPalette = 64,
     this.wordartGround = 0,
-    this.wordartVivid = 0.5,
+    this.wordartVivid = 1,
     this.wordartEmpty = 1,
+    this.wordartCoverage = 0.5,
+    this.wordartCaption = '',
+    this.wordartTitleColor = '',
     this.signalWeights,
   });
 
@@ -184,6 +187,9 @@ class MosaicSettings {
   double wordartGround; // 0..1 ground / dark-floor brightness
   double wordartVivid; // 0..1 letter vividness
   double wordartEmpty; // 0..1 empty space (1 = leave dark areas bare)
+  double wordartCoverage; // 0..1 pack whole phrases into gaps (denser subject)
+  String wordartCaption; // in-artwork photo title (upper-cased); '' = off
+  String wordartTitleColor; // CSS colour ('#rrggbb'/'rgb(..)') for the title; '' = auto
 
   SignalWeights? signalWeights;
 
@@ -215,6 +221,9 @@ class MosaicSettings {
     double? wordartGround,
     double? wordartVivid,
     double? wordartEmpty,
+    double? wordartCoverage,
+    String? wordartCaption,
+    String? wordartTitleColor,
     SignalWeights? signalWeights,
   }) =>
       MosaicSettings(
@@ -245,6 +254,9 @@ class MosaicSettings {
         wordartGround: wordartGround ?? this.wordartGround,
         wordartVivid: wordartVivid ?? this.wordartVivid,
         wordartEmpty: wordartEmpty ?? this.wordartEmpty,
+        wordartCoverage: wordartCoverage ?? this.wordartCoverage,
+        wordartCaption: wordartCaption ?? this.wordartCaption,
+        wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
         signalWeights: signalWeights ?? this.signalWeights,
       );
 
@@ -271,13 +283,16 @@ class MosaicSettings {
         ancientGroutColor: j['ancientGroutColor'] as String? ?? 'dark',
         ancientCurviness: (j['ancientCurviness'] as num?)?.toDouble() ?? 0.55,
         ancientShape: j['ancientShape'] as String? ?? 'none',
-        wordartDensity: (j['wordartDensity'] as num?)?.toDouble() ?? 40,
+        wordartDensity: (j['wordartDensity'] as num?)?.toDouble() ?? 43,
         wordartRotation: (j['wordartRotation'] as num?)?.toDouble() ?? 0,
         wordartContrast: (j['wordartContrast'] as num?)?.toDouble() ?? 1,
         wordartPalette: (j['wordartPalette'] as num?)?.toDouble() ?? 64,
         wordartGround: (j['wordartGround'] as num?)?.toDouble() ?? 0,
-        wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 0.5,
+        wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 1,
         wordartEmpty: (j['wordartEmpty'] as num?)?.toDouble() ?? 1,
+        wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
+        wordartCaption: j['wordartCaption'] as String? ?? '',
+        wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
         signalWeights: j['signalWeights'] == null
             ? null
             : SignalWeights.fromJson(
@@ -312,6 +327,9 @@ class MosaicSettings {
         'wordartGround': wordartGround,
         'wordartVivid': wordartVivid,
         'wordartEmpty': wordartEmpty,
+        'wordartCoverage': wordartCoverage,
+        'wordartCaption': wordartCaption,
+        'wordartTitleColor': wordartTitleColor,
         'signalWeights': signalWeights?.toJson(),
       };
 }

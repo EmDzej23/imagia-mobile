@@ -20,10 +20,17 @@ import '../../widgets/app_progress_bar.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
+import '../../wordart/wordart_renderer.dart' show suggestColorsFromRgba;
 import 'ancient_preview.dart';
 import 'wordart_preview.dart';
 import 'base_crop_screen.dart';
 import '../../widgets/segmented_selector.dart';
+
+/// Advanced word-art sliders (flow tilt / contrast / palette / ground / vividness)
+/// are hidden — their values are now fixed defaults. Flip to true to restore them.
+const bool _showAdvancedWordart = false;
+/// "Empty space" is hidden for now (its default still applies). Flip to true to restore.
+const bool _showEmptySpace = false;
 
 class StudioScreen extends ConsumerStatefulWidget {
   const StudioScreen({super.key});
@@ -44,6 +51,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   final ScrollController _tilesScroll = ScrollController();
   String? _highlightedTileId;
   Timer? _highlightTimer;
+
+  // Word-art phrases list is collapsible so a long list doesn't create a big
+  // scroll through the controls panel.
+  bool _wordsExpanded = true;
 
   // Tiles strip geometry (must match the ListView item + separator below).
   static const double _tileExtent = 56;
@@ -98,25 +109,47 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     _controller.buildPlan();
   }
 
-  /// Word-art controls: phrases + type-look sliders. Colours come from the photo
-  /// (no picker); the picture is composed entirely of the words. Preview + the
-  /// high-res server export share the same look params.
+  /// Number of non-empty phrases in the shared word-art text state.
+  int _wordPhraseCount(String textInput) =>
+      textInput.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).length;
+
+  /// Word-art controls: phrases + type-look sliders. The word colours come from
+  /// the photo (no picker) — the picture is composed entirely of the words; only
+  /// the optional photo-title caption has its own colour choice. Preview + the
+  /// high-res server export share the same look params (baked layout).
   Widget _buildWordartPanel(
       StudioState studio, MosaicSettings settings, void Function(MosaicSettings) update) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: AppSpacing.x4),
-        Text('Words', style: AppTypography.label),
-        const SizedBox(height: AppSpacing.x1),
-        Text('Add a word or phrase at a time — the picture is composed from '
-            'them, coloured from your photo.',
-            style: AppTypography.caption),
-        const SizedBox(height: AppSpacing.x2),
-        _PhraseChipsField(
-          textInput: studio.textInput,
-          onChanged: _controller.setTextInput,
+        InkWell(
+          onTap: () => setState(() => _wordsExpanded = !_wordsExpanded),
+          child: Row(
+            children: [
+              Text('Words', style: AppTypography.label),
+              if (_wordPhraseCount(studio.textInput) > 0) ...[
+                const SizedBox(width: AppSpacing.x1),
+                Text('(${_wordPhraseCount(studio.textInput)})',
+                    style: AppTypography.caption),
+              ],
+              const Spacer(),
+              Icon(_wordsExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20, color: AppColors.textSecondary),
+            ],
+          ),
         ),
+        if (_wordsExpanded) ...[
+          const SizedBox(height: AppSpacing.x1),
+          Text('Add a word or phrase at a time — the picture is composed from '
+              'them, coloured from your photo.',
+              style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.x2),
+          _PhraseChipsField(
+            textInput: studio.textInput,
+            onChanged: _controller.setTextInput,
+          ),
+        ],
         const SizedBox(height: AppSpacing.x2),
         Row(
           children: [
@@ -125,6 +158,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                 value: studio.textUppercase,
                 onChanged: _controller.setTextUppercase),
           ],
+        ),
+        const SizedBox(height: AppSpacing.x3),
+        _CaptionField(
+          base: studio.base?.thumbnail,
+          caption: settings.wordartCaption,
+          captionColor: settings.wordartTitleColor,
+          onCaptionChanged: (v) =>
+              update(settings.copyWith(wordartCaption: v)),
+          onColorChanged: (v) =>
+              update(settings.copyWith(wordartTitleColor: v)),
         ),
         const SizedBox(height: AppSpacing.x2),
         LabeledSlider(
@@ -135,55 +178,69 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
           valueLabel: settings.wordartDensity.toStringAsFixed(0),
           onChanged: (v) => update(settings.copyWith(wordartDensity: v)),
         ),
+        // Advanced controls (flow tilt / contrast / palette / ground / vividness)
+        // are hidden — their values are now fixed defaults (see MosaicSettings).
+        // Flip [_showAdvancedWordart] to true to bring the sliders back.
+        if (_showAdvancedWordart) ...[
+          LabeledSlider(
+            label: 'Flow tilt',
+            value: settings.wordartRotation,
+            min: 0,
+            max: 80,
+            valueLabel: '${settings.wordartRotation.toStringAsFixed(0)}°',
+            onChanged: (v) => update(settings.copyWith(wordartRotation: v)),
+          ),
+          LabeledSlider(
+            label: 'Contrast',
+            value: settings.wordartContrast,
+            min: -1,
+            max: 1,
+            valueLabel: settings.wordartContrast.toStringAsFixed(2),
+            onChanged: (v) => update(settings.copyWith(wordartContrast: v)),
+          ),
+          LabeledSlider(
+            label: 'Palette',
+            value: settings.wordartPalette,
+            min: 2,
+            max: 64,
+            valueLabel: settings.wordartPalette.round() >= 64
+                ? 'Full'
+                : settings.wordartPalette.toStringAsFixed(0),
+            onChanged: (v) => update(settings.copyWith(wordartPalette: v)),
+          ),
+          LabeledSlider(
+            label: 'Ground',
+            value: settings.wordartGround,
+            min: 0,
+            max: 1,
+            valueLabel: settings.wordartGround.toStringAsFixed(2),
+            onChanged: (v) => update(settings.copyWith(wordartGround: v)),
+          ),
+          LabeledSlider(
+            label: 'Vividness',
+            value: settings.wordartVivid,
+            min: 0,
+            max: 1,
+            valueLabel: settings.wordartVivid.toStringAsFixed(2),
+            onChanged: (v) => update(settings.copyWith(wordartVivid: v)),
+          ),
+        ],
+        if (_showEmptySpace)
+          LabeledSlider(
+            label: 'Empty space',
+            value: settings.wordartEmpty,
+            min: 0,
+            max: 1,
+            valueLabel: '${(settings.wordartEmpty * 100).round()}%',
+            onChanged: (v) => update(settings.copyWith(wordartEmpty: v)),
+          ),
         LabeledSlider(
-          label: 'Flow tilt',
-          value: settings.wordartRotation,
+          label: 'Coverage',
+          value: settings.wordartCoverage,
           min: 0,
-          max: 80,
-          valueLabel: '${settings.wordartRotation.toStringAsFixed(0)}°',
-          onChanged: (v) => update(settings.copyWith(wordartRotation: v)),
-        ),
-        LabeledSlider(
-          label: 'Contrast',
-          value: settings.wordartContrast,
-          min: -1,
           max: 1,
-          valueLabel: settings.wordartContrast.toStringAsFixed(2),
-          onChanged: (v) => update(settings.copyWith(wordartContrast: v)),
-        ),
-        LabeledSlider(
-          label: 'Palette',
-          value: settings.wordartPalette,
-          min: 2,
-          max: 64,
-          valueLabel: settings.wordartPalette.round() >= 64
-              ? 'Full'
-              : settings.wordartPalette.toStringAsFixed(0),
-          onChanged: (v) => update(settings.copyWith(wordartPalette: v)),
-        ),
-        LabeledSlider(
-          label: 'Ground',
-          value: settings.wordartGround,
-          min: 0,
-          max: 1,
-          valueLabel: settings.wordartGround.toStringAsFixed(2),
-          onChanged: (v) => update(settings.copyWith(wordartGround: v)),
-        ),
-        LabeledSlider(
-          label: 'Vividness',
-          value: settings.wordartVivid,
-          min: 0,
-          max: 1,
-          valueLabel: settings.wordartVivid.toStringAsFixed(2),
-          onChanged: (v) => update(settings.copyWith(wordartVivid: v)),
-        ),
-        LabeledSlider(
-          label: 'Empty space',
-          value: settings.wordartEmpty,
-          min: 0,
-          max: 1,
-          valueLabel: '${(settings.wordartEmpty * 100).round()}%',
-          onChanged: (v) => update(settings.copyWith(wordartEmpty: v)),
+          valueLabel: '${(settings.wordartCoverage * 100).round()}%',
+          onChanged: (v) => update(settings.copyWith(wordartCoverage: v)),
         ),
         const SizedBox(height: AppSpacing.x3),
         OutlinedButton.icon(
@@ -1417,6 +1474,200 @@ class _ActionIcon extends StatelessWidget {
             Text(label,
                 style: AppTypography.caption.copyWith(color: color)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// In-artwork photo title ("caption") field for word art: an optional line baked
+/// bottom-left into the word field, plus a colour choice (Auto = sampled from
+/// the photo at that spot, or one of a few swatches pulled from the base photo).
+/// Mirrors the web word-art panel's photo-title control.
+class _CaptionField extends StatefulWidget {
+  const _CaptionField({
+    required this.base,
+    required this.caption,
+    required this.captionColor,
+    required this.onCaptionChanged,
+    required this.onColorChanged,
+  });
+
+  final ui.Image? base;
+  final String caption;
+  final String captionColor; // "" = auto/from photo
+  final ValueChanged<String> onCaptionChanged;
+  final ValueChanged<String> onColorChanged;
+
+  @override
+  State<_CaptionField> createState() => _CaptionFieldState();
+}
+
+class _CaptionFieldState extends State<_CaptionField> {
+  late final TextEditingController _text =
+      TextEditingController(text: widget.caption);
+  List<String> _swatches = const [];
+  // The title is baked into the whole word field, so committing it re-packs the
+  // (expensive) layout. Debounce keystrokes and commit on a pause / submit —
+  // never on every letter.
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSwatches();
+  }
+
+  @override
+  void didUpdateWidget(_CaptionField old) {
+    super.didUpdateWidget(old);
+    // Keep the field in sync if the caption is changed elsewhere (e.g. reset).
+    if (widget.caption != _text.text && widget.caption != old.caption) {
+      _text.text = widget.caption;
+    }
+    if (old.base != widget.base) _loadSwatches();
+  }
+
+  Future<void> _loadSwatches() async {
+    final img = widget.base;
+    if (img == null) {
+      if (_swatches.isNotEmpty) setState(() => _swatches = const []);
+      return;
+    }
+    final data = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (!mounted || data == null) return;
+    final swatches = suggestColorsFromRgba(
+        data.buffer.asUint8List(), img.width, img.height,
+        count: 6);
+    if (mounted) setState(() => _swatches = swatches);
+  }
+
+  static Color? _parseHex(String hex) {
+    final m = RegExp(r'^#?([0-9a-fA-F]{6})$').firstMatch(hex.trim());
+    if (m == null) return null;
+    return Color(0xFF000000 | int.parse(m.group(1)!, radix: 16));
+  }
+
+  void _commit(String v) {
+    _debounce?.cancel();
+    widget.onCaptionChanged(v);
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasCaption = widget.caption.trim().isNotEmpty;
+    final selected = widget.captionColor.trim().toLowerCase();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Photo title (optional)', style: AppTypography.caption),
+        const SizedBox(height: AppSpacing.x1),
+        TextField(
+          controller: _text,
+          textInputAction: TextInputAction.done,
+          textCapitalization: TextCapitalization.characters,
+          style: AppTypography.body,
+          onChanged: (v) {
+            _debounce?.cancel();
+            _debounce =
+                Timer(const Duration(milliseconds: 450), () => _commit(v));
+          },
+          onSubmitted: _commit,
+          decoration: InputDecoration(
+            hintText: 'e.g. a name or a place',
+            isDense: true,
+            filled: true,
+            fillColor: AppColors.background,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppRadius.control),
+                borderSide: const BorderSide(color: AppColors.border)),
+          ),
+        ),
+        if (hasCaption) ...[
+          const SizedBox(height: AppSpacing.x2),
+          Wrap(
+            spacing: AppSpacing.x2,
+            runSpacing: AppSpacing.x2,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _AutoColorChip(
+                selected: selected.isEmpty,
+                onTap: () => widget.onColorChanged(''),
+              ),
+              for (final hex in _swatches)
+                _SwatchDot(
+                  color: _parseHex(hex) ?? AppColors.textPrimary,
+                  selected: selected == hex.toLowerCase(),
+                  onTap: () => widget.onColorChanged(hex),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// "Auto" colour chip — title colour is sampled from the photo at the title's
+/// position (the default).
+class _AutoColorChip extends StatelessWidget {
+  const _AutoColorChip({required this.selected, required this.onTap});
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 30,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.x3),
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(AppRadius.chip),
+          border: Border.all(
+            color: selected ? AppColors.accent : AppColors.border,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text('Auto',
+            style: AppTypography.caption.copyWith(
+                color: selected ? AppColors.accent : AppColors.textSecondary)),
+      ),
+    );
+  }
+}
+
+/// A single photo-derived colour swatch for the title colour.
+class _SwatchDot extends StatelessWidget {
+  const _SwatchDot(
+      {required this.color, required this.selected, required this.onTap});
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? AppColors.accent : AppColors.border,
+            width: selected ? 3 : 1,
+          ),
         ),
       ),
     );

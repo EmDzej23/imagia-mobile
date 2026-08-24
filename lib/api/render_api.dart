@@ -93,6 +93,7 @@ class RenderApi {
     required String mode, // 'wordart' | 'ancient' | 'ancient-curved'
     required String baseUrl,
     required Map<String, dynamic> params,
+    Map<String, dynamic>? bakedLayout,
     String? fileName,
     int longSide = 10000,
   }) async {
@@ -102,6 +103,7 @@ class RenderApi {
         'mode': mode,
         'baseUrl': baseUrl,
         'params': params,
+        'bakedLayout': ?bakedLayout,
         'longSide': longSide,
         'fileName': ?fileName,
       },

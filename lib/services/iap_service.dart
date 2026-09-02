@@ -1,5 +1,8 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
 
 import '../api/iap_api.dart';
 import '../state/auth_controller.dart';
@@ -47,8 +50,31 @@ class IapService {
   /// Returns the new token balance. Throws if verification fails — we must NOT
   /// finish an unverified transaction (so it can be retried).
   Future<int> verifyAndComplete(PurchaseDetails purchase) async {
-    final receipt = purchase.verificationData.serverVerificationData;
-    final res = await _api.verifyApple(receipt);
+    var receipt = purchase.verificationData.serverVerificationData;
+
+    // On StoreKit 1 that string IS the app receipt — and a build installed outside
+    // the App Store (flutter run, Xcode) can have no receipt on disk at all, so it
+    // arrives empty and Apple answers 21002 ("receipt-data malformed"). Asking the
+    // store to write one is the documented remedy, so do it before wasting a round
+    // trip. Harmless when a receipt already exists.
+    if (Platform.isIOS && receipt.isEmpty) {
+      receipt = await _refreshedReceipt() ?? receipt;
+    }
+
+    var res = await _api.verifyApple(receipt);
+
+    // Same failure, found the expensive way: retry ONCE against a freshly written
+    // receipt. Bounded deliberately — a receipt that is still malformed after a
+    // refresh is a real problem, and looping would only hide it.
+    if (!res.isOk &&
+        Platform.isIOS &&
+        (res.error?.contains('21002') ?? false)) {
+      final refreshed = await _refreshedReceipt();
+      if (refreshed != null && refreshed.isNotEmpty && refreshed != receipt) {
+        res = await _api.verifyApple(refreshed);
+      }
+    }
+
     if (!res.isOk || res.data == null) {
       throw res.error ?? 'Could not verify purchase.';
     }
@@ -56,6 +82,22 @@ class IapService {
       await _iap.completePurchase(purchase);
     }
     return res.data!.balance;
+  }
+
+  /// Ask StoreKit to (re)write the app receipt and hand back the new one.
+  ///
+  /// iOS only, and best-effort: it prompts for an Apple ID in sandbox, and any
+  /// failure just means we verify with what we already had.
+  Future<String?> _refreshedReceipt() async {
+    try {
+      final addition = InAppPurchase.instance
+          .getPlatformAddition<InAppPurchaseStoreKitPlatformAddition>();
+      final data = await addition.refreshPurchaseVerificationData();
+      final v = data?.serverVerificationData;
+      return (v == null || v.isEmpty) ? null : v;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Finishes a transaction without crediting (e.g. a canceled/errored one that

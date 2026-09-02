@@ -35,10 +35,13 @@ class ApiClient {
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
         options.headers['Origin'] = AppConfig.apiBaseUrl;
-        // Identify the mobile app so the server allows free renders during the
-        // launch bridge (web keeps the token model).
+        // ALWAYS identify the client: the server stamps it on every download row
+        // (admin "Latest downloads" reads it) and it must not disappear when the
+        // free-render bridge is switched off.
+        options.headers['X-Imagia-Client'] = 'mobile';
+        // The key is the free-render bridge alone — it buys a free render, and
+        // only while this platform is still on the bridge.
         if (AppConfig.freeRenders) {
-          options.headers['X-Imagia-Client'] = 'mobile';
           options.headers['X-Imagia-Mobile-Key'] = AppConfig.mobileRenderKey;
         }
         final token = await _tokens.read();

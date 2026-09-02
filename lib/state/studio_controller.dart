@@ -86,6 +86,7 @@ class StudioState {
     this.textUppercase = false,
     this.ancientSeedNonce = 0,
     this.wordartSeedNonce = 0,
+    this.tileCrops = const {},
   });
 
   final BaseImage? base;
@@ -109,6 +110,11 @@ class StudioState {
 
   /// Word-art reshuffle key — bump to get a new word arrangement.
   final int wordartSeedNonce;
+
+  /// Manual per-tile crops, keyed by tile id — the source of truth. Copied onto the
+  /// plan (which carries them to the server) and handed to the preview painters.
+  /// Square mode only, mirroring the web: other modes have no crop editor.
+  final Map<String, TileCrop> tileCrops;
 
   /// The id of the saved project currently open (null for a fresh mosaic).
   /// When set, Save updates this project instead of creating a new one.
@@ -137,6 +143,7 @@ class StudioState {
     bool? textUppercase,
     int? ancientSeedNonce,
     int? wordartSeedNonce,
+    Map<String, TileCrop>? tileCrops,
   }) {
     return StudioState(
       base: base ?? this.base,
@@ -155,6 +162,7 @@ class StudioState {
       textUppercase: textUppercase ?? this.textUppercase,
       ancientSeedNonce: ancientSeedNonce ?? this.ancientSeedNonce,
       wordartSeedNonce: wordartSeedNonce ?? this.wordartSeedNonce,
+      tileCrops: tileCrops ?? this.tileCrops,
     );
   }
 
@@ -297,7 +305,9 @@ class StudioController extends Notifier<StudioState> {
 
     Future<void> ingestOne(int i) async {
       final file = picked[i];
-      final id = 'tile-${_ts()}-$i';
+      // Upload key only — the tile's real id is derived from the blob URL below,
+      // so it survives a save/restore (crops are keyed by it).
+      final uploadKey = 'tile-${_ts()}-$i';
       try {
         final original = await file.readAsBytes();
         final compressed = await _images.compressTile(original);
@@ -305,12 +315,14 @@ class StudioController extends Notifier<StudioState> {
           firstError ??= 'Could not read image (unsupported format?)';
           return;
         }
-        final filename = '$id.jpg';
-        final upload = await _tilesApi.uploadTile(compressed, id, filename);
+        final filename = '$uploadKey.jpg';
+        final upload =
+            await _tilesApi.uploadTile(compressed, uploadKey, filename);
         if (!upload.isOk || upload.data == null) {
           firstError ??= upload.error ?? 'Upload failed';
           return;
         }
+        final id = stableTileIdFromUrl(upload.data!.blobUrl);
         final analyzed =
             await analyzeTileWithThumbnail(id, filename, compressed);
         results[i] = TileAsset(
@@ -390,7 +402,7 @@ class StudioController extends Notifier<StudioState> {
           final bytes = bytesByUrl[sample.blobUrl];
           if (bytes != null) {
             try {
-              final id = 'tile-sample-${_ts()}-$i';
+              final id = stableTileIdFromUrl(sample.blobUrl);
               final fileName = sample.pathname.split('/').last;
               final analyzed =
                   await analyzeTileWithThumbnail(id, fileName, bytes);
@@ -423,8 +435,41 @@ class StudioController extends Notifier<StudioState> {
   }
 
   void removeTile(String id) {
+    // Drop the tile's crop with it — leaving it behind would silently re-apply to a
+    // re-added photo, since ids are derived from the (unchanged) blob URL.
+    final crops = Map<String, TileCrop>.from(state.tileCrops)..remove(id);
     state = state.copyWith(
-        tiles: state.tiles.where((t) => t.id != id).toList());
+      tiles: state.tiles.where((t) => t.id != id).toList(),
+      tileCrops: crops,
+    );
+    _applyCropsToPlan(crops);
+  }
+
+  // ── Manual tile crops ────────────────────────────────────────────────────
+  //
+  // NON-DESTRUCTIVE, exactly as on the web: the uploaded file is never rewritten.
+  // A crop is metadata the painters and the server compositor read when drawing, so
+  // it can be changed or cleared at any time and preview + export follow together.
+
+  /// Set (or with `null`, clear) the manual crop for one tile.
+  void setTileCrop(String tileId, TileCrop? crop) {
+    final crops = Map<String, TileCrop>.from(state.tileCrops);
+    if (crop == null) {
+      crops.remove(tileId);
+    } else {
+      crops[tileId] = crop;
+    }
+    state = state.copyWith(tileCrops: crops);
+    _applyCropsToPlan(crops);
+    _scheduleAutoSave();
+  }
+
+  /// Keep the live plan's copy in step. The plan object is MUTATED rather than
+  /// rebuilt: re-running the matcher for a crop change would be pointless work (the
+  /// matching is unaffected) and would cross-fade the preview. A new map instance is
+  /// what the painters compare, so the repaint still happens.
+  void _applyCropsToPlan(Map<String, TileCrop> crops) {
+    state.plan?.tileCrops = crops;
   }
 
   // ── Word-art phrases ─────────────────────────────────────────────────────
@@ -544,6 +589,9 @@ class StudioController extends Notifier<StudioState> {
         isMobile: true,
       );
       if (token != _planToken) return; // superseded by a newer build
+      // The engine knows nothing about crops (they do not affect matching), so the
+      // fresh plan is handed the current ones before it reaches the painters.
+      plan.tileCrops = state.tileCrops;
       state = state.copyWith(plan: plan, isPlanning: false);
       _scheduleAutoSave();
     } catch (e) {
@@ -570,7 +618,9 @@ class StudioController extends Notifier<StudioState> {
     // base + settings + word-art phrases only (they have no tiles).
     if (!isTileless && state.tiles.isEmpty) return;
     final tiles =
-        state.tiles.map((t) => ProjectTileRef(t.blobUrl, t.filename)).toList();
+        state.tiles
+            .map((t) => ProjectTileRef(t.blobUrl, t.filename, tileId: t.id))
+            .toList();
     final api = ref.read(projectsApiProvider);
     final id = state.currentProjectId;
     try {
@@ -581,7 +631,10 @@ class StudioController extends Notifier<StudioState> {
             baseImageName: base?.name,
             tiles: tiles,
             settings: state.settings,
-            texts: state.textInput);
+            texts: state.textInput,
+            // Always sent, including when empty — this is the path a crop change
+            // persists through, and {} is how a cleared crop is recorded.
+            tileCrops: state.tileCrops);
       } else {
         final res = await api.create(
             name: base?.name ?? 'My mosaic',
@@ -589,7 +642,8 @@ class StudioController extends Notifier<StudioState> {
             baseImageName: base?.name,
             tiles: tiles,
             settings: state.settings,
-            texts: state.textInput);
+            texts: state.textInput,
+            tileCrops: state.tileCrops);
         if (res.isOk && res.data != null && res.data!.isNotEmpty) {
           state = state.copyWith(currentProjectId: res.data);
         }
@@ -606,7 +660,9 @@ class StudioController extends Notifier<StudioState> {
     final base = state.base;
     final api = ref.read(projectsApiProvider);
     final tiles =
-        state.tiles.map((t) => ProjectTileRef(t.blobUrl, t.filename)).toList();
+        state.tiles
+            .map((t) => ProjectTileRef(t.blobUrl, t.filename, tileId: t.id))
+            .toList();
     final existingId = state.currentProjectId;
 
     if (existingId != null) {
@@ -619,6 +675,7 @@ class StudioController extends Notifier<StudioState> {
         tiles: tiles,
         settings: state.settings,
         texts: state.textInput,
+        tileCrops: state.tileCrops,
       );
       if (!res.isOk) {
         state = state.copyWith(error: res.error);
@@ -635,6 +692,7 @@ class StudioController extends Notifier<StudioState> {
       tiles: tiles,
       settings: state.settings,
       texts: state.textInput,
+      tileCrops: state.tileCrops,
     );
     if (!res.isOk || res.data == null || res.data!.isEmpty) {
       state = state.copyWith(error: res.error);
@@ -693,6 +751,9 @@ class StudioController extends Notifier<StudioState> {
           base: base,
           settings: settings,
           textInput: p.texts ?? '',
+          // Keyed by the URL-derived tile id, so they line up with the tiles about
+          // to be restored below — and with whatever the web studio saved.
+          tileCrops: p.tileCrops,
           uploadTotal: p.tiles.length,
           uploadDone: 0);
 
@@ -720,7 +781,9 @@ class StudioController extends Notifier<StudioState> {
           final bytes = bytesByUrl[ref0.blobUrl];
           if (bytes != null) {
             try {
-              final id = 'tile-restore-${_ts()}-$i';
+              // A saved id wins (web-created projects have one); otherwise derive
+              // the same stable id the web would.
+              final id = ref0.tileId ?? stableTileIdFromUrl(ref0.blobUrl);
               final analyzed =
                   await analyzeTileWithThumbnail(id, ref0.fileName, bytes);
               if (token != _restoreToken) return;

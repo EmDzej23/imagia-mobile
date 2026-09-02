@@ -600,6 +600,47 @@ class MosaicPlan {
   List<MosaicPlacement> placements;
 }
 
+/// A user-chosen crop for one tile, as a fraction of the tile's natural size
+/// (`0..1`, x/y = top-left).
+///
+/// NON-DESTRUCTIVE: the uploaded file is never touched — this is metadata the
+/// renderers read when drawing, so a crop can be changed or cleared at any time and
+/// every output follows, preview and high-res export alike.
+///
+/// Absent = the automatic crop (square layout anchors portrait tiles to the top,
+/// everything else centres). The JSON shape mirrors the web `TileCrop` exactly: the
+/// same map travels inside the plan to the server compositor.
+class TileCrop {
+  const TileCrop(this.x, this.y, this.w, this.h);
+
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+
+  factory TileCrop.fromJson(Map<String, dynamic> j) => TileCrop(
+        (j['x'] as num).toDouble(),
+        (j['y'] as num).toDouble(),
+        (j['w'] as num).toDouble(),
+        (j['h'] as num).toDouble(),
+      );
+
+  Map<String, dynamic> toJson() => {'x': x, 'y': y, 'w': w, 'h': h};
+
+  /// Value equality so a painter can tell "same crop" from "new crop" — the
+  /// preview repaints off exactly this comparison.
+  @override
+  bool operator ==(Object other) =>
+      other is TileCrop &&
+      other.x == x &&
+      other.y == y &&
+      other.w == w &&
+      other.h == h;
+
+  @override
+  int get hashCode => Object.hash(x, y, w, h);
+}
+
 class SlimMosaicPlan {
   SlimMosaicPlan({
     required this.baseWidth,
@@ -611,6 +652,7 @@ class SlimMosaicPlan {
     required this.placements,
     this.cropPortraitTop = false,
     this.outputSaturation = 1.0,
+    this.tileCrops = const {},
   });
 
   double baseWidth;
@@ -631,6 +673,12 @@ class SlimMosaicPlan {
   /// high-res export carries the same grade as the on-device preview.
   double outputSaturation;
 
+  /// Per-tile manual crops, keyed by BASE tile id (see [TileCrop]). Overrides
+  /// [cropPortraitTop] for the tiles listed; absent tiles keep the automatic crop.
+  /// Travels to the server inside the plan, so the export is framed exactly as the
+  /// preview is.
+  Map<String, TileCrop> tileCrops;
+
   Map<String, dynamic> toJson() => {
         'baseWidth': baseWidth,
         'baseHeight': baseHeight,
@@ -640,6 +688,11 @@ class SlimMosaicPlan {
         'baseBlur': baseBlur,
         'cropPortraitTop': cropPortraitTop,
         'outputSaturation': outputSaturation,
+        // Omitted when empty — the server treats absent as "all automatic".
+        if (tileCrops.isNotEmpty)
+          'tileCrops': {
+            for (final e in tileCrops.entries) e.key: e.value.toJson(),
+          },
         'placements': placements.map((p) => p.toJson()).toList(),
       };
 }

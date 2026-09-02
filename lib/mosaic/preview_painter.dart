@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'shared.dart' show saturationColorFilter;
+import 'shared.dart' show cropForTile, saturationColorFilter;
 import 'types.dart';
 
 /// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
@@ -37,9 +37,37 @@ MosaicFit computeMosaicFit(Size size, double baseW, double baseH) {
 /// Source rect that cover-crops [img] to the target [cellAR] (w/h). When [topCrop]
 /// is set (square layout), a PORTRAIT tile is cropped to its TOP (keeps faces/heads)
 /// instead of its centre; landscape tiles are unaffected (still centred horizontally).
-Rect centerCropSrc(ui.Image img, double cellAR, {bool topCrop = false}) {
+///
+/// A manual [crop] overrides all of that: the chosen rectangle is cover-fitted to the
+/// cell, centred WITHIN the crop. Bit-exact port of the web's `resolveTileSourceRect`,
+/// so the on-device preview and the server export frame every tile identically.
+Rect centerCropSrc(ui.Image img, double cellAR,
+    {bool topCrop = false, TileCrop? crop}) {
   final tw = img.width.toDouble();
   final th = img.height.toDouble();
+
+  if (crop != null) {
+    // Clamp into the image: a stale crop (e.g. the tile was replaced by a
+    // differently-shaped file) must never produce an out-of-bounds source rect,
+    // which silently draws nothing.
+    final cw = crop.w.clamp(0.01, 1.0);
+    final ch = crop.h.clamp(0.01, 1.0);
+    final cx = crop.x.clamp(0.0, 1.0 - cw);
+    final cy = crop.y.clamp(0.0, 1.0 - ch);
+
+    final rw = cw * tw;
+    final rh = ch * th;
+    final rx = cx * tw;
+    final ry = cy * th;
+
+    if (rw / rh > cellAR) {
+      final sw = rh * cellAR;
+      return Rect.fromLTWH(rx + (rw - sw) / 2, ry, sw, rh);
+    }
+    final sh = rw / cellAR;
+    return Rect.fromLTWH(rx, ry + (rh - sh) / 2, rw, sh);
+  }
+
   final tileAR = tw / th;
   if (tileAR > cellAR) {
     // Wider than the cell → crop the sides, keep full height (landscape → centre).
@@ -62,12 +90,19 @@ class MosaicPreviewPainter extends CustomPainter {
     double? tintStrength,
     double? outputSaturation,
     this.appear = 1.0,
+    Map<String, TileCrop>? tileCrops,
   })  : tintStrength = tintStrength ?? plan.tintStrength,
-        outputSaturation = outputSaturation ?? plan.outputSaturation;
+        outputSaturation = outputSaturation ?? plan.outputSaturation,
+        tileCrops = tileCrops ?? plan.tileCrops;
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
   final ui.Image? baseImage;
+
+  /// Manual per-tile crops. Passed in rather than read off [plan] at paint time so
+  /// [shouldRepaint] can actually see a change: editing a crop keeps the same plan
+  /// object, so comparing `plan.tileCrops` would compare a field against itself.
+  final Map<String, TileCrop> tileCrops;
 
   /// The tint overlay strength. Kept separate from [plan] so adjusting the tint
   /// slider repaints instantly without rebuilding the (matching) plan.
@@ -148,7 +183,8 @@ class MosaicPreviewPainter extends CustomPainter {
       canvas.drawImageRect(
           img,
           centerCropSrc(img, p.width / p.height,
-              topCrop: plan.cropPortraitTop),
+              topCrop: plan.cropPortraitTop,
+              crop: cropForTile(tileCrops, p.tileId)),
           drawRect,
           paint);
     }
@@ -180,6 +216,7 @@ class MosaicPreviewPainter extends CustomPainter {
       old.tintStrength != tintStrength ||
       old.outputSaturation != outputSaturation ||
       old.appear != appear ||
+      !identical(old.tileCrops, tileCrops) ||
       old.tileImages.length != tileImages.length;
 }
 
@@ -196,11 +233,17 @@ class MosaicZoomPainter extends CustomPainter {
     this.baseImage,
     this.tintStrength = 0,
     double? outputSaturation,
-  }) : outputSaturation = outputSaturation ?? plan.outputSaturation;
+    Map<String, TileCrop>? tileCrops,
+  })  : outputSaturation = outputSaturation ?? plan.outputSaturation,
+        tileCrops = tileCrops ?? plan.tileCrops;
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
   final ui.Image? baseImage;
+
+  /// See [MosaicPreviewPainter.tileCrops] — the loupe must frame tiles the same way
+  /// the picture under it does, or magnifying a tile would show a different crop.
+  final Map<String, TileCrop> tileCrops;
   final double focusX;
   final double focusY;
   final double windowSize;
@@ -247,7 +290,9 @@ class MosaicZoomPainter extends CustomPainter {
       }
       canvas.drawImageRect(
           img,
-          centerCropSrc(img, p.width / p.height, topCrop: plan.cropPortraitTop),
+          centerCropSrc(img, p.width / p.height,
+              topCrop: plan.cropPortraitTop,
+              crop: cropForTile(tileCrops, p.tileId)),
           dst,
           paint);
     }
@@ -277,5 +322,6 @@ class MosaicZoomPainter extends CustomPainter {
       old.focusY != focusY ||
       old.windowSize != windowSize ||
       old.tintStrength != tintStrength ||
+      !identical(old.tileCrops, tileCrops) ||
       old.outputSaturation != outputSaturation;
 }

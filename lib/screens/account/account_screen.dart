@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
@@ -109,6 +110,44 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
+  /// Debug-only stand-ins for the three token packs.
+  ///
+  /// App Store Connect will not let a product reach "Ready to Submit" without a
+  /// review screenshot, and the app cannot load real products until they ARE ready —
+  /// so the first screenshot of this screen can never come from real data. These
+  /// render the actual UI with the actual numbers so it can be taken.
+  ///
+  /// [kDebugMode] only, deliberately: a release build can never show them, so the
+  /// shipped app still shows the honest "unavailable" state if StoreKit is silent.
+  /// Prices are display strings only — Apple always charges what App Store Connect
+  /// says, never this.
+  static final List<ProductDetails> _placeholderProducts = [
+    ProductDetails(
+      id: 'com.imagiastore.studio.tokens.single',
+      title: '1 Token',
+      description: 'One high-resolution mosaic download.',
+      price: '€17.99',
+      rawPrice: 17.99,
+      currencyCode: 'EUR',
+    ),
+    ProductDetails(
+      id: 'com.imagiastore.studio.tokens.pack5',
+      title: '5 Tokens',
+      description: 'Five high-resolution mosaic downloads.',
+      price: '€59.99',
+      rawPrice: 59.99,
+      currencyCode: 'EUR',
+    ),
+    ProductDetails(
+      id: 'com.imagiastore.studio.tokens.pack10',
+      title: '10 Tokens',
+      description: 'Ten high-resolution mosaic downloads.',
+      price: '€99.99',
+      rawPrice: 99.99,
+      currencyCode: 'EUR',
+    ),
+  ];
+
   List<Widget> _buildIapTiles() {
     if (_iapLoading) {
       return const [
@@ -119,7 +158,12 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         ),
       ];
     }
-    if (_iapUnavailable || _iapProducts.isEmpty) {
+    // Unavailable covers both "StoreKit said no" and "no products came back" —
+    // which is every state before the products are Ready to Submit.
+    final unavailable = _iapUnavailable || _iapProducts.isEmpty;
+    final products =
+        unavailable && kDebugMode ? _placeholderProducts : _iapProducts;
+    if (products.isEmpty) {
       return [
         Text(
           'Token purchases are unavailable right now. Please try again later.',
@@ -129,7 +173,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       ];
     }
     return [
-      for (final p in _iapProducts)
+      for (final p in products)
         _IapTile(
           product: p,
           tokens: IapService.productTokens[p.id] ?? 0,
@@ -273,15 +317,22 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                 ],
               ),
             ),
-            // Token purchases are hidden during the free-render launch bridge.
-            if (!AppConfig.freeRenders) ...[
+            // Token purchases are hidden during the free-render launch bridge —
+            // except in debug, so the purchase UI can always be reached (and
+            // photographed) on whichever device is to hand.
+            if (!AppConfig.freeRenders || kDebugMode) ...[
               const SizedBox(height: AppSpacing.x6),
               Text('Buy tokens', style: AppTypography.label),
               const SizedBox(height: AppSpacing.x1),
               Text('Each token renders one high-resolution mosaic.',
                   style: AppTypography.caption),
               const SizedBox(height: AppSpacing.x3),
-              if (_useIap)
+              // In DEBUG, the StoreKit tiles win whenever real products have not
+              // loaded — whatever platform this is. That is what makes the App
+              // Store review screenshot show the App Store prices (17.99/59.99/
+              // 99.99) rather than the web/Creem ones, which are a different
+              // product sold at a different price. Release builds are unaffected.
+              if (_useIap || (kDebugMode && _iapProducts.isEmpty))
                 ..._buildIapTiles()
               else
                 for (final pkg in TokenPackage.values)
@@ -411,7 +462,10 @@ class _PackageTile extends StatelessWidget {
                   Text(pkg.label, style: AppTypography.label),
                   const SizedBox(height: 2),
                   Text(
-                    '\$${(pkg.price / pkg.tokens).toStringAsFixed(2)} per render',
+                    // EUR, like everything else priced in this app (see the
+                    // wall-art screen) — these tiles were the only place still
+                    // printing a dollar sign over euro amounts.
+                    '€${(pkg.price / pkg.tokens).toStringAsFixed(2)} per render',
                     style: AppTypography.caption,
                   ),
                 ],
@@ -433,7 +487,7 @@ class _PackageTile extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
-                  child: Text('\$${pkg.price.toStringAsFixed(2)}',
+                  child: Text('€${pkg.price.toStringAsFixed(2)}',
                       style: AppTypography.label
                           .copyWith(color: AppColors.textPrimary)),
                 ),

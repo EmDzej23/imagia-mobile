@@ -40,9 +40,16 @@ class ProjectSummary {
 }
 
 class ProjectTileRef {
-  ProjectTileRef(this.blobUrl, this.fileName);
+  ProjectTileRef(this.blobUrl, this.fileName, {this.tileId});
   final String blobUrl;
   final String fileName;
+
+  /// The id this tile was saved under, when the project has one. Crops are keyed by
+  /// tile id, so honouring a saved id is what lets a crop set in the WEB studio apply
+  /// here — web tiles carry an explicit id, and deriving our own would miss it.
+  /// Absent (older projects, collab tiles) → both clients fall back to the same
+  /// URL-derived id, so they still agree.
+  final String? tileId;
 }
 
 class ProjectDetail {
@@ -54,6 +61,7 @@ class ProjectDetail {
     required this.tiles,
     this.settings,
     this.texts,
+    this.tileCrops = const {},
   });
 
   final String id;
@@ -67,6 +75,10 @@ class ProjectDetail {
   /// same format as [StudioState.textInput]). Shared with the web app.
   final String? texts;
 
+  /// Manual per-tile crops, keyed by the URL-derived tile id. Written by both
+  /// clients, so a crop set in the web studio arrives here already applied.
+  final Map<String, TileCrop> tileCrops;
+
   factory ProjectDetail.fromJson(Map<String, dynamic> p) {
     return ProjectDetail(
       id: p['id'] as String,
@@ -76,7 +88,25 @@ class ProjectDetail {
       tiles: _parseTiles(p['tileUrls']),
       settings: _parseSettings(p['settings']),
       texts: p['texts'] as String?,
+      tileCrops: _parseCrops(p['tileCrops']),
     );
+  }
+
+  /// Crops arrive as `{tileId: {x,y,w,h}}`, possibly double-encoded like the tile
+  /// refs. A malformed entry is dropped rather than failing the whole restore — a
+  /// lost crop is recoverable, a project that will not open is not.
+  static Map<String, TileCrop> _parseCrops(dynamic raw) {
+    final decoded = _deepDecode(raw);
+    if (decoded is! Map) return const {};
+    final out = <String, TileCrop>{};
+    decoded.forEach((k, v) {
+      if (k is String && v is Map) {
+        try {
+          out[k] = TileCrop.fromJson(v.cast<String, dynamic>());
+        } catch (_) {}
+      }
+    });
+    return out;
   }
 
   /// Tile refs are stored server-side as a (possibly double-encoded) JSON array
@@ -87,7 +117,8 @@ class ProjectDetail {
     return decoded
         .whereType<Map>()
         .map((e) => ProjectTileRef(
-            e['blobUrl'] as String? ?? '', e['fileName'] as String? ?? 'tile'))
+            e['blobUrl'] as String? ?? '', e['fileName'] as String? ?? 'tile',
+            tileId: e['tileId'] as String?))
         .where((t) => t.blobUrl.isNotEmpty)
         .toList();
   }
@@ -146,7 +177,19 @@ class ProjectsApi {
   /// `JSON.stringify(...)`, so sending a pre-encoded string double-encodes it
   /// and the list route then counts characters instead of tiles.
   static List<Map<String, String>> _tilePayload(List<ProjectTileRef> tiles) =>
-      tiles.map((t) => {'blobUrl': t.blobUrl, 'fileName': t.fileName}).toList();
+      tiles
+          .map((t) => {
+                'blobUrl': t.blobUrl,
+                'fileName': t.fileName,
+                // Saved so the web studio keys crops by the same id we do.
+                if (t.tileId != null) 'tileId': t.tileId!,
+              })
+          .toList();
+
+  /// Same rule as [_tilePayload]: send a plain map, never a pre-encoded string —
+  /// the server stringifies it itself.
+  static Map<String, dynamic> _cropPayload(Map<String, TileCrop> crops) =>
+      {for (final e in crops.entries) e.key: e.value.toJson()};
 
   Future<ApiResult<String>> create({
     required String name,
@@ -155,12 +198,14 @@ class ProjectsApi {
     required List<ProjectTileRef> tiles,
     MosaicSettings? settings,
     String? texts,
+    Map<String, TileCrop>? tileCrops,
   }) async {
     final res = await _client.post<Map<String, dynamic>>('/api/projects', body: {
       'name': name,
       if (baseImageUrl != null) 'baseImageUrl': baseImageUrl,
       if (baseImageName != null) 'baseImageName': baseImageName,
       'tileUrls': _tilePayload(tiles),
+      if (tileCrops != null && tileCrops.isNotEmpty) 'tileCrops': _cropPayload(tileCrops),
       if (settings != null) 'settings': settings.toJson(),
       if (texts != null && texts.isNotEmpty) 'texts': texts,
     });
@@ -180,12 +225,15 @@ class ProjectsApi {
     List<ProjectTileRef>? tiles,
     MosaicSettings? settings,
     String? texts,
+    Map<String, TileCrop>? tileCrops,
   }) async {
     final res = await _client.put<Map<String, dynamic>>('/api/projects/$id', body: {
       if (name != null) 'name': name,
       if (baseImageUrl != null) 'baseImageUrl': baseImageUrl,
       if (baseImageName != null) 'baseImageName': baseImageName,
       if (tiles != null) 'tileUrls': _tilePayload(tiles),
+      // Sent even when empty: {} is how a cleared crop is persisted.
+      if (tileCrops != null) 'tileCrops': _cropPayload(tileCrops),
       if (settings != null) 'settings': settings.toJson(),
       'texts': ?texts,
     });

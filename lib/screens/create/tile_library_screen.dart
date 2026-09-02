@@ -7,6 +7,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_progress_bar.dart';
+import '../../widgets/confirm_dialog.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/secondary_button.dart';
@@ -114,7 +115,17 @@ class TileLibraryScreen extends ConsumerWidget {
                               top: 0,
                               right: 0,
                               child: GestureDetector(
-                                onTap: () => controller.removeTile(tile.id),
+                                onTap: () async {
+                                  if (await confirmDestructive(
+                                    context,
+                                    title: 'Remove this photo?',
+                                    message:
+                                        'It will no longer be used in your '
+                                        'mosaic. You can add it again later.',
+                                  )) {
+                                    controller.removeTile(tile.id);
+                                  }
+                                },
                                 child: Container(
                                   decoration: const BoxDecoration(
                                     color: Colors.black54,

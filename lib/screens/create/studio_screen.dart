@@ -19,6 +19,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_progress_bar.dart';
+import '../../widgets/confirm_dialog.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
@@ -26,6 +27,7 @@ import '../../wordart/wordart_renderer.dart' show suggestColorsFromRgba;
 import 'ancient_preview.dart';
 import 'wordart_preview.dart';
 import 'base_crop_screen.dart';
+import 'tile_crop_screen.dart';
 import '../../widgets/segmented_selector.dart';
 
 /// Advanced word-art sliders (flow tilt / contrast / palette / ground / vividness)
@@ -482,9 +484,47 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     _controller.buildPlan();
   }
 
-  void _removeTile(String id) {
+  /// Always asks first. Removing a tile re-plans the whole mosaic, so a mis-tap on
+  /// a 56px thumbnail visibly rearranges the picture — cheap to undo only if you
+  /// still have the photo to hand.
+  Future<void> _removeTile(String id) async {
+    final ok = await confirmDestructive(
+      context,
+      title: 'Remove this photo?',
+      message:
+          'It will no longer be used in your mosaic. You can add it again later.',
+    );
+    if (!ok) return;
     _controller.removeTile(id);
     _controller.buildPlan();
+  }
+
+  /// Open the crop editor for one tile, seeded with its CURRENT crop, and apply
+  /// whatever comes back.
+  ///
+  /// No replan on a crop change: cropping does not affect which tile is matched to
+  /// which cell, only how that tile is drawn, so the painters simply repaint. A
+  /// removal does need one — the tile is gone from the library.
+  Future<void> _onCropTile(BuildContext context, TileAsset tile) async {
+    final studio = ref.read(studioControllerProvider);
+    final result = await Navigator.of(context).push<TileCropResult>(
+      MaterialPageRoute(
+        builder: (_) => TileCropScreen(
+          image: tile.thumbnail,
+          title: tile.filename,
+          initial: studio.tileCrops[tile.id],
+          cropPortraitTop: studio.settings.mosaicMode == 'square',
+        ),
+      ),
+    );
+    if (result == null) return;
+    if (result.removed) {
+      // The editor already asked — going through _removeTile would prompt twice.
+      _controller.removeTile(tile.id);
+      _controller.buildPlan();
+      return;
+    }
+    _controller.setTileCrop(tile.id, result.cleared ? null : result.crop);
   }
 
   void _onExport(BuildContext context, bool canRender) {
@@ -803,6 +843,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                       onAddTiles: _addTiles,
                       onLoadSamples: _loadSamples,
                       onRemoveTile: _removeTile,
+                      onCropTile: settings.mosaicMode == 'square'
+                          ? (t) => _onCropTile(context, t)
+                          : null,
                       tilesScroll: _tilesScroll,
                       highlightedTileId: _highlightedTileId,
                       isAncient: isTileless,
@@ -1047,6 +1090,32 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
   }
 }
 
+/// One tile thumbnail, drawn through the SAME source-rect rule the mosaic uses —
+/// manual crop when there is one, the automatic cover-crop otherwise. Drawing it any
+/// other way would make the strip disagree with the picture it describes.
+class _TileThumbPainter extends CustomPainter {
+  _TileThumbPainter({required this.image, this.crop, this.topCrop = false});
+
+  final ui.Image image;
+  final TileCrop? crop;
+  final bool topCrop;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawImageRect(
+      image,
+      // Square thumbnail → cell aspect 1, the same as a square-mode cell.
+      centerCropSrc(image, 1, topCrop: topCrop, crop: crop),
+      Offset.zero & size,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TileThumbPainter old) =>
+      old.crop != crop || old.image != image || old.topCrop != topCrop;
+}
+
 /// Base-photo + tile management strip shown at the top of the controls panel.
 class _SourceAndTiles extends StatelessWidget {
   const _SourceAndTiles({
@@ -1057,6 +1126,7 @@ class _SourceAndTiles extends StatelessWidget {
     required this.onRemoveTile,
     required this.tilesScroll,
     required this.highlightedTileId,
+    this.onCropTile,
     this.isAncient = false,
   });
 
@@ -1067,6 +1137,13 @@ class _SourceAndTiles extends StatelessWidget {
   final void Function(String id) onRemoveTile;
   final ScrollController tilesScroll;
   final String? highlightedTileId;
+
+  /// Opens the crop editor for a tile. Null outside square mode — the only mode
+  /// with per-tile crops, mirroring the web. When it is set the thumbnail itself
+  /// becomes the control and the ✕ goes away: anything painted on top hides the
+  /// very thing the thumbnail exists to show, and on touch it cannot hide behind a
+  /// hover. Removal moves into the editor, next to the tile's other actions.
+  final void Function(TileAsset tile)? onCropTile;
 
   /// Tile-less modes (ancient / word art) use no tiles at all — the whole tiles
   /// section is hidden.
@@ -1136,16 +1213,44 @@ class _SourceAndTiles extends StatelessWidget {
                   itemBuilder: (context, i) {
                     final tile = studio.tiles[i];
                     final highlighted = tile.id == highlightedTileId;
+                    final crop = studio.tileCrops[tile.id];
                     return Stack(
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(AppRadius.chip),
-                          child: RawImage(
-                              image: tile.thumbnail,
-                              width: 56,
-                              height: 56,
-                              fit: BoxFit.cover),
+                        // The thumbnail is framed exactly as the mosaic will use
+                        // it, so the strip answers "what did I set for this tile?"
+                        // at a glance — automatic crop included.
+                        GestureDetector(
+                          onTap: onCropTile == null
+                              ? null
+                              : () => onCropTile!(tile),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(AppRadius.chip),
+                            child: CustomPaint(
+                              size: const Size(56, 56),
+                              painter: _TileThumbPainter(
+                                image: tile.thumbnail,
+                                crop: crop,
+                                topCrop: studio.settings.mosaicMode == 'square',
+                              ),
+                            ),
+                          ),
                         ),
+                        if (crop != null)
+                          // The only "this is cropped" signal: a hairline inset
+                          // ring, on the edge rather than over the picture.
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.chip),
+                                  border: Border.all(
+                                      color: AppColors.accent.withValues(
+                                          alpha: 0.45)),
+                                ),
+                              ),
+                            ),
+                          ),
                         // Highlight ring (overlay — doesn't affect item size).
                         Positioned.fill(
                           child: IgnorePointer(
@@ -1163,6 +1268,7 @@ class _SourceAndTiles extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (onCropTile == null)
                         Positioned(
                           top: 0,
                           right: 0,

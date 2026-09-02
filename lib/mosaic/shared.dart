@@ -447,6 +447,33 @@ String getBaseTileId(String tileId) =>
 
 bool isTileFlipped(String tileId) => tileId.endsWith(flipSuffix);
 
+/// A stable tile id derived from a tile's blob URL.
+///
+/// Ids used to be minted from a timestamp (`tile-<ms>-<i>`), which is fine within a
+/// session but different on every load — so anything keyed by tile id, manual crops
+/// most visibly, was orphaned the moment a project was reopened. Hashing the URL gives
+/// an id that is identical on every load AND identical to the one the web client
+/// computes for the same tile, so a crop set here shows up there and vice versa.
+///
+/// Bit-exact port of the web's `stableTileIdFromUrl` (FNV-1a) — the two must agree
+/// character for character or the crop maps do not line up across clients.
+String stableTileIdFromUrl(String blobUrl) {
+  var hash = 0x811c9dc5;
+  for (var i = 0; i < blobUrl.length; i++) {
+    hash ^= blobUrl.codeUnitAt(i);
+    // Dart ints are 64-bit; mask to 32 to match JS `Math.imul(...) >>> 0`.
+    hash = (hash * 0x01000193) & 0xFFFFFFFF;
+  }
+  return 'u${hash.toRadixString(36)}${blobUrl.length.toRadixString(36)}';
+}
+
+/// The crop for a placement's tile, if the user set one. Keyed by BASE id, so a
+/// mirrored placement shares its source photo's crop.
+TileCrop? cropForTile(Map<String, TileCrop>? tileCrops, String tileId) {
+  if (tileCrops == null || tileCrops.isEmpty) return null;
+  return tileCrops[getBaseTileId(tileId)];
+}
+
 double difference(double left, double right) => (left - right).abs();
 
 /// Helper to allocate a zeroed Float32List orientation buffer (length 100).

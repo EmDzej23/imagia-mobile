@@ -12,6 +12,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/confirm_dialog.dart';
 import '../../widgets/pressable.dart';
 import '../../widgets/shimmer.dart';
 
@@ -153,25 +154,13 @@ class _ProjectCard extends ConsumerWidget {
   }
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surfaceRaised,
-        title: Text('Delete project?', style: AppTypography.title),
-        content: Text('"${project.name}" will be removed.',
-            style: AppTypography.body),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text('Delete',
-                  style: TextStyle(color: AppColors.error))),
-        ],
-      ),
+    final ok = await confirmDestructive(
+      context,
+      title: 'Delete project?',
+      message: '"${project.name}" will be removed.',
+      confirmLabel: 'Delete',
     );
-    if (ok == true) {
+    if (ok) {
       await ref.read(projectsApiProvider).delete(project.id);
       ref.invalidate(projectsListProvider);
     }

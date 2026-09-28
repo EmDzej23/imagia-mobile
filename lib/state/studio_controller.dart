@@ -9,6 +9,8 @@ import '../ancient/ancient_renderer.dart';
 import '../api/projects_api.dart';
 import '../api/tiles_api.dart';
 import '../core/config.dart';
+import '../mosaic/grid_layout.dart';
+import '../mosaic/hexagon.dart';
 import '../mosaic/mosaic_engine.dart';
 import '../mosaic/shared.dart';
 import '../mosaic/types.dart';
@@ -167,6 +169,46 @@ class StudioState {
   }
 
   static const _noChange = Object();
+
+  /// The cell SHAPE a tile will be drawn into, which decides its crop slot.
+  ///
+  /// Uniform modes put every tile in the same cell, so the tile's own orientation is
+  /// irrelevant there. `original` / `blocks` take the cell a tile actually lands in,
+  /// which depends on the TILE's orientation — a portrait photo goes into a portrait
+  /// cell and a landscape one does not, so one figure for the whole library would
+  /// mis-frame half of it.
+  ///
+  /// Must match `cropAspectFor` in foto-mozaik/components/mosaic-studio.tsx.
+  double cropAspectFor(String? tileId) {
+    final mode = settings.mosaicMode;
+    switch (mode) {
+      case 'landscape':
+        return 3 / 2;
+      case 'portrait':
+        return 2 / 3;
+      // The rhombus shear maps a SQUARE source onto the cube face.
+      case 'square':
+      case 'rhombille':
+        return 1;
+      case 'hexagon':
+        return hexAspect;
+    }
+    final descriptors = tiles.map((t) => t.descriptor).toList();
+    final cellAR = dominantCellAspect(descriptors);
+    if (tileId == null) return cellAR;
+    for (final t in tiles) {
+      if (t.id == tileId) return cellAspectForTile(t.descriptor.aspectRatio, cellAR);
+    }
+    return cellAR;
+  }
+
+  /// Hexagon cells keep their own crop — see [cropSlot].
+  CropShape? get cropShape =>
+      settings.mosaicMode == 'hexagon' ? CropShape.hex : null;
+
+  /// The slot a tile's crop is stored under for the CURRENT mode.
+  String cropSlotFor(String tileId) =>
+      cropSlot(tileId, cropAspectFor(tileId), cropShape);
 }
 
 final imageServiceProvider = Provider((_) => ImageService());
@@ -452,12 +494,22 @@ class StudioController extends Notifier<StudioState> {
   // it can be changed or cleared at any time and preview + export follow together.
 
   /// Set (or with `null`, clear) the manual crop for one tile.
+  /// Delegates to [StudioState] — the slot depends only on state, so widgets that
+  /// receive the state but not the controller can resolve it too.
+  double cropAspectFor(String? tileId) => state.cropAspectFor(tileId);
+  CropShape? get cropShape => state.cropShape;
+  String cropSlotFor(String tileId) => state.cropSlotFor(tileId);
+
   void setTileCrop(String tileId, TileCrop? crop) {
     final crops = Map<String, TileCrop>.from(state.tileCrops);
+    // Keyed by SLOT, not by bare tile id: a crop chosen for a 3:2 cell is a different
+    // decision from one chosen for a square cell, and storing both under the tile id
+    // means whichever was set last silently overwrites the other.
+    final slot = cropSlotFor(tileId);
     if (crop == null) {
-      crops.remove(tileId);
+      crops.remove(slot);
     } else {
-      crops[tileId] = crop;
+      crops[slot] = crop;
     }
     state = state.copyWith(tileCrops: crops);
     _applyCropsToPlan(crops);

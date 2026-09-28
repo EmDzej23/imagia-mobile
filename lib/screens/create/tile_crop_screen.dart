@@ -2,6 +2,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../mosaic/hexagon.dart';
+import '../../mosaic/shared.dart' show CropShape;
 import '../../mosaic/types.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -45,6 +47,8 @@ class TileCropScreen extends StatefulWidget {
     required this.title,
     this.initial,
     this.cropPortraitTop = true,
+    this.cellAspect = 1.0,
+    this.cellShape,
   });
 
   /// The tile's thumbnail. Crops are fractions, so editing the thumbnail and
@@ -60,6 +64,23 @@ class TileCropScreen extends StatefulWidget {
   /// portrait tile to its top), so the editor opens showing what the mosaic is
   /// already using instead of jumping to a different crop.
   final bool cropPortraitTop;
+
+  /// Aspect (w/h) of the CELL this tile will be drawn into.
+  ///
+  /// The box used to be square always, which was right when cropping only existed in
+  /// square mode. It is wrong everywhere else: the renderer cover-crops the chosen
+  /// rectangle to the cell, so framing a square for a 3:2 cell silently throws away a
+  /// third of what the user picked. Matching the cell here means what is framed is what
+  /// appears.
+  final double cellAspect;
+
+  /// Cell SHAPE, when it is not a rectangle.
+  ///
+  /// The box already carries the cell's aspect, but for a hexagon that is only half the
+  /// story: the six corners of the box are cut off by the cell, so a plain rectangle
+  /// frames a quarter of the area that will never be drawn. The editor outlines the real
+  /// hexagon instead.
+  final CropShape? cellShape;
 
   @override
   State<TileCropScreen> createState() => _TileCropScreenState();
@@ -98,19 +119,26 @@ class _TileCropScreenState extends State<TileCropScreen> {
   double get _imgW => widget.image.width.toDouble();
   double get _imgH => widget.image.height.toDouble();
 
-  /// The crop's size in normalised terms at the current zoom. The square's side in
-  /// PIXELS is `min(w, h) / zoom`; expressing it as a fraction of each axis is what
-  /// keeps it square in pixels while `x/y/w/h` stay normalised.
+  /// The largest box of the CELL'S aspect that fits the image, in pixels.
+  ({double w, double h}) _maxBoxPx() {
+    final ar = widget.cellAspect;
+    // Fit by whichever axis binds first, so the box is always fully inside the photo.
+    if (_imgW / _imgH > ar) return (w: _imgH * ar, h: _imgH);
+    return (w: _imgW, h: _imgW / ar);
+  }
+
+  /// The crop's size in normalised terms at the current zoom. Kept as one zoom value so
+  /// the box can only ever have the cell's aspect — a gesture cannot deform it.
   ({double w, double h}) _side() {
-    final sidePx = (_imgW < _imgH ? _imgW : _imgH) / _zoom;
-    return (w: sidePx / _imgW, h: sidePx / _imgH);
+    final box = _maxBoxPx();
+    return (w: box.w / _zoom / _imgW, h: box.h / _zoom / _imgH);
   }
 
   double _zoomForCrop(TileCrop c) {
-    final sidePx = c.w * _imgW;
-    final minPx = _imgW < _imgH ? _imgW : _imgH;
-    if (sidePx <= 0) return 1;
-    return (minPx / sidePx).clamp(1.0, 8.0);
+    final box = _maxBoxPx();
+    final wPx = c.w * _imgW;
+    if (wPx <= 0) return 1;
+    return (box.w / wPx).clamp(1.0, 8.0);
   }
 
   /// Keep the square inside the image on both axes.
@@ -171,19 +199,29 @@ class _TileCropScreenState extends State<TileCropScreen> {
             child: Center(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final viewport = constraints.maxWidth < constraints.maxHeight
-                      ? constraints.maxWidth
-                      : constraints.maxHeight;
+                  // The preview box takes the CELL'S aspect, not a square: the
+                  // renderer cover-crops the chosen rectangle to the cell, so a square
+                  // preview of a 3:2 cell shows something the mosaic will never draw.
+                  final ar = widget.cellAspect;
+                  var boxW = constraints.maxWidth;
+                  var boxH = boxW / ar;
+                  if (boxH > constraints.maxHeight) {
+                    boxH = constraints.maxHeight;
+                    boxW = boxH * ar;
+                  }
+                  // Pan still tracks the finger against the SHORT side.
+                  final viewport = boxW < boxH ? boxW : boxH;
                   return GestureDetector(
                     onScaleStart: _onScaleStart,
                     onScaleUpdate: (d) => _onScaleUpdate(d, viewport),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(AppRadius.card),
                       child: SizedBox(
-                        width: viewport,
-                        height: viewport,
+                        width: boxW,
+                        height: boxH,
                         child: CustomPaint(
-                          painter: _CropPainter(widget.image, _crop),
+                          painter: _CropPainter(
+                              widget.image, _crop, widget.cellShape),
                         ),
                       ),
                     ),
@@ -238,10 +276,14 @@ class _TileCropScreenState extends State<TileCropScreen> {
 /// Draws the chosen rectangle filling the square viewport — i.e. exactly what the
 /// mosaic will draw into a square cell, at a size you can judge.
 class _CropPainter extends CustomPainter {
-  _CropPainter(this.image, this.crop);
+  _CropPainter(this.image, this.crop, this.cellShape);
 
   final ui.Image image;
   final TileCrop crop;
+
+  /// Non-rectangular cell shapes get their true outline drawn over the box — see
+  /// [TileCropScreen.cellShape].
+  final CropShape? cellShape;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -264,9 +306,32 @@ class _CropPainter extends CustomPainter {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), guide);
       canvas.drawLine(Offset(0, y), Offset(size.width, y), guide);
     }
+
+    // The hexagon the cell will actually keep. The six corner triangles it greys out
+    // are exactly what the renderer discards — without this the editor frames a
+    // quarter more area than will ever be drawn.
+    if (cellShape == CropShape.hex) {
+      final pts = hexCorners(
+          size.width / 2, size.height / 2, size.width, size.height);
+      final hex = Path()..moveTo(pts[0][0], pts[0][1]);
+      for (var i = 1; i < 6; i++) {
+        hex.lineTo(pts[i][0], pts[i][1]);
+      }
+      hex.close();
+      // Even-odd: the box MINUS the hexagon, i.e. the discarded corners.
+      final corners = Path.combine(
+          PathOperation.difference, Path()..addRect(Offset.zero & size), hex);
+      canvas.drawPath(corners, Paint()..color = const Color(0x8C020617));
+      canvas.drawPath(
+          hex,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = const Color(0xFF22D3EE));
+    }
   }
 
   @override
   bool shouldRepaint(covariant _CropPainter old) =>
-      old.crop != crop || old.image != image;
+      old.crop != crop || old.image != image || old.cellShape != cellShape;
 }

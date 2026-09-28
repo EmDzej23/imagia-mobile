@@ -195,6 +195,9 @@ SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
     // Square cells are ambiguous about which part of a non-square tile to keep — anchor
     // portrait tiles to the top (faces) and leave landscape tiles centred.
     cropPortraitTop: settings.mosaicMode == 'square',
+    // Hexagon cells are reconstructed on the server from the SAME x/y/width/height
+    // every mode sends, so this flag is the only thing that distinguishes them.
+    hexagon: settings.mosaicMode == 'hexagon',
     placements: placements
         .map((p) => SlimPlacement(
               index: p.index,
@@ -208,6 +211,11 @@ SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
                 p.averageColor.g,
                 p.averageColor.b
               ],
+              // 3D cubes: the cell is a parallelogram, and x/y/width/height describe
+              // only the matcher's sample rect. Without these the export falls back to
+              // rectangles and silently loses the whole effect.
+              quad: p.quad,
+              face: p.face,
             ))
         .toList(),
   );

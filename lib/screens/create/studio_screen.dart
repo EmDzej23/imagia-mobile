@@ -325,7 +325,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
           onSelected: selectGroup,
           options: const [
             SegmentOption('photo', '🖼 Photos'),
-            SegmentOption('shape', '🧱 Shapes'),
+            SegmentOption('shape', '🪨 Shapes'),
             SegmentOption('word', '🔤 Words'),
           ],
         ),
@@ -334,12 +334,17 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
           SegmentedSelector<String>(
             selected: mode,
             onSelected: (m) => update(settings.copyWith(mosaicMode: m)),
+            // `blocks` hidden — `original` covers it. Not deleted: saved projects and
+            // presets still carry the mode and the layout pipeline still honours it, so
+            // those keep rendering exactly as before. Restore by un-commenting.
             options: const [
+              SegmentOption('original', 'Original'),
               SegmentOption('square', 'Square'),
               SegmentOption('landscape', 'Landscape'),
               SegmentOption('portrait', 'Portrait'),
-              SegmentOption('original', 'Original'),
-              SegmentOption('blocks', 'Blocks'),
+              // SegmentOption('blocks', 'Blocks'),
+              SegmentOption('rhombille', '🧊 3D'),
+              SegmentOption('hexagon', '⬡ Hexagons'),
             ],
           ),
         ],
@@ -512,8 +517,12 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
         builder: (_) => TileCropScreen(
           image: tile.thumbnail,
           title: tile.filename,
-          initial: studio.tileCrops[tile.id],
+          initial: studio.tileCrops[studio.cropSlotFor(tile.id)],
           cropPortraitTop: studio.settings.mosaicMode == 'square',
+          // The editor frames the cell this tile will actually land in — see
+          // StudioState.cropAspectFor.
+          cellAspect: studio.cropAspectFor(tile.id),
+          cellShape: studio.cropShape,
         ),
       ),
     );
@@ -955,10 +964,19 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                   printAllowed: isPrintRegionAllowed(),
                   onExport:
                       rendering ? null : () => _onExport(context, canRender),
-                  onVideo: () {
-                    ref.read(videoControllerProvider.notifier).reset();
-                    context.push('/create/video');
-                  },
+                  // The reel generator draws every cell as a RECTANGLE. That is right
+                  // for the grid modes and wrong for the two shaped ones: a honeycomb
+                  // or a cube wall would come out as floating rectangles with gaps
+                  // between them, which reads as a broken render rather than a style.
+                  // Disabled rather than shipped broken — the web has no hexagon video
+                  // path either, so this is parity, not a regression.
+                  onVideo: (settings.mosaicMode == 'rhombille' ||
+                          settings.mosaicMode == 'hexagon')
+                      ? null
+                      : () {
+                          ref.read(videoControllerProvider.notifier).reset();
+                          context.push('/create/video');
+                        },
                   onPrint: () => context.push('/create/wallart'),
                 )),
     );
@@ -1213,7 +1231,10 @@ class _SourceAndTiles extends StatelessWidget {
                   itemBuilder: (context, i) {
                     final tile = studio.tiles[i];
                     final highlighted = tile.id == highlightedTileId;
-                    final crop = studio.tileCrops[tile.id];
+                    // Slot-keyed, not id-keyed: in a non-square mode the bare id
+                    // holds the SQUARE crop, so the strip would contradict the mosaic.
+                    final crop =
+                        studio.tileCrops[studio.cropSlotFor(tile.id)];
                     return Stack(
                       children: [
                         // The thumbnail is framed exactly as the mosaic will use
@@ -1500,7 +1521,8 @@ class _StudioActionBar extends StatelessWidget {
   final bool rendering;
   final bool printAllowed;
   final VoidCallback? onExport;
-  final VoidCallback onVideo;
+  /// Null when the current mode has no video path — see the note at the call site.
+  final VoidCallback? onVideo;
   final VoidCallback onPrint;
 
   @override

@@ -15,7 +15,15 @@ const double maxOutputWidth = 25000;
 /// Same factor as canvas blur; used by the render overlay.
 const double overlayBlurCellFactor = 0.7;
 
-const double _originalCellsPerTile = 3.0;
+/// Average cells one photo occupies in `original` mode.
+///
+/// MEASURED on the web bench, not assumed: with the fill-first layout the mix is
+/// dominated by 1x1 cells, so a photo covers ~1.3 cells, not the 3.0 the old
+/// shapes-first layout produced. A wrong value here is invisible in the mosaic and
+/// only shows up as the density slider disagreeing with the result.
+///
+/// Must match ORIGINAL_CELLS_PER_TILE in foto-mozaik/lib/mosaic/density.ts.
+const double _originalCellsPerTile = 1.3;
 const double _minTilesOriginalThreshold = 250;
 
 /// Output-saturation slider bounds. 1 = untouched (the floor); above 1 punches up.
@@ -96,6 +104,41 @@ ColorFilter? saturationColorFilter(double saturation) {
     r - r * s, g - g * s, b + (1 - b) * s, 0, 0, //
     0, 0, 0, 1, 0, //
   ]);
+}
+
+/// Cells a density value produces. Mirrors `densityToCells` in
+/// foto-mozaik/lib/mosaic/density.ts.
+double densityToCells(double density) =>
+    jsRound(math.pow(density / 4, 2).toDouble() * 1.4);
+
+/// Bounds on the adaptive variety value — see [adaptiveReusePenalty].
+const double varietyMin = 0.015;
+const double varietyMax = 0.25;
+
+/// How hard to push photos apart, chosen from the size of the library.
+///
+/// A fixed default cannot be right for every library, because the setting is really
+/// answering "how many times will each photo have to be reused?" — and that is
+/// cells / photos, which spans three orders of magnitude between a twelve-photo album
+/// and a three-thousand-photo camera roll. Measured across libraries at ~1500 cells:
+///
+///     photos   cells/photo   good value   what the old fixed 0.01 gave
+///     3000        0.5          0.015      fine (0% repeats)
+///      200        7.4          0.015      fine (0.6% repeats)
+///       32       46            0.05       12% repeats, one photo used 199x
+///       12      121            0.25       58% repeats, 1906 touching twins
+///
+/// The curve is fitted through those last two anchors and is steeper than linear,
+/// because the small-library end has a cliff: at twelve photos, 0.1 still leaves 1317
+/// touching twins and 0.25 leaves none. A straight line would clear that cliff only by
+/// overcharging the middle of the range.
+///
+/// Must match `adaptiveReusePenalty` in foto-mozaik/lib/mosaic/density.ts.
+double adaptiveReusePenalty(int photoCount, double cellCount) {
+  if (photoCount <= 0 || cellCount <= 0) return varietyMin;
+  final cellsPerPhoto = cellCount / photoCount;
+  final fitted = 0.05 * math.pow(cellsPerPhoto / 46, 1.66).toDouble();
+  return math.min(varietyMax, math.max(varietyMin, fitted));
 }
 
 bool isMinimumDetailOriginalMode(MosaicSettings settings) {
@@ -469,9 +512,39 @@ String stableTileIdFromUrl(String blobUrl) {
 
 /// The crop for a placement's tile, if the user set one. Keyed by BASE id, so a
 /// mirrored placement shares its source photo's crop.
-TileCrop? cropForTile(Map<String, TileCrop>? tileCrops, String tileId) {
+/// Cell shapes that need their own crop, independent of aspect ratio.
+enum CropShape { hex }
+
+/// Which stored crop a tile uses for a cell of this shape.
+///
+/// A crop is a decision about how to frame a photo for a PARTICULAR cell shape — the
+/// square chosen for a square cell is a different decision from the rectangle chosen
+/// for a 3:2 one — so they are stored in separate slots and never overwrite each other.
+///
+/// Square keeps the bare tile id so every crop saved before orientation slots existed
+/// still reads, and 3D cubes shares that slot deliberately: its shear maps a SQUARE
+/// source onto the cube face, so it is the same decision.
+///
+/// Thresholds match `_orientationCompatible`, so a cell and its crop slot can never
+/// disagree about which orientation a shape is. Must match `cropSlot` in
+/// foto-mozaik/lib/mosaic/shared.ts.
+String cropSlot(String tileId, double cellAR, [CropShape? shape]) {
+  final base = getBaseTileId(tileId);
+  // Shape wins over aspect. A hexagon's aspect is 2/sqrt(3) ~ 1.15, which falls inside
+  // the "square" band — so without this it would silently share the square mode's crop,
+  // and `original` can produce genuine 1.15 cells too, so the two would collide.
+  if (shape == CropShape.hex) return '$base|H';
+  if (cellAR > 1.18) return '$base|L';
+  if (cellAR < 0.85) return '$base|P';
+  return base;
+}
+
+/// The crop for a placement's tile, if the user set one for cells of this shape.
+/// Keyed by BASE id, so a mirrored placement shares its source photo's crop.
+TileCrop? cropForTile(Map<String, TileCrop>? tileCrops, String tileId,
+    [double cellAR = 1, CropShape? shape]) {
   if (tileCrops == null || tileCrops.isEmpty) return null;
-  return tileCrops[getBaseTileId(tileId)];
+  return tileCrops[cropSlot(tileId, cellAR, shape)];
 }
 
 double difference(double left, double right) => (left - right).abs();

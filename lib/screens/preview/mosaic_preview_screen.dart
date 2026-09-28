@@ -34,6 +34,37 @@ class MosaicPreviewScreen extends ConsumerStatefulWidget {
 class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
   bool _saving = false;
 
+  /// Bearer token for the preview image request.
+  ///
+  /// `Image.network` sends no headers unless it is given some, so this screen used to
+  /// fetch the preview ANONYMOUSLY. The server treats an unauthenticated caller as a
+  /// view-link holder and clamps the long edge to RESTRICTED_VIEW_MAX_EDGE (2560) — so
+  /// the `maxSize` asked for below was silently ignored and a 10000 px mosaic came back
+  /// at 2560, which is what made zooming look soft. Sending the token identifies the
+  /// OWNER, and the clamp does not apply to them.
+  String? _authToken;
+  bool _tokenLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadToken();
+  }
+
+  Future<void> _loadToken() async {
+    final t = await ref.read(tokenStorageProvider).read();
+    if (!mounted) return;
+    setState(() {
+      _authToken = t;
+      _tokenLoaded = true;
+    });
+  }
+
+  /// Headers for the preview fetch. Null (not an empty map) when signed out, so a
+  /// guest still gets the ordinary restricted preview rather than a broken request.
+  Map<String, String>? get _imageHeaders =>
+      _authToken == null ? null : {'Authorization': 'Bearer $_authToken'};
+
   /// Display resolution for the zoomable view. A single decoded image can't
   /// exceed the GPU's max texture size or it gets clamped per-axis and shows
   /// distorted. iPhones are ~16384; most Android GPUs are 8192 (some older are
@@ -109,13 +140,22 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
           // opens — the image fades in over it once decoded.
           const Center(
               child: CircularProgressIndicator(color: AppColors.accent)),
+          // Held back until the token resolves. Rendering first and re-rendering once
+          // it arrives would fetch the image twice — once at the clamped 2560, once
+          // at full size — and show the soft one first.
+          if (_tokenLoaded)
           InteractiveViewer(
             minScale: 0.8,
             maxScale: 10,
             child: Center(
               child: Image.network(
                 _imageUrl(record.downloadToken),
+                headers: _imageHeaders,
                 fit: BoxFit.contain,
+                // Magnifying to 10x samples far outside the source grid; `medium`
+                // (bilinear) keeps tile edges from breaking up into stair-steps the
+                // way the default does under a large InteractiveViewer transform.
+                filterQuality: FilterQuality.medium,
                 frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
                   if (wasSynchronouslyLoaded) return child;
                   return AnimatedOpacity(

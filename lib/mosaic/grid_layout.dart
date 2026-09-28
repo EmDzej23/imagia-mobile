@@ -2,7 +2,10 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'analyze.dart';
+import 'hexagon.dart';
 import 'matching.dart';
+import 'no_touch.dart';
+import 'rhombille.dart';
 import 'shared.dart';
 import 'types.dart';
 
@@ -144,6 +147,124 @@ List<TileDescriptor>? _poolForShape(
   return bestKey != null ? tilePools[bestKey] : null;
 }
 
+const List<double> _cellArCandidates = [2 / 3, 3 / 4, 1.0, 4 / 3, 3 / 2];
+
+/// Fraction of the library that must agree on an aspect before the grid adopts it.
+///
+/// Deliberately LOW. Measured on a 60/40 landscape/portrait library — the ordinary
+/// case — every non-square choice beats square:
+///
+///   square cells  mean crop 25.1%  worst 33%
+///   3:2 cells     mean crop  1.7%  worst 11%
+///   2:3 cells     mean crop  4.5%  worst  9%
+///
+/// So the threshold only needs to be high enough to catch a library with no dominant
+/// aspect at all, where square is the honest compromise.
+const double _cellArConsensus = 0.35;
+
+/// Log-space band within which a photo counts as "agreeing" with a candidate aspect.
+const double _cellArTolerance = 0.14;
+
+/// Never offer a crop frame more extreme than 3:2 / 2:3 — no camera produces 1:2, and
+/// a frame that shape slices a portrait down to a sliver.
+const double _cropFrameMinAR = 2 / 3;
+const double _cropFrameMaxAR = 3 / 2;
+
+/// Widest shape the derived menu may contain. At 3:2 cells the 2x1 shape becomes 3:1,
+/// which no photograph fills honestly. Measured: 1.8 drops worst-case crop 33% -> 26%
+/// at no cost to colour, while 1.5 is too tight and kills the 3:2 shape outright.
+const double _shapeArLimit = 1.8;
+
+/// The aspect the GRID's cells take, chosen from the library.
+///
+/// Two stages, and both matter. CONSENSUS first, because it protects the minority
+/// orientation: a 50/50 library must stay square even though "average crop" alone would
+/// happily pick a side and ruin half the photos. Then, among candidates that clear
+/// consensus, the one with the LOWEST MEAN CROP — not the highest count, because the
+/// tolerance band is wide enough that 4:3 and 3:2 each count the other's photos, so
+/// counting alone ties them.
+///
+/// Must match `dominantCellAspect` in foto-mozaik/lib/mosaic/grid-layout.ts.
+double dominantCellAspect(List<TileDescriptor> tiles) {
+  if (tiles.isEmpty) return 1.0;
+  var best = 1.0;
+  var bestMeanCrop = double.infinity;
+  for (final cand in _cellArCandidates) {
+    var within = 0;
+    var cropSum = 0.0;
+    for (final t in tiles) {
+      if ((math.log(t.aspectRatio / cand)).abs() <= _cellArTolerance) within++;
+      cropSum += _cropFraction(t.aspectRatio, cand);
+    }
+    if (within / tiles.length < _cellArConsensus) continue;
+    final meanCrop = cropSum / tiles.length;
+    if (meanCrop < bestMeanCrop) {
+      bestMeanCrop = meanCrop;
+      best = cand;
+    }
+  }
+  return best;
+}
+
+/// Every shape aspect reachable from a cell of `cellAR`.
+///
+/// (cols, rows) pairs rather than pre-divided ratios: the aspect must be computed with
+/// the exact same expression `_shapesForCellAR` uses, or the two disagree in the last
+/// bits and every pool lookup misses.
+List<double> _poolARsForCellAR(double cellAR) {
+  const shapes = [
+    [1, 1], [1, 2], [2, 1], [2, 3], [3, 2], [3, 3], [2, 2], [2, 4], [4, 2],
+  ];
+  final out = <double>{};
+  for (final sh in shapes) {
+    out.add((cellAR * sh[0]) / sh[1]);
+  }
+  return out.toList();
+}
+
+/// The crop frame a given photo should be framed against, in a grid of `cellAR` cells.
+///
+/// Must match `cellAspectForTile` in foto-mozaik/lib/mosaic/grid-layout.ts.
+double cellAspectForTile(double tileAR, double cellAR) {
+  var best = cellAR;
+  var bestD = double.infinity;
+  for (final ar in _poolARsForCellAR(cellAR)) {
+    if (!_orientationCompatible(tileAR, ar)) continue;
+    final d = (math.log(tileAR / ar)).abs();
+    if (d < bestD) {
+      bestD = d;
+      best = ar;
+    }
+  }
+  return math.min(math.max(best, _cropFrameMinAR), _cropFrameMaxAR);
+}
+
+/// Derive the shape menu for a non-square cell, dropping shapes no photo can fill.
+///
+/// A non-square cell stretches the menu: at 3:2 cells the 2x1 shape becomes 3:1. The
+/// tile pools would still populate those through the crop fallback — a deliberate
+/// escape hatch for a library with nothing better — but here it would reintroduce the
+/// exact 33% crop this exists to remove. The 1x1 fill is the true last resort and is
+/// never pruned.
+List<CellShape> _shapesForCellAR(
+    List<CellShape> shapes, double cellAR, List<TileDescriptor> tiles) {
+  final derived = cellAR == 1.0
+      ? shapes
+      : shapes
+          .map((sh) =>
+              CellShape(sh.cols, sh.rows, sh.cells, (cellAR * sh.cols) / sh.rows))
+          .toList();
+  return derived
+      .where((sh) =>
+          sh.cells == 1 ||
+          (tiles.any((t) =>
+                  _orientationCompatible(t.aspectRatio, sh.ar) &&
+                  _cropFraction(t.aspectRatio, sh.ar) < _maxCrop) &&
+              sh.ar >= 1 / _shapeArLimit &&
+              sh.ar <= _shapeArLimit))
+      .toList();
+}
+
 bool _orientationCompatible(double tileAR, double shapeAR) {
   final tileIsPortrait = tileAR < 0.85;
   final tileIsLandscape = tileAR > 1.18;
@@ -222,7 +343,15 @@ void _spreadColorError(
 const int _maxPlacements = 6500;
 const int _optimalAssignmentMaxRegions = 4000;
 const int _lowCountSeedAttempts = 3;
-const double _originalCellsPerTile = 3.0;
+/// Average cells one photo occupies in `original` mode.
+///
+/// MEASURED on the web bench, not assumed: with the fill-first layout the mix is
+/// dominated by 1x1 cells, so a photo covers ~1.3 cells, not the 3.0 the old
+/// shapes-first layout produced. A wrong value here is invisible in the mosaic and
+/// only shows up as the density slider disagreeing with the result.
+///
+/// Must match ORIGINAL_CELLS_PER_TILE in foto-mozaik/lib/mosaic/density.ts.
+const double _originalCellsPerTile = 1.3;
 const double _blocksCellsPerTile = 5.0;
 const int _maxCellsOriginal = 45000;
 
@@ -246,8 +375,27 @@ List<MosaicPlacement> buildGridLayout({
   List<FaceRect> faceRegions = const [],
   bool isMobile = false,
 }) {
+  // The variety default follows the LIBRARY, not a constant. `reusePenalty` is really
+  // answering "how often will each photo be reused?", which is cells / photos — and a
+  // value tuned on a 500-photo library leaves a 12-photo one looking like wallpaper.
+  // Only the stored DEFAULT is replaced: any other value is a deliberate choice by the
+  // user, including 0, and is passed through untouched.
+  final rawSettings = settings;
+  if (rawSettings.reusePenalty == defaultSettings().reusePenalty) {
+    settings = rawSettings.copyWith(
+      reusePenalty: adaptiveReusePenalty(
+          tiles.length, densityToCells(rawSettings.density)),
+    );
+  }
+
   final mode = settings.mosaicMode;
   final uniformMode = mode != 'original' && mode != 'blocks';
+
+  // original / blocks: the CELL takes the library's dominant photo aspect, so the 1x1
+  // last-resort fill — which covers most of a low-detail image — no longer centre-crops
+  // a third off every landscape photo to force it into a square. Square when the
+  // library is mixed, which is the old behaviour.
+  final cellAR = uniformMode ? 1.0 : dominantCellAspect(tiles);
 
   _GridDims gridDims;
   if (mode == 'square') {
@@ -258,6 +406,9 @@ List<MosaicPlacement> buildGridLayout({
   } else if (mode == 'portrait') {
     gridDims =
         _computeFixedARGrid(baseWidth, baseHeight, settings.density, 2 / 3);
+  } else if (cellAR != 1.0) {
+    gridDims =
+        _computeFixedARGrid(baseWidth, baseHeight, settings.density, cellAR);
   } else {
     gridDims = _computeGrid(baseWidth, baseHeight, settings.density);
   }
@@ -274,7 +425,18 @@ List<MosaicPlacement> buildGridLayout({
     cellH = baseHeight / N;
   }
 
-  final tilePools = _buildTilePools(tiles);
+  // The REAL cell aspect after the grid rounded M/N to whole cells — shapes and pools
+  // must both key off this, not off the requested value, or a shape's declared aspect
+  // and the rectangle actually drawn drift apart.
+  final actualCellAR = cellW / cellH;
+  // Uniform modes look their pool up by the mode's EXACT aspect (3/2, 2/3, 1). Keying
+  // off the rounded actualCellAR would put 1.4983 in the map where 1.5 is looked up — a
+  // miss, which falls through to the whole library and silently drops landscape/portrait
+  // mode's orientation restriction.
+  final poolCellAR = uniformMode
+      ? (mode == 'landscape' ? 3 / 2 : mode == 'portrait' ? 2 / 3 : 1.0)
+      : actualCellAR;
+  final tilePools = _buildTilePools(tiles, poolCellAR);
   final placements = <MosaicPlacement>[];
   final grid = _createSpatialGrid(math.max(cellW, cellH), baseWidth + cellW);
   final cellSaliency = _computeCellSaliency(
@@ -291,11 +453,33 @@ List<MosaicPlacement> buildGridLayout({
   // exclude cross-orientation photos outright, so those can never be "missing".
   // Everything else can draw on the whole library. Used by the coverage pass below.
   var eligibleTiles = tiles;
-  if (uniformMode) {
+  if (mode == 'rhombille') {
+    // Rhombi are not an MxN lattice, so this bypasses the grid machinery entirely and
+    // matches over the cells directly. Everything downstream — SA, palette balance,
+    // coverage — is untouched: a placement is still a region plus a tile id.
+    _fillRhombilleCells(baseWidth, baseHeight, settings, tiles, analyzer,
+        placements, grid, faceRegions, estimatedPlacements);
+  } else if (mode == 'hexagon') {
+    // A honeycomb is not an MxN lattice, so this bypasses the grid machinery and
+    // matches over its own cells. Everything downstream — SA, palette balance,
+    // coverage, the no-touch pass — is untouched: a placement is still a region plus a
+    // tile id.
+    _fillHexCells(baseWidth, baseHeight, settings, tiles, analyzer, placements,
+        grid, faceRegions, estimatedPlacements);
+  } else if (uniformMode) {
     final cellAR =
         mode == 'landscape' ? 3 / 2 : mode == 'portrait' ? 2 / 3 : 1.0;
-    final pool = (mode == 'landscape' || mode == 'portrait')
-        ? (tilePools[cellAR] ?? tiles)
+    // `??` is not enough: _buildTilePools returns an EMPTY list when no photo matches
+    // the orientation (and deliberately empties near-square pools that are too small),
+    // and an empty list is not null. A library of only landscape photos therefore handed
+    // `portrait` a pool of zero tiles, which threw out of selectBestTileUniform and
+    // failed the whole build. Falling back to the full library centre-crops instead,
+    // which is what `square` already does and beats producing no mosaic at all.
+    final orientationPool = (mode == 'landscape' || mode == 'portrait')
+        ? tilePools[cellAR]
+        : null;
+    final pool = (orientationPool != null && orientationPool.isNotEmpty)
+        ? orientationPool
         : tiles;
     eligibleTiles = pool;
     final resolved = preResolveTiles(pool, cellAR);
@@ -305,22 +489,41 @@ List<MosaicPlacement> buildGridLayout({
     final occupied =
         List.generate(N, (_) => List<bool>.filled(M, false), growable: false);
     final usageCounts = <String, int>{};
-    final baselinePool = tilePools[1.0] ?? tiles;
+    final baselinePool = tilePools[_anyOrientationAR] ?? tiles;
     final baselines =
         _computeBaselines(M, N, cellW, cellH, analyzer, baselinePool, settings);
 
     final isBlocks = mode == 'blocks';
     final colorErrors = <String, LabColor>{};
-    _placeMultiCellShapes(
-        M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-        analyzer, settings, usageCounts, placements, grid, tiles.length,
-        estimatedPlacements, isBlocks ? _blocksShapes : null, colorErrors);
+    // `original` lays the picture out fill-first (see `_fillFirstLayout`). `blocks`
+    // keeps the shapes-first path: its whole premise is that every cell is covered by a
+    // block shape, and fill-first would leave it a 1x1 mosaic.
+    if (!isBlocks) {
+      _fillFirstLayout(
+          M, N, cellW, cellH, occupied, cellSaliency, tilePools, analyzer,
+          settings, usageCounts, placements, grid, tiles.length,
+          estimatedPlacements,
+          _shapesForCellAR(_multiCellShapes, actualCellAR, tiles),
+          _shapesForCellAR(_fillShapes, actualCellAR, tiles),
+          colorErrors, actualCellAR);
+    } else {
+      // Shape aspects are cols/rows x the CELL aspect, so the menu is derived per build
+      // rather than taken from the module constants (which assume square cells).
+      _placeMultiCellShapes(
+          M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
+          analyzer, settings, usageCounts, placements, grid, tiles.length,
+          estimatedPlacements,
+          _shapesForCellAR(_blocksShapes, actualCellAR, tiles), colorErrors);
 
-    _fillRemainingCells(
-        M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-        analyzer, settings, usageCounts, placements, grid, tiles.length,
-        estimatedPlacements, isBlocks ? _blocksFillShapes : null,
-        isBlocks ? 0.95 : 0.5, colorErrors);
+      _fillRemainingCells(
+          M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
+          analyzer, settings, usageCounts, placements, grid, tiles.length,
+          estimatedPlacements,
+          _shapesForCellAR(_blocksFillShapes, actualCellAR, tiles),
+          // In blocks mode raise the saliency guard so 1x1 is used only when no block
+          // shape fits, not whenever a cell happens to be salient.
+          0.95, colorErrors);
+    }
 
     if (isMinimumDetailOriginalMode(settings)) {
       _refineShapesByMerging(placements, cellW, cellH, tilePools, analyzer,
@@ -330,19 +533,57 @@ List<MosaicPlacement> buildGridLayout({
 
   final tileMap = {for (final t in tiles) t.id: t};
 
-  final adjacency = _buildAdjacencyMap(placements);
+  // Hexagons need their own neighbour rule. Their stored rect is the SAMPLE window —
+  // 59% of the drawn cell — so two neighbours' rects never touch, and the rect test
+  // returns zero neighbours for every cell. That silently disables SA's coherence term,
+  // the neighbour-contrast part of saliency, and the no-touch gate. Widening the slack
+  // does not fix it either: the rect test is separable, so the slack that finally
+  // reaches the left/right neighbour also reaches a second-ring cell.
+  final adjacency = mode == 'hexagon'
+      ? buildHexAdjacency(placements)
+      : _buildAdjacencyMap(placements);
   final saliency = _computePlacementSaliency(
       placements, adjacency, baseWidth, baseHeight, faceRegions);
 
   // Vogel + best-of-N seeded SA path is gated purely on region count. The SA iteration
   // BUDGET is separate and admin-overridable (settings.saBudgetFactor) so it can be A/B'd
   // without also toggling Vogel on/off.
-  final isOptimalPath = placements.isNotEmpty &&
+  //
+  // Vogel is for the MULTI-CELL modes only. Its regret heuristic — assign the most
+  // constrained region first — needs regions that differ in how constrained they are,
+  // which is what varied cell shapes and per-shape tile pools give `original`/`blocks`.
+  // A uniform grid has none of that structure: every cell is the same shape drawing on
+  // the same pool, so the ordering buys nothing, while the greedy assignment it discards
+  // was neighbour-AWARE (proximity penalty + neighbour average colour) and Vogel's is
+  // not. Vogel scores candidates with no context penalties at all, so it happily places
+  // a photo beside itself and leaves SA to undo it.
+  //
+  // Measured on web over 4 library aspect mixes at matched cell counts, mean per-cell
+  // Lab error, Vogel on → off:
+  //   square   0.094→0.088  0.104→0.094  0.092→0.088  0.089→0.086
+  //   hexagon  0.092→0.081  0.105→0.086  0.100→0.088  0.094→0.087
+  // and 3-4x FASTER, because building the per-cell candidate lists costs more than the
+  // annealing it replaces. The win holds at EVERY budget (square scored 0.089/0.088/
+  // 0.087 at 0.25/0.5/1.0 vs Vogel's 0.094), which matters here: this device anneals at
+  // 0.25, so the quality gain arrives without spending a single extra iteration.
+  //
+  // `original`/`blocks` keep Vogel — their FACE error gets worse without it.
+  // `rhombille` is deliberately excluded: it measured neutral, so there is no evidence
+  // to justify changing how that mode looks.
+  final modeSkipsVogel = mode == 'square' ||
+      mode == 'landscape' ||
+      mode == 'portrait' ||
+      mode == 'hexagon';
+  // Size and mode are kept apart on purpose, so dropping Vogel for a mode does not
+  // silently also quadruple this device's annealing — the budget below keys off SIZE
+  // only and is unchanged for every mode.
+  final withinOptimalSize = placements.isNotEmpty &&
       placements.length <= _optimalAssignmentMaxRegions;
+  final isOptimalPath = withinOptimalSize && !modeSkipsVogel;
   // Measured on web: 0.5 lifts raw composition SSIM over the old 0.25 with acceptable
   // cost on desktop. Mobile stays 0.25 (SA is main-thread + its iteration cap is already
   // lower, so doubling it there would hurt build time on low-end phones).
-  final defaultSaBudget = isOptimalPath ? (isMobile ? 0.25 : 0.5) : 1.0;
+  final defaultSaBudget = withinOptimalSize ? (isMobile ? 0.25 : 0.5) : 1.0;
   final saBudgetFactor = settings.saBudgetFactor ?? defaultSaBudget;
   if (isOptimalPath) {
     try {
@@ -406,6 +647,14 @@ List<MosaicPlacement> buildGridLayout({
   ensureTileCoverage(placements, eligibleTiles, tileMap, settings,
       saliency: saliency);
 
+  // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
+  // coverage specifically, because coverage places rare photos wherever it can and is
+  // the one pass that can reintroduce a twin. It only ever swaps two cells' tiles, so
+  // the coverage guarantee it just established survives intact.
+  if (strictNoTouchingTwins) {
+    enforceNoTouchingTwins(placements, tileMap, adjacency, saliency);
+  }
+
   return placements;
 }
 
@@ -442,14 +691,29 @@ _GridDims _computeFixedARGrid(
   return _GridDims(M, N, baseWidth / M, baseHeight / N);
 }
 
-final Expando<Map<double, List<TileDescriptor>>> _tilePoolsCache = Expando();
+/// Pools are a pure function of (tiles, cellAR) — the cell aspect changes which tiles
+/// are even eligible for a given shape — so the cache is keyed by both.
+final Expando<Map<double, Map<double, List<TileDescriptor>>>> _tilePoolsCache =
+    Expando();
 
-Map<double, List<TileDescriptor>> _buildTilePools(List<TileDescriptor> tiles) {
-  final cached = _tilePoolsCache[tiles];
+/// Pool key for "any orientation": the 1x1 fill, which may draw on the whole library.
+const double _anyOrientationAR = 0;
+
+/// Minimum genuinely-square tiles before multi-cell SQUARE shapes are offered at all.
+const int _minSquareShapePool = 3;
+
+Map<double, List<TileDescriptor>> _buildTilePools(
+    List<TileDescriptor> tiles, double cellAR) {
+  var byCellAR = _tilePoolsCache[tiles];
+  if (byCellAR == null) {
+    byCellAR = <double, Map<double, List<TileDescriptor>>>{};
+    _tilePoolsCache[tiles] = byCellAR;
+  }
+  final cached = byCellAR[cellAR];
   if (cached != null) return cached;
 
   final pools = <double, List<TileDescriptor>>{};
-  final uniqueARs = [1.0, 0.5, 2.0, 2 / 3, 3 / 2];
+  final uniqueARs = _poolARsForCellAR(cellAR);
 
   for (final ar in uniqueARs) {
     var pool = tiles
@@ -464,13 +728,29 @@ Map<double, List<TileDescriptor>> _buildTilePools(List<TileDescriptor> tiles) {
               _cropFraction(t.aspectRatio, ar) < _maxCropFallback)
           .toList();
     }
-    if (ar == 1.0 && pool.length < 3) {
-      pool = List<TileDescriptor>.from(tiles);
-    }
     pools[ar] = pool;
   }
 
-  _tilePoolsCache[tiles] = pools;
+  // A square shape is only worth building if the library has enough genuinely
+  // square-ish photos to fill several without obvious repetition — and once a square
+  // cell exists it is locked to that pool, so SA cannot escape a 2-tile pool. Below the
+  // floor, drop square shapes entirely and let 3x2 / 2x3 / 2x1 / 1x2 take the frame.
+  // "Square shape" means the shape whose aspect is ~1, which is only the 1x1/2x2/3x3
+  // family when the CELL is square; with 3:2 cells the square shape is 2x3.
+  for (final ar in pools.keys.toList()) {
+    if ((math.log(ar)).abs() > _cellArTolerance) continue;
+    final pool = pools[ar]!;
+    if (pool.isNotEmpty && pool.length < _minSquareShapePool) pools[ar] = [];
+  }
+
+  // The 1x1 fill is the last resort — it must always have tiles, and centre-cropping an
+  // arbitrary photo into one small square cell is normal mosaic behaviour. Multi-cell
+  // SQUARE shapes get no such escape hatch: they render large, so a 25%+ crop is
+  // glaring, and letting them borrow the whole library made them outrank the
+  // landscape/portrait shapes purely on pool size.
+  pools[_anyOrientationAR] = tiles;
+
+  byCellAR[cellAR] = pools;
   return pools;
 }
 
@@ -639,6 +919,543 @@ class _ShapeCandidate {
   double saliency;
 }
 
+/// Saliency at a point — face rects score 1, everything else 0. Mirrors
+/// `_computeCellSaliency` without needing a rectangular lattice.
+double _saliencyAtPoint(double x, double y, double baseW, double baseH,
+    List<FaceRect> faceRegions) {
+  if (faceRegions.isEmpty) return 0;
+  for (final f in faceRegions) {
+    if (x >= f.x && x <= f.x + f.width && y >= f.y && y <= f.y + f.height) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/// Nearby-tile proximities around an arbitrary POINT, for layouts with no MxN lattice.
+Map<String, double> _collectNearbyTilesAt(double cx, double cy, double cellSize,
+    List<MosaicPlacement> placements, SpatialGrid grid,
+    [double reusePenalty = 0]) {
+  final nearby = <String, double>{};
+  final reach = cellSize * (3 + reusePenalty * 4);
+  final candidates = _spatialQuery(grid, cx, cy, reach);
+  for (var k = 0; k < candidates.length; k++) {
+    final p = placements[candidates[k]];
+    final d = math.sqrt(math.pow(p.x + p.width / 2 - cx, 2) +
+        math.pow(p.y + p.height / 2 - cy, 2));
+    if (d > reach) continue;
+    final id = getBaseTileId(p.tileId);
+    final w = 1 - d / reach;
+    final prev = nearby[id];
+    if (prev == null || w > prev) nearby[id] = w;
+  }
+  return nearby;
+}
+
+/// Match one tile into every rhombus of a rhombille tiling.
+///
+/// Deliberately close to the uniform filler: cells are scored by detail and saliency,
+/// sorted so the busiest are matched first (they get first pick of the library), then
+/// committed one at a time with the usual reuse/neighbour pressure. The only real
+/// difference is that a cell's SHAPE and its SAMPLE RECT are different objects — the
+/// scorer gets a square, the renderer gets the parallelogram.
+///
+/// Must match `fillRhombilleCells` in foto-mozaik/lib/mosaic/grid-layout.ts.
+void _fillRhombilleCells(
+    double baseWidth,
+    double baseHeight,
+    MosaicSettings settings,
+    List<TileDescriptor> tiles,
+    ImageAnalyzer analyzer,
+    List<MosaicPlacement> placements,
+    SpatialGrid grid,
+    List<FaceRect> faceRegions,
+    int placementCount) {
+  final cellsOnShort = math.max(3, jsRound(settings.density / 6).toInt());
+  final cells = buildRhombilleCells(baseWidth, baseHeight, cellsOnShort);
+  if (cells.isEmpty) return;
+
+  // The sample square sits inside the rhombus: a 60-degree rhombus of edge s has an
+  // inscribed width of s*(sqrt(3)/2), and 0.62*s stays clear of the acute corners while
+  // still covering most of the area the photo will occupy.
+  final side = rhombEdge(cells[0]) * 0.62;
+
+  final scored = <({
+    RhombCell cell,
+    RegionAnalysis region,
+    double sal,
+    double priority
+  })>[];
+  for (final cell in cells) {
+    final rect = sampleRect(cell, side);
+    // Clamp into the image — edge rhombi hang off the canvas by design.
+    final x = math.max(0.0, math.min(baseWidth - 1, rect.x));
+    final y = math.max(0.0, math.min(baseHeight - 1, rect.y));
+    final w = math.max(1.0, math.min(baseWidth - x, rect.width));
+    final h = math.max(1.0, math.min(baseHeight - y, rect.height));
+    final region = analyzer.sampleRegion(x: x, y: y, width: w, height: h);
+    final sal = _saliencyAtPoint(
+        cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
+    scored.add((
+      cell: cell,
+      region: region,
+      sal: sal,
+      priority: region.detailScore * 0.5 + sal * 0.5,
+    ));
+  }
+  _stableSort(scored, (a, b) => b.priority.compareTo(a.priority));
+
+  final usageCounts = <String, int>{};
+  for (final entry in scored) {
+    final cell = entry.cell;
+    final nearbyTiles = _collectNearbyTilesAt(
+        cell.cx, cell.cy, side, placements, grid, settings.reusePenalty);
+    final match = selectBestTileMatch(MatchInput(
+      region: entry.region,
+      tiles: tiles,
+      settings: settings,
+      usageCounts: usageCounts,
+      nearbyTiles: nearbyTiles,
+      saliency: entry.sal,
+      tilePoolSize: tiles.length,
+      placementCount: placementCount,
+    ));
+    final baseId = getBaseTileId(match.tile.id);
+    usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
+
+    final idx = placements.length;
+    final placement = entry.region
+        .toPlacement(idx, match.tile.id, match.tile.name, match.score);
+    placement.quad = cell.quad;
+    placement.face = cell.face;
+    placements.add(placement);
+
+    final gc = (cell.cx / grid.cellSize).floor();
+    final gr = (cell.cy / grid.cellSize).floor();
+    (grid.buckets[gr * grid.cols + gc] ??= <int>[]).add(idx);
+  }
+}
+
+/// Match one tile into every hexagon of a honeycomb tiling.
+///
+/// Deliberately parallel to the uniform-grid filler: cells are scored by detail and
+/// saliency, the busiest are matched first so they get first pick of the library, and
+/// each is committed with the usual reuse/neighbour pressure.
+///
+/// The one thing to be careful about is the difference between the rect the ANALYSER is
+/// asked about and the rect stored on the placement. Edge hexagons hang off the canvas
+/// by design — that is what fills the border instead of leaving a ragged honeycomb edge
+/// — so the analyser has to be given a clamped rect or it would sample outside the
+/// image. The placement must keep the TRUE rect, because for this mode that rect is the
+/// only record of where the hexagon is: `hexFromRect` reconstructs the six vertices
+/// from it at draw time. Storing the clamped rect would shrink every edge hexagon and
+/// open a gap around the entire border.
+///
+/// Must match `fillHexCells` in foto-mozaik/lib/mosaic/grid-layout.ts.
+void _fillHexCells(
+    double baseWidth,
+    double baseHeight,
+    MosaicSettings settings,
+    List<TileDescriptor> tiles,
+    ImageAnalyzer analyzer,
+    List<MosaicPlacement> placements,
+    SpatialGrid grid,
+    List<FaceRect> faceRegions,
+    int placementCount) {
+  // Same divisor as rhombille, so the density slider means the same thing in both.
+  final cellsOnShort = math.max(3, jsRound(settings.density / 6).toInt());
+  final cells = buildHexCells(baseWidth, baseHeight, cellsOnShort);
+  if (cells.isEmpty) return;
+
+  final scored = <({
+    HexCell cell,
+    HexRect rect,
+    RegionAnalysis region,
+    double sal,
+    double priority
+  })>[];
+  for (final cell in cells) {
+    final rect = hexSampleRect(cell);
+    final x = math.max(0.0, math.min(baseWidth - 1, rect.x));
+    final y = math.max(0.0, math.min(baseHeight - 1, rect.y));
+    final w = math.max(1.0, math.min(baseWidth - x, rect.width));
+    final h = math.max(1.0, math.min(baseHeight - y, rect.height));
+    final region = analyzer.sampleRegion(x: x, y: y, width: w, height: h);
+    final sal = _saliencyAtPoint(
+        cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
+    scored.add((
+      cell: cell,
+      rect: rect,
+      region: region,
+      sal: sal,
+      priority: region.detailScore * 0.5 + sal * 0.5,
+    ));
+  }
+  _stableSort(scored, (a, b) => b.priority.compareTo(a.priority));
+
+  final usageCounts = <String, int>{};
+  for (final entry in scored) {
+    final cell = entry.cell;
+    final nearbyTiles = _collectNearbyTilesAt(cell.cx, cell.cy,
+        entry.rect.width, placements, grid, settings.reusePenalty);
+    final match = selectBestTileMatch(MatchInput(
+      region: entry.region,
+      tiles: tiles,
+      settings: settings,
+      usageCounts: usageCounts,
+      nearbyTiles: nearbyTiles,
+      saliency: entry.sal,
+      tilePoolSize: tiles.length,
+      placementCount: placementCount,
+    ));
+    final baseId = getBaseTileId(match.tile.id);
+    usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
+
+    final idx = placements.length;
+    final placement = entry.region
+        .toPlacement(idx, match.tile.id, match.tile.name, match.score);
+    // Overwrite with the TRUE, unclamped geometry — see the note above. The region was
+    // sampled from a clamped rect so the analyser stays inside the image, but the
+    // placement must record where the hexagon really is.
+    placement.x = entry.rect.x;
+    placement.y = entry.rect.y;
+    placement.width = entry.rect.width;
+    placement.height = entry.rect.height;
+    placements.add(placement);
+
+    final gc = (cell.cx / grid.cellSize).floor();
+    final gr = (cell.cy / grid.cellSize).floor();
+    (grid.buckets[gr * grid.cols + gc] ??= <int>[]).add(idx);
+  }
+}
+
+/// The colour a tile actually SHOWS once cover-cropped into a cell of [cellAR].
+///
+/// Needed because the upgrade decision compares one big cell against several small
+/// ones, and the scorer's composite score is NOT comparable across cell sizes — a
+/// larger region has more internal variance, so its best score is systematically
+/// higher, and a direct comparison would reject every shape. Colour distance between a
+/// region's average and the colour its tile displays is size-independent, which makes
+/// it the right basis.
+LabColor _shownLab(TileDescriptor tile, double cellAR) {
+  final cw = computeCropWeights(tile.aspectRatio, cellAR);
+  if (cw == null || tile.subregionColors == null) return tile.averageLabColor;
+  var l = 0.0, a = 0.0, b = 0.0, w = 0.0;
+  for (var i = 0; i < 25; i++) {
+    final wi = cw[i];
+    if (wi <= 0) continue;
+    final c = tile.subregionColors![i];
+    l += c.L * wi;
+    a += c.a * wi;
+    b += c.b * wi;
+    w += wi;
+  }
+  return w > 0 ? LabColor(l / w, a / w, b / w) : tile.averageLabColor;
+}
+
+/// How much WORSE a shape may be than the cells it replaces and still be accepted.
+///
+/// Counterintuitively this wants to be well above 1. A strict gate admits almost
+/// nothing — one photo averaged over four cells rarely beats four individually-chosen
+/// photos on colour distance — and the result is a near-uniform mosaic. Loosening it
+/// admits more shapes AND measures BETTER, because consolidating four cells into one
+/// returns three photos to the pool, easing reuse pressure everywhere else.
+///
+/// Measured (200 photos, d135): 1.0 -> err 0.105 with 15 multi-cell cells; 2.5 -> 0.102
+/// with ~105. 2.5 is where the curve flattens.
+const double _upgradeMargin = 2.5;
+
+/// The `original` layout: lay the whole picture out with the FILL shapes first, then
+/// upgrade to multi-cell shapes only where a shape demonstrably beats what those cells
+/// already achieved.
+///
+/// In the default order the shape pass runs first and picks its tiles from a pristine
+/// library, on scores computed with no usage, no neighbours and no colour bias. Every
+/// shape it commits takes a well-matching photo away from the 1x1 fill that follows,
+/// which then pays reuse penalties on the leftovers. Measured on the web bench that
+/// costs ~0.012 of mean colour error, and it is pure opportunity cost: multi-cell cells
+/// actually score BETTER than 1x1 cells (0.098 vs 0.122). They simply do not earn what
+/// they take.
+///
+/// Here a shape must beat the fill's ACHIEVED scores, measured under the same penalty
+/// regime, with the tiles it would displace already returned to the pool. Measured
+/// against the old shapes-first order: mean colour error 0.118 -> 0.099 on a uniform
+/// library, 0.142 -> 0.113 on a 50/50 mixed one, discarded photos 35 -> 8.
+///
+/// Must match `fillFirstLayout` in foto-mozaik/lib/mosaic/grid-layout.ts.
+void _fillFirstLayout(
+    int M,
+    int N,
+    double cellW,
+    double cellH,
+    List<List<bool>> occupied,
+    List<List<double>> cellSaliency,
+    Map<double, List<TileDescriptor>> tilePools,
+    ImageAnalyzer analyzer,
+    MosaicSettings settings,
+    Map<String, int> usageCounts,
+    List<MosaicPlacement> placements,
+    SpatialGrid grid,
+    int tilePoolSize,
+    int placementCount,
+    List<CellShape> shapes,
+    List<CellShape> fillShapes,
+    Map<String, LabColor> colorErrors,
+    double cellAR) {
+  // `_fillRemainingCells` orders cells by baseline detail, so it needs real baselines
+  // even though this pass does not use them to gate shapes.
+  final baselinePool = tilePools[_anyOrientationAR] ??
+      _poolForShape(tilePools, cellAR) ??
+      const <TileDescriptor>[];
+  final baselines =
+      _computeBaselines(M, N, cellW, cellH, analyzer, baselinePool, settings);
+
+  // ── Phase A: the whole picture in the FULL fill menu ──────────────────────
+  //
+  // Not just 1x1: filling everything with one cell aspect starves the minority
+  // orientation, because the matcher rejects portrait photos from landscape cells, so
+  // with a mixed library they have nowhere to live and go unused — measured at 93 of
+  // 100 dropped on a 50/50 library. The small non-square fill shapes are what give
+  // those photos a home, and they have to exist BEFORE the upgrade pass, not compete
+  // for an upgrade they will never win.
+  final tileById = <String, TileDescriptor>{};
+  for (final pool in tilePools.values) {
+    for (final t in pool) {
+      tileById[t.id] = t;
+    }
+  }
+  _fillRemainingCells(
+      M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
+      analyzer, settings, usageCounts, placements, grid, tilePoolSize,
+      placementCount, fillShapes, 0.5, colorErrors);
+
+  // Which placement owns each cell. A fill placement may be multi-cell, so several
+  // cells can share one owner — the upgrade pass dedupes and checks containment.
+  final owner = List.generate(N, (_) => List<int>.filled(M, -1), growable: false);
+  final achieved = List.generate(
+      N, (_) => List<double>.filled(M, double.infinity),
+      growable: false);
+  final cellsOf = <int, int>{};
+  for (var i = 0; i < placements.length; i++) {
+    final p = placements[i];
+    final c0 = jsRound(p.x / cellW).toInt();
+    final r0 = jsRound(p.y / cellH).toInt();
+    final cw = math.max(1, jsRound(p.width / cellW).toInt());
+    final ch = math.max(1, jsRound(p.height / cellH).toInt());
+    cellsOf[i] = cw * ch;
+    for (var dr = 0; dr < ch; dr++) {
+      for (var dc = 0; dc < cw; dc++) {
+        final r = r0 + dr, c = c0 + dc;
+        if (r < 0 || r >= N || c < 0 || c >= M) continue;
+        owner[r][c] = i;
+        achieved[r][c] = p.score / (cw * ch);
+      }
+    }
+  }
+
+  // ── Phase B: shortlist candidates ─────────────────────────────────────────
+  final regions = <RegionAnalysis>[];
+  final positions =
+      <({int col, int row, CellShape shape, double gain})>[];
+  final saliencyList = <double>[];
+  final poolIndexList = <int>[];
+  final poolList = <List<TileDescriptor>>[];
+  final poolKeyByAR = <double, int>{};
+
+  for (final shape in shapes) {
+    final pool = _poolForShape(tilePools, shape.ar);
+    if (pool == null || pool.isEmpty) continue;
+    var poolIdx = poolKeyByAR[shape.ar];
+    if (poolIdx == null) {
+      poolIdx = poolList.length;
+      poolList.add(pool);
+      poolKeyByAR[shape.ar] = poolIdx;
+    }
+    for (var r = 0; r <= N - shape.rows; r++) {
+      for (var c = 0; c <= M - shape.cols; c++) {
+        var sum = 0.0;
+        var ok = true;
+        for (var dr = 0; dr < shape.rows && ok; dr++) {
+          for (var dc = 0; dc < shape.cols; dc++) {
+            final a = achieved[r + dr][c + dc];
+            if (!a.isFinite) {
+              ok = false;
+              break;
+            }
+            sum += a;
+          }
+        }
+        if (!ok) continue;
+        regions.add(analyzer.sampleRegion(
+            x: c * cellW,
+            y: r * cellH,
+            width: shape.cols * cellW,
+            height: shape.rows * cellH));
+        positions.add(
+            (col: c, row: r, shape: shape, gain: sum / shape.cells));
+        saliencyList.add(_avgCellSaliency(c, r, shape, cellSaliency));
+        poolIndexList.add(poolIdx);
+      }
+    }
+  }
+  if (regions.isEmpty) return;
+
+  final batch = _scoreMultiPoolRegionsSync(
+      regions,
+      Float32List.fromList(saliencyList),
+      poolIndexList,
+      poolList,
+      settings);
+
+  // Rank by OPTIMISTIC net gain — the shortlist only has to be generous, because every
+  // entry is verified for real below.
+  final shortlist = <({int i, double net})>[];
+  for (var i = 0; i < positions.length; i++) {
+    final net = positions[i].gain - batch[i];
+    if (net > 0) shortlist.add((i: i, net: net));
+  }
+  _stableSort(shortlist, (a, b) => b.net.compareTo(a.net));
+  final cap = math.max(64, jsRound((M * N) / 2).toInt());
+  final candidates =
+      shortlist.length > cap ? shortlist.sublist(0, cap) : shortlist;
+
+  // ── Phase C: verify each candidate for real, then commit ──────────────────
+  final dead = <int>{};
+  for (final entry in candidates) {
+    final i = entry.i;
+    final pos = positions[i];
+    // NOT a `shapeFits` occupancy test: after Phase A every cell is occupied, so that
+    // rejects every candidate. What matters is whether the covered cells are still
+    // owned by LIVE placements — checked as the victims are gathered.
+    final candX = pos.col * cellW, candY = pos.row * cellH;
+    final candR = candX + pos.shape.cols * cellW;
+    final candB = candY + pos.shape.rows * cellH;
+    const eps = 0.5;
+    final victims = <int>[];
+    final seen = <int>{};
+    var covered = 0;
+    var stale = false;
+    for (var dr = 0; dr < pos.shape.rows && !stale; dr++) {
+      for (var dc = 0; dc < pos.shape.cols; dc++) {
+        final idx = owner[pos.row + dr][pos.col + dc];
+        if (idx < 0 || dead.contains(idx)) {
+          stale = true;
+          break;
+        }
+        if (seen.contains(idx)) continue;
+        final v = placements[idx];
+        // A fill placement that pokes out (a 1x2 straddling the edge) cannot be
+        // swallowed — otherwise half a portrait cell would be deleted, leaving a hole.
+        if (v.x < candX - eps ||
+            v.y < candY - eps ||
+            v.x + v.width > candR + eps ||
+            v.y + v.height > candB + eps) {
+          stale = true;
+          break;
+        }
+        seen.add(idx);
+        victims.add(idx);
+        covered += cellsOf[idx] ?? 1;
+      }
+    }
+    if (stale || victims.isEmpty || covered != pos.shape.cells) continue;
+
+    // Return the displaced tiles to the pool BEFORE scoring, or the shape is charged
+    // for competing with photos it is about to free.
+    for (final v in victims) {
+      final id = getBaseTileId(placements[v].tileId);
+      final n = (usageCounts[id] ?? 1) - 1;
+      if (n <= 0) {
+        usageCounts.remove(id);
+      } else {
+        usageCounts[id] = n;
+      }
+    }
+
+    final pool = _poolForShape(tilePools, pos.shape.ar)!;
+    final nearbyTiles = _collectNearbyTiles(pos.col, pos.row, cellW, cellH,
+        placements, grid, settings.reusePenalty, dead);
+    final neighborAvgColor = _computeNeighborAvgColor(
+        pos.col, pos.row, cellW, cellH, placements, grid, dead);
+    final match = selectBestTileMatch(MatchInput(
+      region: regions[i],
+      tiles: pool,
+      settings: settings,
+      usageCounts: usageCounts,
+      nearbyTiles: nearbyTiles,
+      saliency: saliencyList[i],
+      neighborAvgColor: neighborAvgColor,
+      tilePoolSize: tilePoolSize,
+      placementCount: placementCount,
+      colorBias: colorErrors[_cellKey(pos.col, pos.row)],
+    ));
+
+    // The real test: does ONE photo reconstruct this region better than the several
+    // photos already there? Compared as colour distance, which is size-independent.
+    final dShape = labDistance(
+        regions[i].averageLabColor, _shownLab(match.tile, pos.shape.ar));
+    var dVictims = 0.0;
+    for (final v in victims) {
+      final vp = placements[v];
+      final vt = tileById[getBaseTileId(vp.tileId)];
+      final w = cellsOf[v] ?? 1;
+      dVictims += w *
+          (vt != null
+              ? labDistance(
+                  vp.averageLabColor, _shownLab(vt, vp.width / vp.height))
+              : dShape);
+    }
+    dVictims /= covered;
+
+    if (dShape > dVictims * _upgradeMargin) {
+      // Not good enough — put the tiles back and leave the fill cells alone.
+      for (final v in victims) {
+        final id = getBaseTileId(placements[v].tileId);
+        usageCounts[id] = (usageCounts[id] ?? 0) + 1;
+      }
+      continue;
+    }
+
+    for (final v in victims) {
+      dead.add(v);
+      final vp = placements[v];
+      final c0 = jsRound(vp.x / cellW).toInt();
+      final r0 = jsRound(vp.y / cellH).toInt();
+      final cw = math.max(1, jsRound(vp.width / cellW).toInt());
+      final ch = math.max(1, jsRound(vp.height / cellH).toInt());
+      for (var dr = 0; dr < ch; dr++) {
+        for (var dc = 0; dc < cw; dc++) {
+          if (r0 + dr < N && c0 + dc < M) owner[r0 + dr][c0 + dc] = -1;
+        }
+      }
+    }
+    _commitPlacement(pos.col, pos.row, pos.shape, cellW, cellH, regions[i],
+        match.tile, match.score, occupied, usageCounts, placements, grid);
+  }
+
+  // ── Phase D: compact ──────────────────────────────────────────────────────
+  // Tombstones must not survive: everything downstream (adjacency, SA, palette
+  // balance, coverage) assumes a densely-indexed array.
+  if (dead.isNotEmpty) {
+    final live = <MosaicPlacement>[];
+    for (var i = 0; i < placements.length; i++) {
+      if (!dead.contains(i)) live.add(placements[i]);
+    }
+    placements.clear();
+    for (var i = 0; i < live.length; i++) {
+      live[i].index = i;
+      placements.add(live[i]);
+    }
+  }
+
+  // Any cell a shape could not cover is already filled from Phase A, so the only work
+  // left is the fill shapes for cells never claimed at all (edges).
+  _fillRemainingCells(
+      M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
+      analyzer, settings, usageCounts, placements, grid, tilePoolSize,
+      placementCount, fillShapes, 0.5, colorErrors);
+}
+
 void _placeMultiCellShapes(
     int M,
     int N,
@@ -724,7 +1541,13 @@ void _placeMultiCellShapes(
         final salPenalty = sal > 0.4 && pos.shape.cells > 4
             ? 1 + (sal - 0.4) * (pos.shape.cells / 6)
             : 1.0;
-        final weight = math.sqrt(pos.shape.cells) / salPenalty;
+        // FLAT, not sqrt(cells). Weighting by size made the ranking prefer big shapes
+        // for their size rather than their fit, so an 8-cell shape with a mediocre
+        // per-cell improvement outranked a 2-cell shape with a great one. Measured
+        // 10-13% better across every library tested and ~35% faster, because fewer
+        // oversized candidates are evaluated. The saliency penalty stays: faces want
+        // granular control, so a large shape over a salient region is still pushed down.
+        final weight = 1 / salPenalty;
         candidates.add(_ShapeCandidate(pos.col, pos.row, pos.shape,
             perCellImprovement * weight, regions[i], sal));
       }
@@ -1187,9 +2010,11 @@ void _fillUniformGrid(
   }
 }
 
+/// [dead] holds indices displaced by the upgrade pass — still present in the array and
+/// the spatial grid until compaction, but no longer part of the mosaic.
 Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
     double cellH, List<MosaicPlacement> placements, SpatialGrid grid,
-    [double reusePenalty = 0]) {
+    [double reusePenalty = 0, Set<int>? dead]) {
   final nearby = <String, double>{};
   final cx = (col + 0.5) * cellW;
   final cy = (row + 0.5) * cellH;
@@ -1198,6 +2023,7 @@ Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
 
   final candidates = _spatialQuery(grid, cx, cy, reach);
   for (var k = 0; k < candidates.length; k++) {
+    if (dead != null && dead.contains(candidates[k])) continue;
     final p = placements[candidates[k]];
     final nearestX = math.max(p.x, math.min(cx, p.x + p.width));
     final nearestY = math.max(p.y, math.min(cy, p.y + p.height));
@@ -1215,7 +2041,7 @@ Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
 }
 
 LabColor? _computeNeighborAvgColor(int col, int row, double cellW, double cellH,
-    List<MosaicPlacement> placements, SpatialGrid grid) {
+    List<MosaicPlacement> placements, SpatialGrid grid, [Set<int>? dead]) {
   final cx = (col + 0.5) * cellW;
   final cy = (row + 0.5) * cellH;
   final cellSize = math.max(cellW, cellH);
@@ -1224,6 +2050,7 @@ LabColor? _computeNeighborAvgColor(int col, int row, double cellW, double cellH,
   var wSum = 0.0, sL = 0.0, sA = 0.0, sB = 0.0;
   final candidates = _spatialQuery(grid, cx, cy, reach);
   for (var k = 0; k < candidates.length; k++) {
+    if (dead != null && dead.contains(candidates[k])) continue;
     final p = placements[candidates[k]];
     final nearestX = math.max(p.x, math.min(cx, p.x + p.width));
     final nearestY = math.max(p.y, math.min(cy, p.y + p.height));

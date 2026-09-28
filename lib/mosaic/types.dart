@@ -536,12 +536,22 @@ class MosaicPlacement extends RegionAnalysis {
     required this.tileId,
     required this.tileName,
     required this.score,
+    this.quad,
+    this.face,
   });
 
   int index;
   String tileId;
   String tileName;
   double score;
+
+  /// `rhombille` only: the cell is a PARALLELOGRAM, not the axis-aligned rect that
+  /// x/y/width/height describe — those hold only the matcher's SAMPLE rect. Eight
+  /// numbers, four corners clockwise from the transform origin.
+  List<double>? quad;
+
+  /// `rhombille` only: which cube face, for the lighting multiplier.
+  String? face;
 }
 
 class SlimPlacement {
@@ -553,6 +563,8 @@ class SlimPlacement {
     required this.height,
     required this.tileId,
     this.regionAvgColor,
+    this.quad,
+    this.face,
   });
 
   int index;
@@ -565,6 +577,14 @@ class SlimPlacement {
   /// [r, g, b] 0-255 average of the matched region (optional color nudge).
   List<double>? regionAvgColor;
 
+  /// `rhombille` only: the cell is a PARALLELOGRAM, not the axis-aligned rect that
+  /// x/y/width/height describe — those hold only the matcher's SAMPLE rect. Eight
+  /// numbers, four corners clockwise from the transform origin.
+  List<double>? quad;
+
+  /// `rhombille` only: which cube face, for the lighting multiplier.
+  String? face;
+
   Map<String, dynamic> toJson() => {
         'index': index,
         'x': x,
@@ -573,6 +593,11 @@ class SlimPlacement {
         'height': height,
         'tileId': tileId,
         if (regionAvgColor != null) 'regionAvgColor': regionAvgColor,
+        // 3D cubes: the cell is a parallelogram, and x/y/width/height describe only the
+        // matcher's sample rect. Without these the export falls back to rectangles and
+        // silently loses the whole effect.
+        if (quad != null) 'quad': quad,
+        if (face != null) 'face': face,
       };
 }
 
@@ -651,6 +676,7 @@ class SlimMosaicPlan {
     required this.baseBlur,
     required this.placements,
     this.cropPortraitTop = false,
+    this.hexagon = false,
     this.outputSaturation = 1.0,
     this.tileCrops = const {},
   });
@@ -667,6 +693,16 @@ class SlimMosaicPlan {
   /// the centre; landscape tiles stay centre-cropped. Honoured by the on-device preview
   /// painters AND sent to the server compositor (which reads the same flag).
   bool cropPortraitTop;
+
+  /// `hexagon` mode: every cell is a flat-top regular hexagon, and x/y/width/height is
+  /// its SAMPLE rect — the hexagon itself is reconstructed from that rect (see
+  /// `hexFromRect`). A plan-level flag rather than a per-placement one because a plan is
+  /// never mixed, and a per-cell marker would add a field to thousands of placements in
+  /// the render payload for no information.
+  ///
+  /// Without this the server draws each sample rect as a RECTANGLE and leaves the space
+  /// between them black — a mosaic of floating tiles, not a honeycomb.
+  bool hexagon;
 
   /// Output saturation grade over the FINISHED composite (see
   /// [MosaicSettings.outputSaturation]). Sent to the server compositor so the
@@ -687,6 +723,7 @@ class SlimMosaicPlan {
         'tintStrength': tintStrength,
         'baseBlur': baseBlur,
         'cropPortraitTop': cropPortraitTop,
+        if (hexagon) 'hexagon': true,
         'outputSaturation': outputSaturation,
         // Omitted when empty — the server treats absent as "all automatic".
         if (tileCrops.isNotEmpty)

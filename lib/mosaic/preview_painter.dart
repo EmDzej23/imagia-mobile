@@ -1,9 +1,12 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'shared.dart' show cropForTile, saturationColorFilter;
+import 'shared.dart' show CropShape, cropForTile, saturationColorFilter;
+import 'hexagon.dart';
+import 'rhombille.dart' show faceShade;
 import 'types.dart';
 
 /// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
@@ -82,6 +85,123 @@ Rect centerCropSrc(ui.Image img, double cellAR,
 /// Renders a [SlimMosaicPlan] on a canvas: each placement draws its matched
 /// tile thumbnail, center-cropped to the cell's aspect ratio, with an optional
 /// tinted overlay of the base image (the `tintStrength` setting).
+/// The hexagon's bounding box from its SAMPLE rect — the inverse of `hexSampleRect`,
+/// in destination pixels. The stored rect is only 59% of the drawn cell.
+Rect _hexBoundsFor(Rect sample) {
+  final s = sample.height / hexSampleHPerS;
+  return Rect.fromCenter(
+      center: sample.center, width: s * 2, height: s * math.sqrt(3));
+}
+
+/// Clip path for the flat-top hexagon inscribed in [rect].
+///
+/// Grown by a pixel on each side so neighbours overlap: without it the antialiased
+/// edges of two adjacent cells do not sum back to full opacity and the background shows
+/// through as dark hairlines along every seam. Same reason, and the same constant, as
+/// the server compositor.
+Path _hexClipPath(Rect rect) {
+  final pts = hexCorners(rect.center.dx, rect.center.dy,
+      rect.width + hexOverdraw * 2, rect.height + hexOverdraw * 2);
+  final path = Path()..moveTo(pts[0][0], pts[0][1]);
+  for (var i = 1; i < 6; i++) {
+    path.lineTo(pts[i][0], pts[i][1]);
+  }
+  return path..close();
+}
+
+/// Draw ONE rhombus of a 3D cube, in `rhombille` mode.
+///
+/// A rhombus is a unit square under an affine map, so the photo goes on with a single
+/// transform + clip. The basis vectors are the cell's own edge vectors, scaled from
+/// base-image pixels into destination pixels, so the photo shears onto the facet exactly
+/// as it does on the web and in the server compositor.
+///
+/// Per-face shading is what makes the wall read as lit solids rather than a flat pattern
+/// of diamonds — see [faceShade].
+void _drawRhombus(Canvas canvas, ui.Image img, SlimMosaicPlan plan,
+    Map<String, TileCrop> tileCrops, SlimPlacement p, double sx, double sy,
+    Offset origin, Paint paint) {
+  final q = p.quad!;
+  double px(int i) => q[i * 2] * sx + origin.dx;
+  double py(int i) => q[i * 2 + 1] * sy + origin.dy;
+
+  final path = Path()..moveTo(px(0), py(0));
+  for (var i = 1; i < 4; i++) {
+    path.lineTo(px(i), py(i));
+  }
+  path.close();
+
+  canvas.save();
+  canvas.clipPath(path);
+
+  // Corner 0 is the origin; edges 0->1 and 0->3 are the basis vectors.
+  final ux = px(1) - px(0), uy = py(1) - py(0);
+  final vx = px(3) - px(0), vy = py(3) - py(0);
+  // The shear maps a SQUARE source onto the face, so 3D cubes share the square crop
+  // slot — the same decision the web makes.
+  final src = centerCropSrc(img, 1, crop: cropForTile(tileCrops, p.tileId, 1));
+  final side = math.min(src.width, src.height);
+
+  // Map a `side`-sized destination, NOT a 1x1 one: a unit-square destination rasterises
+  // the image at one pixel and then magnifies it, producing a smear rather than a photo.
+  canvas.transform(Float64List.fromList([
+    ux / side, uy / side, 0, 0, //
+    vx / side, vy / side, 0, 0, //
+    0, 0, 1, 0, //
+    px(0), py(0), 0, 1, //
+  ]));
+  canvas.drawImageRect(
+      img,
+      Rect.fromLTWH(src.left + (src.width - side) / 2,
+          src.top + (src.height - side) / 2, side, side),
+      Rect.fromLTWH(0, 0, side, side),
+      paint);
+  canvas.restore();
+
+  final shade = faceShade[p.face] ?? 1.0;
+  if (shade < 1) {
+    canvas.save();
+    canvas.clipPath(path);
+    canvas.drawPath(
+        path, Paint()..color = Color.fromRGBO(0, 0, 0, 1 - shade));
+    canvas.restore();
+  }
+}
+
+/// Draw ONE mosaic cell. Shared by both painters so the hexagon handling — and the crop
+/// slot it reads — cannot drift between the preview and the loupe.
+void _drawCell(Canvas canvas, ui.Image img, SlimMosaicPlan plan,
+    Map<String, TileCrop> tileCrops, SlimPlacement p, Rect rect, Paint paint,
+    {double? rhombSx, double? rhombSy, Offset rhombOrigin = Offset.zero}) {
+  // 3D cubes: the cell is a parallelogram, drawn before the rectangular path because
+  // none of that applies — there is no axis-aligned destination rect.
+  if (p.quad != null && rhombSx != null && rhombSy != null) {
+    _drawRhombus(
+        canvas, img, plan, tileCrops, p, rhombSx, rhombSy, rhombOrigin, paint);
+    return;
+  }
+  // Hexagon mode: cover-fit the hexagon's BOUNDING BOX and clip. Fitting the sample
+  // rect instead would leave the six corners empty, and a honeycomb with transparent
+  // corners reads as a rendering fault rather than a style.
+  final hex = plan.hexagon ? _hexBoundsFor(rect) : null;
+  final dst = hex ?? rect;
+  if (hex != null) {
+    canvas.save();
+    canvas.clipPath(_hexClipPath(hex));
+  }
+  canvas.drawImageRect(
+      img,
+      centerCropSrc(img, dst.width / dst.height,
+          topCrop: plan.cropPortraitTop,
+          // Crops are per CELL SHAPE — the slot must match what the cell is, or a
+          // portrait cell reads back the square mode's framing.
+          crop: cropForTile(tileCrops, p.tileId, p.width / p.height,
+              plan.hexagon ? CropShape.hex : null)),
+      dst,
+      paint);
+  if (hex != null) canvas.restore();
+}
+
 class MosaicPreviewPainter extends CustomPainter {
   MosaicPreviewPainter({
     required this.plan,
@@ -180,13 +300,8 @@ class MosaicPreviewPainter extends CustomPainter {
         continue;
       }
       paint.color = Color.fromRGBO(255, 255, 255, opacity);
-      canvas.drawImageRect(
-          img,
-          centerCropSrc(img, p.width / p.height,
-              topCrop: plan.cropPortraitTop,
-              crop: cropForTile(tileCrops, p.tileId)),
-          drawRect,
-          paint);
+      _drawCell(canvas, img, plan, tileCrops, p, drawRect, paint,
+          rhombSx: s, rhombSy: s);
     }
 
     if (baseImage != null && tintStrength > 0) {
@@ -288,13 +403,8 @@ class MosaicZoomPainter extends CustomPainter {
         }
         continue;
       }
-      canvas.drawImageRect(
-          img,
-          centerCropSrc(img, p.width / p.height,
-              topCrop: plan.cropPortraitTop,
-              crop: cropForTile(tileCrops, p.tileId)),
-          dst,
-          paint);
+      _drawCell(canvas, img, plan, tileCrops, p, dst, paint,
+          rhombSx: s, rhombSy: s, rhombOrigin: Offset(ox, oy));
     }
 
     if (baseImage != null && tintStrength > 0) {

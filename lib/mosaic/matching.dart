@@ -142,7 +142,24 @@ const double _vividBonusScale = 0.065;
 const double _vividBonusMax = 0.025;
 const double _vividBonusMaxMinDetail = 0.1;
 
-const double _saTransitionWeight = 0.90;
+/// How hard SA weights the neighbour-transition (coherence) term.
+///
+/// Raised from 0.90 after measuring it against the proximity penalty it competes with.
+/// At 0.90 the proximity term dominated completely: SA drove adjacent-repeat clustering
+/// to a hard 0% and spent everything else getting there, leaving coherence WORSE than
+/// not running SA at all. Measured on the web bench (200-photo and 60/40 mixed
+/// libraries, 1600 tiles):
+///
+///   weight   colour err      clustering      coherence
+///   0.90     0.100 / 0.111   0.00% / 0.00%   12.89 / 14.44   <- was
+///   7.0      0.096 / 0.103   1.23% / 0.82%   11.42 / 13.44   <- now
+///   12       0.091 / 0.097   2.73% / 3.66%   11.10 / 12.39
+///   20       0.086 / 0.093   4.87% / 9.01%    9.74 / 11.02
+///
+/// Must match SA_TRANSITION_WEIGHT in foto-mozaik/lib/mosaic/matching.ts — the two
+/// engines are a bit-exact pair and a different weight here produces a different
+/// mosaic on the phone than on the web for the same photo and settings.
+const double _saTransitionWeight = 7.0;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

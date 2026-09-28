@@ -32,7 +32,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'Recreate any picture out of hundreds of your own photos.',
         Icons.auto_awesome_mosaic),
     _Slide('Tune it live',
-        'Adjust density and style and watch the mosaic rebuild in real time. Tap to zoom into the tiles.',
+        'Adjust density and style and watch the mosaic rebuild in real time. Pinch to zoom right into the tiles.',
         Icons.tune),
     _Slide('Export & share',
         'Render in print-ready resolution, save to your photos, or make a free video to share.',

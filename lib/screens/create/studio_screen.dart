@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+// ScrollDirection — tells collapse (reading down) from expand (heading back up).
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -30,6 +32,45 @@ import 'base_crop_screen.dart';
 import 'tile_crop_screen.dart';
 import '../../widgets/segmented_selector.dart';
 
+/// The photo layouts the studio offers.
+///
+/// Top-level, not inline in `build`, so a test can check the list the UI ACTUALLY
+/// renders against `sanitizeSettings`. Every value here must be in `validModes`:
+/// an unlisted mode is silently rewritten to 'original' rather than rejected, which
+/// is how "3D" and "Hexagons" shipped as no-ops.
+///
+/// `blocks` is deliberately absent — `original` covers it. Not deleted from the
+/// engine: saved projects and presets still carry the mode and still render.
+/// Photo layouts that honour a manual per-tile crop.
+///
+/// Every tile-matching mode does: the preview painter and both compositors apply
+/// `tileCrops` unconditionally, and the map is keyed by tile id with nothing
+/// mode-specific in it. So the editor is offered wherever tiles are used, and a crop
+/// set in one mode carries into the others.
+///
+/// This was gated to 'square' alone, which meant a crop chosen there silently applied
+/// in every other mode with no way to see or change it — and in every mode BUT square
+/// the button simply was not there. Mirrors `modeSupportsTileCrops` in
+/// foto-mozaik/components/mosaic-studio.tsx; keep the two lists together.
+bool modeSupportsTileCrops(String mode) => const {
+      'original',
+      'blocks',
+      'square',
+      'landscape',
+      'portrait',
+      'rhombille',
+      'hexagon',
+    }.contains(mode);
+
+const kPhotoModeOptions = <SegmentOption<String>>[
+  SegmentOption('original', 'Original'),
+  SegmentOption('square', 'Square'),
+  SegmentOption('landscape', 'Landscape'),
+  SegmentOption('portrait', 'Portrait'),
+  SegmentOption('rhombille', '🧊 3D'),
+  SegmentOption('hexagon', '⬡ Hexagons'),
+];
+
 /// Advanced word-art sliders (flow tilt / contrast / palette / ground / vividness)
 /// are hidden — their values are now fixed defaults. Flip to true to restore them.
 const bool _showAdvancedWordart = false;
@@ -43,7 +84,49 @@ class StudioScreen extends ConsumerStatefulWidget {
   ConsumerState<StudioScreen> createState() => _StudioScreenState();
 }
 
-class _StudioScreenState extends ConsumerState<StudioScreen> {
+/// How much flex the preview gives up when fully collapsed (of 600). It shrinks to
+/// 260/1000 of the pane rather than vanishing: a preview you cannot see is not a
+/// preview, and the point is to keep the picture in view while the settings get room.
+const double _collapseTravel = 340;
+
+/// Scroll past this many pixels before collapsing. Without it the tiniest drag — or
+/// overscroll leaking out of a slider gesture — would snap the preview shut.
+const double _collapseTrigger = 28;
+
+/// What the preview should do for a given settings-scroll position.
+enum PreviewAction { collapse, expand, hold }
+
+/// The collapse rule, kept pure so it can be exercised without building the studio.
+///
+/// Reading DOWN the settings collapses the preview; heading back up reopens it. The
+/// [_collapseTrigger] dead zone matters more than it looks: sliders live in this list,
+/// and the overscroll that leaks out of a slider drag would otherwise snap the preview
+/// shut exactly while the user was watching it change.
+PreviewAction previewActionFor({
+  required double pixels,
+  required ScrollDirection direction,
+}) {
+  // At the top the preview always belongs open, whichever way the last gesture went —
+  // otherwise a bounce at the top can strand it collapsed with nothing left to scroll.
+  if (pixels <= 0) return PreviewAction.expand;
+  return switch (direction) {
+    ScrollDirection.reverse =>
+      pixels > _collapseTrigger ? PreviewAction.collapse : PreviewAction.hold,
+    // Scrolling up does NOT reopen it, deliberately.
+    //
+    // It is the platform idiom and it is tempting — the gesture that collapsed it
+    // would undo it. But it fires on any small upward correction, and this list is
+    // long enough that people scroll up a few pixels constantly while comparing two
+    // controls. Each of those would fling a third of the screen back over what they
+    // were reading. The ways back are all INTENTFUL instead: touch a setting, reach
+    // the top of the list, tap the preview, or tap the grabber.
+    ScrollDirection.forward => PreviewAction.hold,
+    ScrollDirection.idle => PreviewAction.hold,
+  };
+}
+
+class _StudioScreenState extends ConsumerState<StudioScreen>
+    with SingleTickerProviderStateMixin {
   // Assigned eagerly in initState so dispose() never touches `ref` (unsafe once
   // the widget is being unmounted). Must NOT be a `late` lazy initializer —
   // that defers the `ref.read` to first access, which can be dispose() itself
@@ -53,6 +136,103 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
 
   // Horizontal tiles strip — scrolled to a tile when it's tapped in the loupe.
   final ScrollController _tilesScroll = ScrollController();
+
+  /// Settings pane scroll — drives the preview collapse.
+  final ScrollController _settingsScroll = ScrollController();
+
+  /// 0 = preview at full height, 1 = collapsed. Animated rather than read straight off
+  /// the scroll offset, so that "user changed a setting" can reopen it too — something
+  /// a purely offset-derived height cannot express.
+  late final AnimationController _previewCollapse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+    reverseDuration: const Duration(milliseconds: 200),
+  );
+
+  void _onSettingsScroll() {
+    if (!_settingsScroll.hasClients) return;
+    final pos = _settingsScroll.position;
+    switch (previewActionFor(
+        pixels: pos.pixels, direction: pos.userScrollDirection)) {
+      case PreviewAction.collapse:
+        _previewCollapse.forward();
+      case PreviewAction.expand:
+        _previewCollapse.reverse();
+      case PreviewAction.hold:
+        break;
+    }
+  }
+
+  // ── Inline preview zoom ────────────────────────────────────────────────────
+  //
+  // Driven through `MosaicZoomPainter` rather than by scaling the rendered preview.
+  // That matters: the painter re-draws from the actual tile images at whatever scale
+  // is asked for, so zooming in shows MORE detail instead of magnifying preview-sized
+  // pixels — and it culls the cells outside the window, so the cost does not grow as
+  // the user zooms further in.
+
+  /// 1 = the whole mosaic, fitted. Above that, the visible window shrinks.
+  double _zoom = 1;
+  double _zoomAtGestureStart = 1;
+
+  /// Centre of the visible window, in BASE pixels. Null until first use = centred.
+  Offset? _focusBase;
+
+  /// Upper bound on pinch zoom.
+  ///
+  /// Deep enough that a single cell can more than fill the screen. Note the real
+  /// detail ceiling is lower than this: the strip's tile images are decoded at 256 px
+  /// (see `tileThumbBatch`), so past roughly 10-12x it is those thumbnails being
+  /// magnified rather than new detail appearing. Zooming further is still useful for
+  /// placing and inspecting a specific cell, which is why the cap is not set there.
+  static const double _maxZoom = 40;
+
+  void _resetZoom() {
+    if (_zoom == 1 && _focusBase == null) return;
+    setState(() {
+      _zoom = 1;
+      _focusBase = null;
+    });
+  }
+
+  /// Keep the window inside the picture. When the window is larger than the base on an
+  /// axis (which happens on the short side of a fitted view), centre on that axis
+  /// instead — clamping would otherwise fight the user at the edges.
+  Offset _clampFocus(Offset f, double winW, double winH, SlimMosaicPlan plan) {
+    final bw = plan.baseWidth, bh = plan.baseHeight;
+    final x = winW >= bw
+        ? bw / 2
+        : f.dx.clamp(winW / 2, bw - winW / 2).toDouble();
+    final y = winH >= bh
+        ? bh / 2
+        : f.dy.clamp(winH / 2, bh - winH / 2).toDouble();
+    return Offset(x, y);
+  }
+
+  /// Set by a settings change, consumed when the finger lifts — see the `Listener`
+  /// around the settings pane.
+  bool _settingsTouched = false;
+
+  /// A settings change reopens the preview: the reason to touch a control is to see
+  /// what it did, and staying collapsed would hide the answer.
+  ///
+  /// But NOT mid-gesture. A slider fires continuously while dragged, so revealing on
+  /// every value would expand the preview under the user's finger — and because the
+  /// settings pane shrinks as the preview grows, the track would slide out from under
+  /// the thumb mid-drag. So the change only ARMS the reveal; the pointer-up fires it.
+  void _revealPreview() => _previewCollapse.reverse();
+
+  /// Fire an armed reveal once the interaction that caused it has finished.
+  ///
+  /// Hung off the pointer rather than off each control's "done" callback: there are
+  /// twenty sliders on this screen and a missed one would silently keep the old
+  /// behaviour. A discrete tap still feels instant — its pointer-up lands in the same
+  /// moment as the change.
+  void _onSettingsPointerUp() {
+    if (!_settingsTouched) return;
+    _settingsTouched = false;
+    _revealPreview();
+  }
   String? _highlightedTileId;
   Timer? _highlightTimer;
 
@@ -91,6 +271,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   void initState() {
     super.initState();
     _controller = ref.read(studioControllerProvider.notifier);
+    _settingsScroll.addListener(_onSettingsScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final studio = ref.read(studioControllerProvider);
       if (studio.plan == null && studio.canPlan && !studio.isPlanning) {
@@ -105,6 +286,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     _controller.cancelRestore();
     _highlightTimer?.cancel();
     _tilesScroll.dispose();
+    _settingsScroll.removeListener(_onSettingsScroll);
+    _settingsScroll.dispose();
+    _previewCollapse.dispose();
     super.dispose();
   }
 
@@ -337,15 +521,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
             // `blocks` hidden — `original` covers it. Not deleted: saved projects and
             // presets still carry the mode and the layout pipeline still honours it, so
             // those keep rendering exactly as before. Restore by un-commenting.
-            options: const [
-              SegmentOption('original', 'Original'),
-              SegmentOption('square', 'Square'),
-              SegmentOption('landscape', 'Landscape'),
-              SegmentOption('portrait', 'Portrait'),
-              // SegmentOption('blocks', 'Blocks'),
-              SegmentOption('rhombille', '🧊 3D'),
-              SegmentOption('hexagon', '⬡ Hexagons'),
-            ],
+            options: kPhotoModeOptions,
           ),
         ],
         if (group == 'shape') ...[
@@ -606,87 +782,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     return null;
   }
 
-  /// Loupe popup: a magnified window of the mosaic centered on the tapped point.
-  void _showLoupe(SlimMosaicPlan plan, double bx, double by) {
-    final widths = plan.placements.map((p) => p.width).toList()..sort();
-    final medianW =
-        widths.isEmpty ? plan.baseWidth / 10 : widths[widths.length ~/ 2];
-    final windowSize =
-        (medianW * 6).clamp(plan.baseWidth * 0.04, plan.baseWidth).toDouble();
-    final studio = ref.read(studioControllerProvider);
-
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (ctx) {
-        final side =
-            (MediaQuery.of(ctx).size.width.clamp(0, 360) * 0.9).toDouble();
-        // The magnified window's focus point — pannable by dragging.
-        double fx = bx, fy = by;
-        // Tap anywhere outside the loupe closes it.
-        return GestureDetector(
-          onTap: () => Navigator.pop(ctx),
-          child: Center(
-            child: StatefulBuilder(
-              builder: (ctx, setLoupe) => Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    // Drag to pan the magnified window across the mosaic.
-                    onPanUpdate: (d) {
-                      final s = side / windowSize;
-                      setLoupe(() {
-                        fx = (fx - d.delta.dx / s)
-                            .clamp(0.0, plan.baseWidth.toDouble());
-                        fy = (fy - d.delta.dy / s)
-                            .clamp(0.0, plan.baseHeight.toDouble());
-                      });
-                    },
-                    // Tap a tile → close, then reveal it in the tiles strip.
-                    onTapUp: (d) {
-                      final s = side / windowSize;
-                      final baseX = fx + (d.localPosition.dx - side / 2) / s;
-                      final baseY = fy + (d.localPosition.dy - side / 2) / s;
-                      final hit = _placementAt(plan, baseX, baseY);
-                      Navigator.pop(ctx);
-                      if (hit != null) _revealTile(hit.tileId);
-                    },
-                    child: Container(
-                      width: side,
-                      height: side,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(AppRadius.card),
-                        border: Border.all(
-                            color: AppColors.primaryBright, width: 2),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: CustomPaint(
-                        painter: MosaicZoomPainter(
-                          plan: plan,
-                          tileImages: studio.tileImages,
-                          baseImage: studio.base?.overlay,
-                          tintStrength: studio.settings.tintStrength,
-                          outputSaturation: studio.settings.outputSaturation,
-                          focusX: fx,
-                          focusY: fy,
-                          windowSize: windowSize,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.x3),
-                  Text('Drag to explore · tap a tile to find it',
-                      style: AppTypography.caption),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     // Surface upload/picker/restore failures instead of swallowing them.
@@ -713,7 +808,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     // themselves and export via the server (no tiles, no loupe, no tint slider).
     final isTileless = isAncient || isWordart;
 
-    void update(MosaicSettings s) => _controller.updateSettings(s);
+    void update(MosaicSettings s) {
+      // Arms the reveal; `_onSettingsPointerUp` fires it when the gesture ends.
+      _settingsTouched = true;
+      _controller.updateSettings(s);
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -740,197 +839,353 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                 done: studio.uploadDone,
                 total: studio.uploadTotal,
               ),
-            // ── Preview (top ~60%) — tap to zoom ──
+            // ── Preview + controls, with a collapsing preview ──────────────
+            //
+            // Scrolling DOWN through the settings shrinks the preview instead of
+            // pushing it off-screen; scrolling up — or touching any setting — grows it
+            // back. Same idea as composing an Instagram post: the picture stays in
+            // view while you work, but yields room when you are reading rather than
+            // looking. See `_previewCollapse` / `_onSettingsScroll`.
+            //
+            // The Column is rebuilt per tick because Expanded must be a DIRECT child
+            // of a Flex, so the split cannot be animated from further down the tree.
+            // That is cheap: the subtrees are the same widgets with the same values,
+            // so the painters' shouldRepaint returns false and only layout re-runs.
             Expanded(
-              flex: 6,
-              child: LayoutBuilder(builder: (context, constraints) {
-                final plan = studio.plan;
-                return GestureDetector(
-                  onTapUp: (isTileless || plan == null)
-                      ? null
-                      : (details) {
-                          final fit = computeMosaicFit(constraints.biggest,
-                              plan.baseWidth, plan.baseHeight);
-                          final bx =
-                              (details.localPosition.dx - fit.ox) / fit.scale;
-                          final by =
-                              (details.localPosition.dy - fit.oy) / fit.scale;
-                          if (bx < 0 ||
-                              by < 0 ||
-                              bx > plan.baseWidth ||
-                              by > plan.baseHeight) {
-                            return;
-                          }
-                          _showLoupe(plan, bx, by);
-                        },
-                  child: Container(
-                    width: double.infinity,
-                    color: AppColors.background,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (isAncient)
-                          (studio.base != null
-                              ? AncientPreview(
-                                  base: studio.base!,
-                                  params: ancientParamsFromState(studio,
-                                      curved: isAncientCurved),
+              child: AnimatedBuilder(
+                animation: _previewCollapse,
+                builder: (context, _) {
+                  // A 1000-unit flex so the split slides smoothly rather than
+                  // stepping between whole 6/4 ratios.
+                  final t =
+                      Curves.easeOutCubic.transform(_previewCollapse.value);
+                  final previewFlex = (600 - _collapseTravel * t).round();
+                  return Column(
+                    children: [
+                  // ── Preview — pinch to zoom, drag to pan ──
+                  Expanded(
+                    flex: previewFlex,
+                    child: LayoutBuilder(builder: (context, constraints) {
+                      final plan = studio.plan;
+                      final box = constraints.biggest;
+                      // Screen px per base px at the current zoom. `fit.scale` is the
+                      // contained-at-zoom-1 scale, so this agrees with the untouched
+                      // preview exactly when _zoom == 1.
+                      final fit = plan == null
+                          ? null
+                          : computeMosaicFit(
+                              box, plan.baseWidth, plan.baseHeight);
+                      final zoomScale = fit == null ? 1.0 : fit.scale * _zoom;
+                      final zoomed = plan != null && !isTileless && _zoom > 1.001;
+                      final winW = fit == null ? 0.0 : box.width / zoomScale;
+                      final winH = fit == null ? 0.0 : box.height / zoomScale;
+                      final focus = (plan == null)
+                          ? Offset.zero
+                          : _clampFocus(
+                              _focusBase ??
+                                  Offset(plan.baseWidth / 2, plan.baseHeight / 2),
+                              winW,
+                              winH,
+                              plan);
+
+                      return GestureDetector(
+                        // Tap no longer zooms — pinch does. Collapsed, it gives the
+                        // picture back; expanded, it answers "which photo is that?" by
+                        // highlighting the cell's tile in the strip. Two meanings, but
+                        // they never compete: when the preview is squeezed the only
+                        // thing anyone wants from it is to see it again.
+                        //
+                        // ONE mapping for every zoom level: the zoom transform below
+                        // collapses to the fitted one at zoom 1 (asserted in
+                        // preview_zoom_seam_test), so there is no separate fitted-view
+                        // case to keep in step.
+                        onTapUp: (isTileless || plan == null)
+                            ? null
+                            : (details) {
+                                if (!_previewCollapse.isDismissed) {
+                                  _previewCollapse.reverse();
+                                  return;
+                                }
+                                final sc = fit!.scale * _zoom;
+                                final ox = box.width / 2 - focus.dx * sc;
+                                final oy = box.height / 2 - focus.dy * sc;
+                                final bx =
+                                    (details.localPosition.dx - ox) / sc;
+                                final by =
+                                    (details.localPosition.dy - oy) / sc;
+                                if (bx < 0 ||
+                                    by < 0 ||
+                                    bx > plan.baseWidth ||
+                                    by > plan.baseHeight) {
+                                  return;
+                                }
+                                final hit = _placementAt(plan, bx, by);
+                                if (hit != null) _revealTile(hit.tileId);
+                              },
+                        // Double-tap back to the whole picture — the way out of a zoom
+                        // that a pinch alone makes fiddly to reverse.
+                        onDoubleTap:
+                            (isTileless || plan == null) ? null : _resetZoom,
+                        onScaleStart: (isTileless || plan == null)
+                            ? null
+                            : (_) => _zoomAtGestureStart = _zoom,
+                        onScaleUpdate: (isTileless || plan == null)
+                            ? null
+                            : (d) {
+                                setState(() {
+                                  if (d.scale != 1.0) {
+                                    _zoom = (_zoomAtGestureStart * d.scale)
+                                        .clamp(1.0, _maxZoom);
+                                  }
+                                  // Pan in BASE pixels so a drag tracks the finger at
+                                  // every zoom level.
+                                  final sc = fit!.scale * _zoom;
+                                  final w = box.width / sc, h = box.height / sc;
+                                  _focusBase = _clampFocus(
+                                    (_focusBase ??
+                                            Offset(plan.baseWidth / 2,
+                                                plan.baseHeight / 2)) -
+                                        d.focalPointDelta / sc,
+                                    w,
+                                    h,
+                                    plan,
+                                  );
+                                });
+                              },
+                        child: Container(
+                          width: double.infinity,
+                          color: AppColors.background,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (isAncient)
+                                (studio.base != null
+                                    ? AncientPreview(
+                                        base: studio.base!,
+                                        params: ancientParamsFromState(studio,
+                                            curved: isAncientCurved),
+                                      )
+                                    : Center(
+                                        child: Text('Add a base photo',
+                                            style: AppTypography.body.copyWith(
+                                                color: AppColors.textSecondary))))
+                              else if (isWordart)
+                                (studio.base != null
+                                    ? WordArtPreview(
+                                        base: studio.base!,
+                                        params: wordartParamsFromState(studio),
+                                      )
+                                    : Center(
+                                        child: Text('Add a base photo',
+                                            style: AppTypography.body.copyWith(
+                                                color: AppColors.textSecondary))))
+                              else if (plan != null && zoomed)
+                                // Same painter the loupe uses, so the zoomed view and
+                                // the loupe agree on crop, tint and saturation.
+                                CustomPaint(
+                                  painter: MosaicZoomPainter(
+                                    plan: plan,
+                                    tileImages: studio.tileImages,
+                                    baseImage: studio.base?.overlay,
+                                    tintStrength: settings.tintStrength,
+                                    outputSaturation: settings.outputSaturation,
+                                    focusX: focus.dx,
+                                    focusY: focus.dy,
+                                    windowSize: winW,
+                                  ),
                                 )
-                              : Center(
-                                  child: Text('Add a base photo',
-                                      style: AppTypography.body.copyWith(
-                                          color: AppColors.textSecondary))))
-                        else if (isWordart)
-                          (studio.base != null
-                              ? WordArtPreview(
-                                  base: studio.base!,
-                                  params: wordartParamsFromState(studio),
+                              else if (plan != null)
+                                _AnimatedMosaicPreview(
+                                  plan: plan,
+                                  tileImages: studio.tileImages,
+                                  baseImage: studio.base?.overlay,
+                                  tintStrength: settings.tintStrength,
+                                  outputSaturation: settings.outputSaturation,
                                 )
-                              : Center(
-                                  child: Text('Add a base photo',
-                                      style: AppTypography.body.copyWith(
-                                          color: AppColors.textSecondary))))
-                        else if (plan != null)
-                          _AnimatedMosaicPreview(
-                            plan: plan,
-                            tileImages: studio.tileImages,
-                            baseImage: studio.base?.overlay,
-                            tintStrength: settings.tintStrength,
-                            outputSaturation: settings.outputSaturation,
-                          )
-                        else
-                          Center(
-                            child: Text(
-                              studio.isRestoring
-                                  ? 'Restoring project… ${studio.uploadDone}/${studio.uploadTotal}'
-                                  : studio.canPlan || studio.isPlanning
-                                      ? 'Building preview…'
-                                      : 'Add a base photo and tiles',
-                              style: AppTypography.body
-                                  .copyWith(color: AppColors.textSecondary),
+                              else
+                                Center(
+                                  child: Text(
+                                    studio.isRestoring
+                                        ? 'Restoring project… ${studio.uploadDone}/${studio.uploadTotal}'
+                                        : studio.canPlan || studio.isPlanning
+                                            ? 'Building preview…'
+                                            : 'Add a base photo and tiles',
+                                    style: AppTypography.body
+                                        .copyWith(color: AppColors.textSecondary),
+                                  ),
+                                ),
+                              if ((isTileless && studio.base != null) ||
+                                  (!isTileless && plan != null))
+                                const Positioned(
+                                  bottom: AppSpacing.x2,
+                                  right: AppSpacing.x2,
+                                  child: _Hint(text: 'Pinch to zoom'),
+                                ),
+                              if (studio.isPlanning)
+                                const Positioned(
+                                  top: AppSpacing.x3,
+                                  right: AppSpacing.x3,
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: AppColors.accent),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                  // ── Controls ──
+                  Expanded(
+                    flex: 1000 - previewFlex,
+                    // Catches the end of ANY interaction in the pane — slider release,
+                    // segment tap, switch flip — in one place.
+                    child: Listener(
+                      onPointerUp: (_) => _onSettingsPointerUp(),
+                      onPointerCancel: (_) => _onSettingsPointerUp(),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius:
+                              BorderRadius.vertical(top: Radius.circular(AppRadius.card)),
+                        ),
+                        child: Column(
+                          children: [
+                            // ── Grabber ────────────────────────────────────────
+                            //
+                            // Marks the seam between the picture and the controls, and
+                            // gives the collapse a handle. It is deliberately a REAL
+                            // control: a grabber that cannot be grabbed is a small lie,
+                            // and tapping it is the quickest way to trade preview height
+                            // for settings room without scrolling for it.
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => _previewCollapse.isDismissed
+                                  ? _previewCollapse.forward()
+                                  : _previewCollapse.reverse(),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: AppSpacing.x2),
+                                child: Center(
+                                  child: Container(
+                                    width: 36,
+                                    height: 4,
+                                    decoration: BoxDecoration(
+                                      // Soft grey rather than the hairline border colour:
+                                      // against this surface a border-toned pill reads as
+                                      // a scratch on the screen rather than a handle.
+                                      color: AppColors.textSecondary
+                                          .withValues(alpha: 0.28),
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
-                        if ((isTileless && studio.base != null) ||
-                            (!isTileless && plan != null))
-                          const Positioned(
-                            bottom: AppSpacing.x2,
-                            right: AppSpacing.x2,
-                            child: _Hint(text: 'Tap to zoom'),
-                          ),
-                        if (studio.isPlanning)
-                          const Positioned(
-                            top: AppSpacing.x3,
-                            right: AppSpacing.x3,
-                            child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: AppColors.accent),
+                            Expanded(
+                              child: ListView(
+                                controller: _settingsScroll,
+                                // Top padding halved — the grabber above already provides it.
+                                padding: const EdgeInsets.fromLTRB(AppSpacing.x4,
+                                    AppSpacing.x2, AppSpacing.x4, AppSpacing.x4),
+                                children: [
+                                  _SourceAndTiles(
+                                    studio: studio,
+                                    onChangeBase: _changeBase,
+                                    onAddTiles: _addTiles,
+                                    onLoadSamples: _loadSamples,
+                                    onRemoveTile: _removeTile,
+                                    onCropTile: modeSupportsTileCrops(settings.mosaicMode)
+                                        ? (t) => _onCropTile(context, t)
+                                        : null,
+                                    tilesScroll: _tilesScroll,
+                                    highlightedTileId: _highlightedTileId,
+                                    isAncient: isTileless,
+                                  ),
+                                  const Divider(
+                                      color: AppColors.border, height: AppSpacing.x6),
+                                  Text('Mode', style: AppTypography.label),
+                                  const SizedBox(height: AppSpacing.x2),
+                                  _buildModeGroups(settings, update),
+                                  if (isAncient)
+                                    _buildAncientPanel(studio, settings, update,
+                                        curved: isAncientCurved),
+                                  if (isWordart)
+                                    _buildWordartPanel(studio, settings, update),
+                                  if (!isTileless) ...[
+                                    const SizedBox(height: AppSpacing.x4),
+                                    LabeledSlider(
+                                      label: 'Density',
+                                      value: settings.density,
+                                      min: 40,
+                                      max: 500,
+                                      onChanged: (v) => update(settings.copyWith(density: v)),
+                                    ),
+                                    LabeledSlider(
+                                      label: 'Variety',
+                                      value: settings.reusePenalty,
+                                      min: 0,
+                                      max: 1,
+                                      valueLabel: settings.reusePenalty.toStringAsFixed(2),
+                                      onChanged: (v) =>
+                                          update(settings.copyWith(reusePenalty: v)),
+                                    ),
+                                    LabeledSlider(
+                                      label: 'Tint',
+                                      value: settings.tintStrength,
+                                      min: 0,
+                                      max: 0.5,
+                                      valueLabel: settings.tintStrength.toStringAsFixed(2),
+                                      onChanged: (v) =>
+                                          _controller.updateRenderParam(tintStrength: v),
+                                    ),
+                                    LabeledSlider(
+                                      label: 'Saturation',
+                                      value: settings.outputSaturation,
+                                      min: minOutputSaturation,
+                                      max: maxOutputSaturation,
+                                      valueLabel:
+                                          settings.outputSaturation.toStringAsFixed(2),
+                                      onChanged: (v) =>
+                                          _controller.updateRenderParam(outputSaturation: v),
+                                    ),
+                                    const Divider(
+                                        color: AppColors.border, height: AppSpacing.x6),
+                                    LabeledSlider(
+                                      label: 'Color boost',
+                                      value: settings.colorBoost,
+                                      min: 1,
+                                      max: 2,
+                                      valueLabel: settings.colorBoost.toStringAsFixed(2),
+                                      onChanged: (v) =>
+                                          update(settings.copyWith(colorBoost: v)),
+                                    ),
+                                    LabeledSlider(
+                                      label: 'Auto contrast',
+                                      value: settings.autoContrast,
+                                      min: 0,
+                                      max: 1,
+                                      valueLabel: settings.autoContrast.toStringAsFixed(2),
+                                      onChanged: (v) =>
+                                          update(settings.copyWith(autoContrast: v)),
+                                    ),
+                                  ],
+                                  // Actions live in the persistent bottom bar (see below).
+                                  const SizedBox(height: AppSpacing.x2),
+                                ],
+                              ),
                             ),
-                          ),
-                      ],
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                );
-              }),
-            ),
-            // ── Controls ──
-            Expanded(
-              flex: 4,
-              child: Container(
-                decoration: const BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius:
-                      BorderRadius.vertical(top: Radius.circular(AppRadius.card)),
-                ),
-                child: ListView(
-                  padding: const EdgeInsets.all(AppSpacing.x4),
-                  children: [
-                    _SourceAndTiles(
-                      studio: studio,
-                      onChangeBase: _changeBase,
-                      onAddTiles: _addTiles,
-                      onLoadSamples: _loadSamples,
-                      onRemoveTile: _removeTile,
-                      onCropTile: settings.mosaicMode == 'square'
-                          ? (t) => _onCropTile(context, t)
-                          : null,
-                      tilesScroll: _tilesScroll,
-                      highlightedTileId: _highlightedTileId,
-                      isAncient: isTileless,
-                    ),
-                    const Divider(
-                        color: AppColors.border, height: AppSpacing.x6),
-                    Text('Mode', style: AppTypography.label),
-                    const SizedBox(height: AppSpacing.x2),
-                    _buildModeGroups(settings, update),
-                    if (isAncient)
-                      _buildAncientPanel(studio, settings, update,
-                          curved: isAncientCurved),
-                    if (isWordart)
-                      _buildWordartPanel(studio, settings, update),
-                    if (!isTileless) ...[
-                      const SizedBox(height: AppSpacing.x4),
-                      LabeledSlider(
-                        label: 'Density',
-                        value: settings.density,
-                        min: 40,
-                        max: 500,
-                        onChanged: (v) => update(settings.copyWith(density: v)),
-                      ),
-                      LabeledSlider(
-                        label: 'Variety',
-                        value: settings.reusePenalty,
-                        min: 0,
-                        max: 1,
-                        valueLabel: settings.reusePenalty.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            update(settings.copyWith(reusePenalty: v)),
-                      ),
-                      LabeledSlider(
-                        label: 'Tint',
-                        value: settings.tintStrength,
-                        min: 0,
-                        max: 0.5,
-                        valueLabel: settings.tintStrength.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            _controller.updateRenderParam(tintStrength: v),
-                      ),
-                      LabeledSlider(
-                        label: 'Saturation',
-                        value: settings.outputSaturation,
-                        min: minOutputSaturation,
-                        max: maxOutputSaturation,
-                        valueLabel:
-                            settings.outputSaturation.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            _controller.updateRenderParam(outputSaturation: v),
-                      ),
-                      const Divider(
-                          color: AppColors.border, height: AppSpacing.x6),
-                      LabeledSlider(
-                        label: 'Color boost',
-                        value: settings.colorBoost,
-                        min: 1,
-                        max: 2,
-                        valueLabel: settings.colorBoost.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            update(settings.copyWith(colorBoost: v)),
-                      ),
-                      LabeledSlider(
-                        label: 'Auto contrast',
-                        value: settings.autoContrast,
-                        min: 0,
-                        max: 1,
-                        valueLabel: settings.autoContrast.toStringAsFixed(2),
-                        onChanged: (v) =>
-                            update(settings.copyWith(autoContrast: v)),
-                      ),
                     ],
-                    // Actions live in the persistent bottom bar (see below).
-                    const SizedBox(height: AppSpacing.x2),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           ],
@@ -1211,6 +1466,11 @@ class _SourceAndTiles extends StatelessWidget {
             ),
           ],
         ),
+        if (onCropTile != null && studio.tiles.isNotEmpty) ...[
+          Text('Tap a photo to crop or remove it',
+              style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.x1),
+        ],
         SizedBox(
           height: 56,
           child: studio.tiles.isEmpty
@@ -1289,6 +1549,24 @@ class _SourceAndTiles extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (onCropTile != null)
+                          // Tapping opens the editor, where Reset and "Remove photo"
+                          // live — the same arrangement the web uses, so the two
+                          // platforms teach the same gesture.
+                          Positioned(
+                            bottom: 2,
+                            right: 2,
+                            child: IgnorePointer(
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                    color: Colors.black54,
+                                    shape: BoxShape.circle),
+                                padding: const EdgeInsets.all(2),
+                                child: const Icon(Icons.crop,
+                                    size: 11, color: Colors.white),
+                              ),
+                            ),
+                          ),
                         if (onCropTile == null)
                         Positioned(
                           top: 0,

@@ -172,12 +172,17 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
         )
       : defaultSignalWeights();
 
+  // MUST list every mode the studio can actually select. An unlisted mode is not
+  // rejected loudly — it silently becomes 'original', so picking "3D" or "Hexagons"
+  // quietly produced an ordinary mosaic with no error anywhere to explain it.
   const validModes = [
     'original',
     'blocks',
     'square',
     'landscape',
     'portrait',
+    'rhombille',
+    'hexagon',
     'ancient',
     'ancient-curved',
     'wordart',

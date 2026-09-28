@@ -117,8 +117,8 @@ class _WordArtPreviewState extends State<WordArtPreview> {
                 image: img,
                 cropRenderer: _geo == null
                     ? null
-                    : (crop, outPx) =>
-                        renderWordArtCrop(_geo!, _w, _h, crop, outPx, outPx),
+                    : (crop, outW, outH) =>
+                        renderWordArtCrop(_geo!, _w, _h, crop, outW, outH),
               ),
             if (img == null || _building)
               Container(

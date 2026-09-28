@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -136,9 +137,17 @@ class _TileCropScreenState extends State<TileCropScreen> {
 
   double _zoomForCrop(TileCrop c) {
     final box = _maxBoxPx();
-    final wPx = c.w * _imgW;
-    if (wPx <= 0) return 1;
-    return (box.w / wPx).clamp(1.0, 8.0);
+    // A stored crop may predate this aspect (or come from another mode), so read it
+    // BOTH ways and keep whichever describes the larger box — reopening must never
+    // shrink what the user chose. Reading the width alone made a crop stored in a
+    // portrait cell reopen much tighter in a landscape one.
+    //
+    // No clamping needed beyond this: zoom 1 IS the largest box of the cell's aspect
+    // that fits the photo, so the lower bound already pins the frame inside the image.
+    // Matches `seed` in foto-mozaik/components/tile-crop-editor.tsx.
+    final wantPx = math.max(c.w * _imgW, c.h * _imgH * widget.cellAspect);
+    if (wantPx <= 0) return 1;
+    return (box.w / wantPx).clamp(1.0, 8.0);
   }
 
   /// Keep the square inside the image on both axes.

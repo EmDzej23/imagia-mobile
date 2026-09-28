@@ -4,126 +4,69 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../../theme/app_colors.dart';
-import '../../theme/app_spacing.dart';
-import '../../theme/app_typography.dart';
 
-/// Renders one square crop of the picture at [outPx]×[outPx] device pixels.
+/// Renders one region of the picture at [outW]x[outH] device pixels.
 /// [crop] is in the preview image's own pixel space.
-typedef LoupeCropRenderer = Future<ui.Image> Function(ui.Rect crop, int outPx);
+typedef LoupeCropRenderer = Future<ui.Image> Function(
+    ui.Rect crop, int outW, int outH);
 
-/// Displays a rendered [ui.Image] (fit: contain) with a tap-to-zoom loupe — the
-/// tile-less equivalent of the photo-mosaic loupe (ancient + word-art previews).
-/// Tapping opens a draggable magnified window centred on the tapped point.
-class LoupePreviewImage extends StatelessWidget {
-  const LoupePreviewImage({super.key, required this.image, this.cropRenderer});
-
-  final ui.Image image;
-
-  /// When given, the loupe re-renders the framed region at the screen's real
-  /// resolution instead of magnifying [image]. The preview raster is ~1400 px on its
-  /// long side and the window shows about a quarter of that blown up to a full-width
-  /// square, so magnifying it is a ~3x upscale — which is why the zoom looked soft.
-  /// Re-rendering asks the resolution-independent geometry for those pixels instead.
-  ///
-  /// Optional so the widget still works for any caller that only has a bitmap.
-  final LoupeCropRenderer? cropRenderer;
-
-  void _openLoupe(BuildContext context, double fx0, double fy0) {
-    final imgW = image.width.toDouble();
-    final imgH = image.height.toDouble();
-    // Window shows ~1/4.5 of the long side ⇒ roughly 4.5× the fitted preview.
-    final cropSize = math.max(24.0, math.max(imgW, imgH) / 4.5);
-
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (ctx) {
-        final side =
-            (MediaQuery.of(ctx).size.width.clamp(0, 360) * 0.9).toDouble();
-        return GestureDetector(
-          onTap: () => Navigator.pop(ctx), // tap outside closes
-          child: Center(
-            child: _LoupeWindow(
-              image: image,
-              cropRenderer: cropRenderer,
-              side: side,
-              cropSize: cropSize,
-              imgW: imgW,
-              imgH: imgH,
-              startX: fx0,
-              startY: fy0,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final imgW = image.width.toDouble();
-    final imgH = image.height.toDouble();
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final boxW = constraints.maxWidth, boxH = constraints.maxHeight;
-        // Map a tap in the box to image pixel coords (image is fit: contain).
-        final scale = math.min(boxW / imgW, boxH / imgH);
-        final ox = (boxW - imgW * scale) / 2, oy = (boxH - imgH * scale) / 2;
-        return GestureDetector(
-          onTapUp: (d) {
-            final ix = (d.localPosition.dx - ox) / scale;
-            final iy = (d.localPosition.dy - oy) / scale;
-            if (ix < 0 || iy < 0 || ix > imgW || iy > imgH) return;
-            _openLoupe(context, ix, iy);
-          },
-          child: SizedBox.expand(
-            child: RawImage(image: image, fit: BoxFit.contain),
-          ),
-        );
-      },
-    );
-  }
-}
-
-
-/// The magnified window itself.
+/// Displays a rendered [ui.Image] with pinch-to-zoom and drag-to-pan.
 ///
-/// Owns the focus point and, when a [LoupeCropRenderer] is supplied, the sharp image
-/// rendered for the current position. Split out of the dialog closure so the rendered
-/// crops get DISPOSED — a StatefulBuilder has no teardown hook, and each of these is a
-/// full-window RGBA buffer.
-class _LoupeWindow extends StatefulWidget {
-  const _LoupeWindow({
+/// The tile-less counterpart of the photo-mosaic preview: same gestures, so every mode
+/// in the studio behaves the same way. There is no tap-to-open magnifier — the picture
+/// itself zooms.
+///
+/// Zoom stays SHARP rather than magnifying the preview bitmap. The preview raster is
+/// ~1400 px on its long side, so at any real zoom it would be upscaled several times
+/// over; instead the visible region is re-rendered from the resolution-independent
+/// geometry through [cropRenderer]. The bitmap is still drawn while a gesture is in
+/// flight, because re-rendering every frame would stutter — so a pinch reads as
+/// slightly soft and then snaps sharp when the fingers lift.
+class LoupePreviewImage extends StatefulWidget {
+  const LoupePreviewImage({
+    super.key,
     required this.image,
-    required this.cropRenderer,
-    required this.side,
-    required this.cropSize,
-    required this.imgW,
-    required this.imgH,
-    required this.startX,
-    required this.startY,
+    this.cropRenderer,
   });
 
   final ui.Image image;
+
+  /// Optional so the widget still works for a caller that only has a bitmap; without
+  /// it the zoom simply magnifies [image].
   final LoupeCropRenderer? cropRenderer;
-  final double side, cropSize, imgW, imgH, startX, startY;
 
   @override
-  State<_LoupeWindow> createState() => _LoupeWindowState();
+  State<LoupePreviewImage> createState() => _LoupePreviewImageState();
 }
 
-class _LoupeWindowState extends State<_LoupeWindow> {
-  late double _fx = widget.startX;
-  late double _fy = widget.startY;
+class _LoupePreviewImageState extends State<LoupePreviewImage> {
+  /// 1 = the whole picture, fitted. Above that the visible window shrinks.
+  double _zoom = 1;
+  double _zoomAtGestureStart = 1;
 
-  /// Sharp render for the CURRENT focus, or null while none is ready.
+  /// Centre of the visible window in IMAGE pixels; null = centred.
+  Offset? _focus;
+
+  /// Sharp re-render for the current window, or null when none is ready.
   ui.Image? _sharp;
   int _token = 0;
 
+  static const double _maxZoom = 40;
+
+  double get _imgW => widget.image.width.toDouble();
+  double get _imgH => widget.image.height.toDouble();
+
   @override
-  void initState() {
-    super.initState();
-    _requestSharp();
+  void didUpdateWidget(LoupePreviewImage old) {
+    super.didUpdateWidget(old);
+    // A new render (settings changed) invalidates the sharp crop — it belongs to the
+    // previous picture and would otherwise linger on screen as a stale overlay.
+    if (!identical(old.image, widget.image)) {
+      _token++;
+      _sharp?.dispose();
+      _sharp = null;
+      _requestSharp();
+    }
   }
 
   @override
@@ -132,21 +75,38 @@ class _LoupeWindowState extends State<_LoupeWindow> {
     super.dispose();
   }
 
+  /// Window centre, clamped so it can never leave the picture. When the window is
+  /// wider than the image on an axis, centre on that axis instead of clamping —
+  /// otherwise the drag fights the user at the edges.
+  Offset _clamp(Offset f, double winW, double winH) => Offset(
+        winW >= _imgW ? _imgW / 2 : f.dx.clamp(winW / 2, _imgW - winW / 2),
+        winH >= _imgH ? _imgH / 2 : f.dy.clamp(winH / 2, _imgH - winH / 2),
+      );
+
+  /// Contain-fit scale for a box: screen px per image px at zoom 1.
+  double _fitScale(Size box) =>
+      math.min(box.width / _imgW, box.height / _imgH);
+
+  ui.Rect _window(Size box) {
+    final s = _fitScale(box) * _zoom;
+    final w = box.width / s, h = box.height / s;
+    final f = _clamp(_focus ?? Offset(_imgW / 2, _imgH / 2), w, h);
+    return ui.Rect.fromCenter(center: f, width: w, height: h);
+  }
+
   Future<void> _requestSharp() async {
     final render = widget.cropRenderer;
-    if (render == null) return;
+    final box = context.size;
+    if (render == null || box == null || box.isEmpty) return;
     final token = ++_token;
-    final half = widget.cropSize / 2;
-    final crop = ui.Rect.fromLTWH(
-        _fx - half, _fy - half, widget.cropSize, widget.cropSize);
-    // Ask for the window at its true device resolution — that, and not the zoom
-    // factor, is how many pixels actually reach the screen.
+    final crop = _window(box);
     final dpr = MediaQuery.of(context).devicePixelRatio;
-    final outPx = (widget.side * dpr).round().clamp(64, 2048);
+    // Ask for the window at its true device resolution — that, not the zoom factor,
+    // is how many pixels actually reach the screen.
+    final outW = (box.width * dpr).round().clamp(64, 2048);
+    final outH = (box.height * dpr).round().clamp(64, 2048);
     try {
-      final img = await render(crop, outPx);
-      // A newer request (or a closed dialog) won: throw this one away rather than
-      // showing a crop for a position the user has already dragged away from.
+      final img = await render(crop, outW, outH);
       if (!mounted || token != _token) {
         img.dispose();
         return;
@@ -156,79 +116,98 @@ class _LoupeWindowState extends State<_LoupeWindow> {
         _sharp = img;
       });
     } catch (_) {
-      // Fall back to magnifying the preview bitmap — a soft loupe beats none.
+      // Fall back to magnifying the bitmap — a soft view beats a blank one.
     }
+  }
+
+  void _dropSharp() {
+    if (_sharp == null) return;
+    _token++;
+    _sharp?.dispose();
+    _sharp = null;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanUpdate: (d) {
-            final s = widget.side / widget.cropSize; // screen px per image px
-            setState(() {
-              _fx = (_fx - d.delta.dx / s).clamp(0.0, widget.imgW);
-              _fy = (_fy - d.delta.dy / s).clamp(0.0, widget.imgH);
-              // The sharp crop belongs to the old position; drop it so the window
-              // shows the (fast) magnified bitmap while the finger is down.
-              _token++;
-              _sharp?.dispose();
-              _sharp = null;
-            });
-          },
-          // Re-render once the drag settles, not on every frame: each render is a
-          // full repaint of the geometry and would make panning stutter.
-          onPanEnd: (_) => _requestSharp(),
-          child: Container(
-            width: widget.side,
-            height: widget.side,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AppRadius.card),
-              border: Border.all(color: AppColors.primaryBright, width: 2),
+    return LayoutBuilder(builder: (context, constraints) {
+      final box = constraints.biggest;
+      final win = _window(box);
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onDoubleTap: () {
+          setState(() {
+            _zoom = 1;
+            _focus = null;
+            _dropSharp();
+          });
+          _requestSharp();
+        },
+        onScaleStart: (_) => _zoomAtGestureStart = _zoom,
+        onScaleUpdate: (d) {
+          setState(() {
+            if (d.scale != 1.0) {
+              _zoom = (_zoomAtGestureStart * d.scale).clamp(1.0, _maxZoom);
+            }
+            final s = _fitScale(box) * _zoom;
+            final w = box.width / s, h = box.height / s;
+            _focus = _clamp(
+                (_focus ?? Offset(_imgW / 2, _imgH / 2)) -
+                    d.focalPointDelta / s,
+                w,
+                h);
+            // The sharp crop belongs to where the window WAS.
+            _dropSharp();
+          });
+        },
+        // Re-render once the gesture settles, not per frame: each render repaints the
+        // whole geometry and would make the pinch stutter.
+        onScaleEnd: (_) => _requestSharp(),
+        child: ClipRect(
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: _ImageWindowPainter(
+              image: widget.image,
+              sharp: _sharp,
+              window: win,
             ),
-            clipBehavior: Clip.antiAlias,
-            child: _sharp != null
-                ? RawImage(image: _sharp, fit: BoxFit.fill)
-                : CustomPaint(
-                    painter: _ImageZoomPainter(
-                      image: widget.image,
-                      focusX: _fx,
-                      focusY: _fy,
-                      cropSize: widget.cropSize,
-                    ),
-                  ),
           ),
         ),
-        const SizedBox(height: AppSpacing.x3),
-        Text('Drag to explore', style: AppTypography.caption),
-      ],
-    );
+      );
+    });
   }
 }
 
-class _ImageZoomPainter extends CustomPainter {
-  _ImageZoomPainter({
+class _ImageWindowPainter extends CustomPainter {
+  _ImageWindowPainter({
     required this.image,
-    required this.focusX,
-    required this.focusY,
-    required this.cropSize,
+    required this.sharp,
+    required this.window,
   });
 
   final ui.Image image;
-  final double focusX, focusY, cropSize;
+
+  /// Natively-rendered pixels for exactly [window], when available.
+  final ui.Image? sharp;
+  final ui.Rect window;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final half = cropSize / 2;
-    final src = Rect.fromLTWH(focusX - half, focusY - half, cropSize, cropSize);
     final dst = Offset.zero & size;
     canvas.drawRect(dst, Paint()..color = AppColors.background);
+    final s = sharp;
+    if (s != null) {
+      // Already rendered at this window and resolution — draw it 1:1.
+      canvas.drawImageRect(
+        s,
+        Rect.fromLTWH(0, 0, s.width.toDouble(), s.height.toDouble()),
+        dst,
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+      return;
+    }
     canvas.drawImageRect(
       image,
-      src,
+      window,
       dst,
       Paint()
         ..filterQuality = FilterQuality.high
@@ -237,9 +216,6 @@ class _ImageZoomPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ImageZoomPainter old) =>
-      old.focusX != focusX ||
-      old.focusY != focusY ||
-      old.image != image ||
-      old.cropSize != cropSize;
+  bool shouldRepaint(_ImageWindowPainter old) =>
+      old.image != image || old.sharp != sharp || old.window != window;
 }

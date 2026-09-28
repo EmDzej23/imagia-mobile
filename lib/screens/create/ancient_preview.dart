@@ -118,8 +118,8 @@ class _AncientPreviewState extends State<AncientPreview> {
         image: img,
         cropRenderer: _geo == null
             ? null
-            : (crop, outPx) => renderAncientCrop(
-                  _geo!, _w, _h, crop, outPx, outPx,
+            : (crop, outW, outH) => renderAncientCrop(
+                  _geo!, _w, _h, crop, outW, outH,
                   baseImage: widget.base.thumbnail,
                   sprites: _sprites,
                 ),

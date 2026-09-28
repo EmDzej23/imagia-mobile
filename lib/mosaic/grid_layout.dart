@@ -1797,7 +1797,15 @@ void _fillRemainingCells(
     for (final shape in (shapesOverride ?? _fillShapes)) {
       if (!_shapeFits(col, row, shape, M, N, occupied)) continue;
       if (shape.cells > 1 && sal > fillSalThreshold) continue;
-      final pool = tilePools[shape.ar];
+      // The 1x1 fill is the LAST RESORT and draws from the any-orientation pool, not
+      // from the square pool its aspect would key. Reading `tilePools[shape.ar]` here
+      // sent it to the orientation-filtered square pool — which `_buildTilePools`
+      // deliberately EMPTIES when too few photos are square, so the one shape that must
+      // always have something to place could be starved or skipped outright, leaving
+      // the fill to larger shapes that fit worse.
+      final pool = shape.cells == 1
+          ? tilePools[_anyOrientationAR]
+          : tilePools[shape.ar];
       if (pool == null || pool.isEmpty) continue;
 
       final region = analyzer.sampleRegion(

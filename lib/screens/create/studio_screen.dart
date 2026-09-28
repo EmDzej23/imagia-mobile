@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-// ScrollDirection — tells collapse (reading down) from expand (heading back up).
-import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -84,46 +82,53 @@ class StudioScreen extends ConsumerStatefulWidget {
   ConsumerState<StudioScreen> createState() => _StudioScreenState();
 }
 
+/// The way back out of a collapsed preview.
+///
+/// Labelled, not just an icon: the grabber above the settings can be found by someone
+/// looking for it, but this has to be understood by someone who is not. It only
+/// appears once the preview is actually small, so it costs nothing the rest of the
+/// time.
+class _ExpandPreviewButton extends StatelessWidget {
+  const _ExpandPreviewButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.open_in_full, size: 13, color: Colors.white),
+            const SizedBox(width: 6),
+            Text('Expand',
+                style: AppTypography.caption.copyWith(color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// How much flex the preview gives up when fully collapsed (of 600). It shrinks to
 /// 260/1000 of the pane rather than vanishing: a preview you cannot see is not a
 /// preview, and the point is to keep the picture in view while the settings get room.
 const double _collapseTravel = 340;
 
-/// Scroll past this many pixels before collapsing. Without it the tiniest drag — or
-/// overscroll leaking out of a slider gesture — would snap the preview shut.
-const double _collapseTrigger = 28;
-
-/// What the preview should do for a given settings-scroll position.
-enum PreviewAction { collapse, expand, hold }
-
-/// The collapse rule, kept pure so it can be exercised without building the studio.
+/// Scroll distance over which the preview goes from full height to fully collapsed.
 ///
-/// Reading DOWN the settings collapses the preview; heading back up reopens it. The
-/// [_collapseTrigger] dead zone matters more than it looks: sliders live in this list,
-/// and the overscroll that leaks out of a slider drag would otherwise snap the preview
-/// shut exactly while the user was watching it change.
-PreviewAction previewActionFor({
-  required double pixels,
-  required ScrollDirection direction,
-}) {
-  // At the top the preview always belongs open, whichever way the last gesture went —
-  // otherwise a bounce at the top can strand it collapsed with nothing left to scroll.
-  if (pixels <= 0) return PreviewAction.expand;
-  return switch (direction) {
-    ScrollDirection.reverse =>
-      pixels > _collapseTrigger ? PreviewAction.collapse : PreviewAction.hold,
-    // Scrolling up does NOT reopen it, deliberately.
-    //
-    // It is the platform idiom and it is tempting — the gesture that collapsed it
-    // would undo it. But it fires on any small upward correction, and this list is
-    // long enough that people scroll up a few pixels constantly while comparing two
-    // controls. Each of those would fling a third of the screen back over what they
-    // were reading. The ways back are all INTENTFUL instead: touch a setting, reach
-    // the top of the list, tap the preview, or tap the grabber.
-    ScrollDirection.forward => PreviewAction.hold,
-    ScrollDirection.idle => PreviewAction.hold,
-  };
-}
+/// Short enough that the picture is out of the way once the first controls have
+/// scrolled past, long enough that the shrink reads as motion rather than a jump.
+const double _collapseDistance = 180;
 
 class _StudioScreenState extends ConsumerState<StudioScreen>
     with SingleTickerProviderStateMixin {
@@ -140,27 +145,27 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// Settings pane scroll — drives the preview collapse.
   final ScrollController _settingsScroll = ScrollController();
 
-  /// 0 = preview at full height, 1 = collapsed. Animated rather than read straight off
-  /// the scroll offset, so that "user changed a setting" can reopen it too — something
-  /// a purely offset-derived height cannot express.
-  late final AnimationController _previewCollapse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 260),
-    reverseDuration: const Duration(milliseconds: 200),
-  );
+  /// 0 = preview at full height, 1 = collapsed.
+  ///
+  /// Held in an AnimationController only so the Column can rebuild off it; the value
+  /// is now SET from the scroll position rather than animated, so the durations that
+  /// used to be here are gone — the scroll supplies the motion.
+  late final AnimationController _previewCollapse =
+      AnimationController(vsync: this);
 
   void _onSettingsScroll() {
     if (!_settingsScroll.hasClients) return;
-    final pos = _settingsScroll.position;
-    switch (previewActionFor(
-        pixels: pos.pixels, direction: pos.userScrollDirection)) {
-      case PreviewAction.collapse:
-        _previewCollapse.forward();
-      case PreviewAction.expand:
-        _previewCollapse.reverse();
-      case PreviewAction.hold:
-        break;
-    }
+    // The preview follows the scroll DIRECTLY rather than animating once a threshold
+    // trips. A snap always reads as a lurch — it is motion the finger did not make.
+    // Tracking 1:1 reads as the list pushing the picture out of the way, which is how
+    // every well-behaved collapsing header feels.
+    //
+    // This also settles the flapping problem by construction: with no animation there
+    // is nothing to fight, so a small upward correction gives back a proportionally
+    // small amount of preview instead of flinging it open.
+    final t =
+        (_settingsScroll.position.pixels / _collapseDistance).clamp(0.0, 1.0);
+    if ((t - _previewCollapse.value).abs() > 0.001) _previewCollapse.value = t;
   }
 
   // ── Inline preview zoom ────────────────────────────────────────────────────
@@ -209,29 +214,28 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     return Offset(x, y);
   }
 
-  /// Set by a settings change, consumed when the finger lifts — see the `Listener`
-  /// around the settings pane.
-  bool _settingsTouched = false;
-
-  /// A settings change reopens the preview: the reason to touch a control is to see
-  /// what it did, and staying collapsed would hide the answer.
+  /// Changing a setting no longer forces the preview open.
   ///
-  /// But NOT mid-gesture. A slider fires continuously while dragged, so revealing on
-  /// every value would expand the preview under the user's finger — and because the
-  /// settings pane shrinks as the preview grows, the track would slide out from under
-  /// the thumb mid-drag. So the change only ARMS the reveal; the pointer-up fires it.
-  void _revealPreview() => _previewCollapse.reverse();
-
-  /// Fire an armed reveal once the interaction that caused it has finished.
+  /// It used to, on the reasoning that you touch a control to see what it does. But
+  /// the preview never disappears — at full collapse it still holds a quarter of the
+  /// pane — so the change IS visible, and yanking the list back to the top under
+  /// someone mid-way through the settings was the more disruptive of the two. The
+  /// ways back are all explicit now: the Expand button, the grabber, tapping the
+  /// preview, or scrolling up.
+  /// Put the preview back by returning the list to the top.
   ///
-  /// Hung off the pointer rather than off each control's "done" callback: there are
-  /// twenty sliders on this screen and a missed one would silently keep the old
-  /// behaviour. A discrete tap still feels instant — its pointer-up lands in the same
-  /// moment as the change.
-  void _onSettingsPointerUp() {
-    if (!_settingsTouched) return;
-    _settingsTouched = false;
-    _revealPreview();
+  /// The scroll position IS the collapse now, so animating the height open on its own
+  /// would be overwritten by the very next scroll callback. Scrolling the list back is
+  /// what actually expands it — and it is the honest gesture anyway: the preview is
+  /// large exactly when you are looking at the picture rather than at the settings.
+  void _expandPreview() {
+    if (_settingsScroll.hasClients && _settingsScroll.position.pixels > 0) {
+      _settingsScroll.animateTo(0,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic);
+    } else {
+      _previewCollapse.value = 0;
+    }
   }
   String? _highlightedTileId;
   Timer? _highlightTimer;
@@ -808,11 +812,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     // themselves and export via the server (no tiles, no loupe, no tint slider).
     final isTileless = isAncient || isWordart;
 
-    void update(MosaicSettings s) {
-      // Arms the reveal; `_onSettingsPointerUp` fires it when the gesture ends.
-      _settingsTouched = true;
-      _controller.updateSettings(s);
-    }
+    void update(MosaicSettings s) => _controller.updateSettings(s);
 
     return Scaffold(
       appBar: AppBar(
@@ -903,7 +903,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                             ? null
                             : (details) {
                                 if (!_previewCollapse.isDismissed) {
-                                  _previewCollapse.reverse();
+                                  _expandPreview();
                                   return;
                                 }
                                 final sc = fit!.scale * _zoom;
@@ -1016,10 +1016,17 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                 ),
                               if ((isTileless && studio.base != null) ||
                                   (!isTileless && plan != null))
-                                const Positioned(
+                                Positioned(
                                   bottom: AppSpacing.x2,
                                   right: AppSpacing.x2,
-                                  child: _Hint(text: 'Pinch to zoom'),
+                                  // Swaps to the way OUT once the preview is squeezed.
+                                  // "Pinch to zoom" is advice for a picture you can
+                                  // see; shrunk, the only question is how to get it
+                                  // back, and a bare grabber does not answer that
+                                  // clearly enough to be the only answer.
+                                  child: t > 0.35
+                                      ? _ExpandPreviewButton(onTap: _expandPreview)
+                                      : const _Hint(text: 'Pinch to zoom'),
                                 ),
                               if (studio.isPlanning)
                                 const Positioned(
@@ -1041,12 +1048,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                   // ── Controls ──
                   Expanded(
                     flex: 1000 - previewFlex,
-                    // Catches the end of ANY interaction in the pane — slider release,
-                    // segment tap, switch flip — in one place.
-                    child: Listener(
-                      onPointerUp: (_) => _onSettingsPointerUp(),
-                      onPointerCancel: (_) => _onSettingsPointerUp(),
-                      child: Container(
+                    child: Container(
                         decoration: const BoxDecoration(
                           color: AppColors.surface,
                           borderRadius:
@@ -1181,7 +1183,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                           ],
                         ),
                       ),
-                    ),
                   ),
                     ],
                   );

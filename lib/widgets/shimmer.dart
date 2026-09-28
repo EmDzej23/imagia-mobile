@@ -1,10 +1,13 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import '../services/thumb_cache.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
-/// Sweeps a soft highlight across its child to signal loading. Wrap skeleton
-/// shapes ([SkeletonBox]) in this. Modern alternative to a bare spinner.
 class Shimmer extends StatefulWidget {
   const Shimmer({super.key, required this.child});
   final Widget child;
@@ -115,7 +118,13 @@ class _GradientShimmerBoxState extends State<GradientShimmerBox>
 /// A network image with the animated gradient placeholder showing *behind* it
 /// until the picture decodes, then fading the image in on top — the same feel
 /// as the project cards (robust to fast/cached loads, unlike `loadingBuilder`).
-class ShimmerNetworkImage extends StatelessWidget {
+///
+/// Backed by [ThumbCache], so a cover is fetched from the network ONCE. It used to
+/// be a bare `Image.network`, which keeps decoded frames in memory but nothing on
+/// disk — so every cold start re-fetched every cover, and each of those made the
+/// server pull the full-size mosaic out of blob storage and resize it. On a list of
+/// covers that is the whole of the wait.
+class ShimmerNetworkImage extends StatefulWidget {
   const ShimmerNetworkImage({
     super.key,
     required this.url,
@@ -128,31 +137,88 @@ class ShimmerNetworkImage extends StatelessWidget {
   final double errorIconSize;
 
   @override
+  State<ShimmerNetworkImage> createState() => _ShimmerNetworkImageState();
+}
+
+class _ShimmerNetworkImageState extends State<ShimmerNetworkImage> {
+  Uint8List? _bytes;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(ShimmerNetworkImage old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) {
+      _bytes = null;
+      _failed = false;
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final url = widget.url;
+    final cached = await ThumbCache.read(url);
+    // `widget.url` re-read after every await: the row may have been recycled onto a
+    // different item while this was in flight, and painting the old cover there would
+    // show the wrong mosaic.
+    if (!mounted || widget.url != url) return;
+    if (cached != null) {
+      setState(() => _bytes = cached);
+      return;
+    }
+    try {
+      final res = await Dio().get<List<int>>(
+        url,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      if (!mounted || widget.url != url) return;
+      final data = res.data;
+      if (res.statusCode == 200 && data != null && data.isNotEmpty) {
+        final bytes = Uint8List.fromList(data);
+        unawaited(ThumbCache.write(url, bytes));
+        setState(() => _bytes = bytes);
+      } else {
+        setState(() => _failed = true);
+      }
+    } catch (_) {
+      if (mounted && widget.url == url) setState(() => _failed = true);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
         const GradientShimmerBox(),
-        Image.network(
-          url,
-          fit: fit,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            if (wasSynchronouslyLoaded) return child;
-            return AnimatedOpacity(
-              opacity: frame == null ? 0 : 1,
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeOut,
-              child: child,
-            );
-          },
-          errorBuilder: (_, _, _) => ColoredBox(
+        if (_failed)
+          ColoredBox(
             color: AppColors.surfaceRaised,
             child: Center(
               child: Icon(Icons.image,
-                  size: errorIconSize, color: AppColors.textMuted),
+                  size: widget.errorIconSize, color: AppColors.textMuted),
             ),
+          )
+        else if (_bytes != null)
+          Image.memory(
+            _bytes!,
+            fit: widget.fit,
+            gaplessPlayback: true,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded) return child;
+              return AnimatedOpacity(
+                opacity: frame == null ? 0 : 1,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeOut,
+                child: child,
+              );
+            },
           ),
-        ),
       ],
     );
   }

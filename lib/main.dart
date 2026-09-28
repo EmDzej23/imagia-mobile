@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'router.dart';
 import 'services/notifications.dart';
 import 'services/push_service.dart';
+import 'services/thumb_cache.dart';
 import 'theme/app_theme.dart';
 import 'widgets/render_indicator.dart';
 
@@ -13,6 +16,9 @@ Future<void> main() async {
   await Firebase.initializeApp();
   await NotificationService.instance.init();
   await PushService.instance.init();
+  // Not awaited: housekeeping must never delay first paint, and a failure here is
+  // harmless — a stale cover is still a cover.
+  unawaited(ThumbCache.evictStale());
   runApp(const ProviderScope(child: ImagiaApp()));
 }
 

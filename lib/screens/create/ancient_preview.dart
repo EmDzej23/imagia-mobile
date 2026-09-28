@@ -33,6 +33,9 @@ class _AncientPreviewState extends State<AncientPreview> {
   int _sw = 0, _sh = 0, _w = 0, _h = 0;
   AncientSprites? _sprites;
   ui.Image? _image;
+
+  /// See the word-art preview: kept so the loupe can re-render crops sharply.
+  AncientGeometry? _geo;
   Timer? _debounce;
   int _token = 0;
 
@@ -89,7 +92,10 @@ class _AncientPreviewState extends State<AncientPreview> {
       return;
     }
     _image?.dispose();
-    setState(() => _image = img);
+    setState(() {
+      _image = img;
+      _geo = geo;
+    });
   }
 
   @override
@@ -108,7 +114,16 @@ class _AncientPreviewState extends State<AncientPreview> {
     }
     // Contain + centred, with a tap-to-zoom loupe like the tile-mosaic preview.
     return RepaintBoundary(
-      child: LoupePreviewImage(image: img),
+      child: LoupePreviewImage(
+        image: img,
+        cropRenderer: _geo == null
+            ? null
+            : (crop, outPx) => renderAncientCrop(
+                  _geo!, _w, _h, crop, outPx, outPx,
+                  baseImage: widget.base.thumbnail,
+                  sprites: _sprites,
+                ),
+      ),
     );
   }
 }

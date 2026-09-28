@@ -544,6 +544,34 @@ class AncientPainter extends CustomPainter {
 }
 
 /// Render the geometry into a raster [ui.Image] at `w`×`h` (for export/save).
+/// Rasterise just [crop] (in geometry pixels) into an [outW]×[outH] image.
+///
+/// See `renderWordArtCrop` for why: the stones are vector paths, so re-painting a
+/// cropped region through a scaled canvas gives genuinely sharp edges rather than a
+/// magnified preview bitmap.
+Future<ui.Image> renderAncientCrop(
+  AncientGeometry geo,
+  int w,
+  int h,
+  ui.Rect crop,
+  int outW,
+  int outH, {
+  ui.Image? baseImage,
+  AncientSprites? sprites,
+}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas =
+      Canvas(recorder, ui.Rect.fromLTWH(0, 0, outW.toDouble(), outH.toDouble()));
+  canvas.scale(outW / crop.width, outH / crop.height);
+  canvas.translate(-crop.left, -crop.top);
+  AncientPainter(geo, baseImage: baseImage, sprites: sprites)
+      .paint(canvas, Size(w.toDouble(), h.toDouble()));
+  final pic = recorder.endRecording();
+  final img = await pic.toImage(outW, outH);
+  pic.dispose();
+  return img;
+}
+
 Future<ui.Image> renderAncientImage(AncientGeometry geo, int w, int h,
     {ui.Image? baseImage, AncientSprites? sprites}) async {
   final recorder = ui.PictureRecorder();

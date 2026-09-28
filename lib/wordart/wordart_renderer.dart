@@ -1031,6 +1031,38 @@ class WordArtPainter extends CustomPainter {
 }
 
 /// Rasterise the word-art geometry to a [ui.Image] (preview + export).
+/// Rasterise just [crop] (in geometry pixels) into an [outW]×[outH] image.
+///
+/// The loupe used to magnify the finished preview bitmap, so zooming in showed
+/// preview-resolution pixels blown up. The geometry is resolution-INDEPENDENT — words
+/// are glyph outlines and the ground is a flat fill — so re-running the painter through
+/// a scaled canvas re-shapes the text at the device resolution instead. Skia rasterises
+/// glyphs at the transformed size, which is what makes the difference: the letters come
+/// out as crisp as the phone can draw them, at no cost to the live preview.
+///
+/// Only the crop is drawn, so the cost is bounded by the WINDOW, not by the zoom level.
+Future<ui.Image> renderWordArtCrop(
+  WordArtGeometry geo,
+  int w,
+  int h,
+  ui.Rect crop,
+  int outW,
+  int outH,
+) async {
+  final recorder = ui.PictureRecorder();
+  final canvas =
+      Canvas(recorder, ui.Rect.fromLTWH(0, 0, outW.toDouble(), outH.toDouble()));
+  canvas.scale(outW / crop.width, outH / crop.height);
+  canvas.translate(-crop.left, -crop.top);
+  // The painter still needs the FULL size: it fills the ground across the whole
+  // picture, and a crop-sized rect would leave the window's edges bare.
+  WordArtPainter(geo).paint(canvas, Size(w.toDouble(), h.toDouble()));
+  final pic = recorder.endRecording();
+  final img = await pic.toImage(outW, outH);
+  pic.dispose();
+  return img;
+}
+
 Future<ui.Image> renderWordArtImage(
     WordArtGeometry geo, int w, int h) async {
   final recorder = ui.PictureRecorder();

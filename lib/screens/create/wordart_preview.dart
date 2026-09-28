@@ -33,6 +33,10 @@ class _WordArtPreviewState extends State<WordArtPreview> {
   Uint8List? _rgba;
   int _sw = 0, _sh = 0, _w = 0, _h = 0;
   ui.Image? _image;
+
+  /// Kept so the loupe can re-render a crop at device resolution. Geometry is small
+  /// (a word list), unlike the raster it produces, so holding it costs almost nothing.
+  WordArtGeometry? _geo;
   Timer? _debounce;
   int _token = 0;
   bool _building = false;
@@ -88,6 +92,7 @@ class _WordArtPreviewState extends State<WordArtPreview> {
     _image?.dispose();
     setState(() {
       _image = img;
+      _geo = geo;
       _building = false;
     });
   }
@@ -107,7 +112,14 @@ class _WordArtPreviewState extends State<WordArtPreview> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (img != null) LoupePreviewImage(image: img),
+            if (img != null)
+              LoupePreviewImage(
+                image: img,
+                cropRenderer: _geo == null
+                    ? null
+                    : (crop, outPx) =>
+                        renderWordArtCrop(_geo!, _w, _h, crop, outPx, outPx),
+              ),
             if (img == null || _building)
               Container(
                 color: img == null ? null : Colors.black.withValues(alpha: 0.35),

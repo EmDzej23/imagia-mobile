@@ -17,9 +17,11 @@ class RgbColor {
   double g;
   double b;
 
-  factory RgbColor.fromJson(Map<String, dynamic> j) =>
-      RgbColor((j['r'] as num).toDouble(), (j['g'] as num).toDouble(),
-          (j['b'] as num).toDouble());
+  factory RgbColor.fromJson(Map<String, dynamic> j) => RgbColor(
+    (j['r'] as num).toDouble(),
+    (j['g'] as num).toDouble(),
+    (j['b'] as num).toDouble(),
+  );
 
   Map<String, dynamic> toJson() => {'r': r, 'g': g, 'b': b};
 }
@@ -30,9 +32,11 @@ class LabColor {
   double a;
   double b;
 
-  factory LabColor.fromJson(Map<String, dynamic> j) =>
-      LabColor((j['L'] as num).toDouble(), (j['a'] as num).toDouble(),
-          (j['b'] as num).toDouble());
+  factory LabColor.fromJson(Map<String, dynamic> j) => LabColor(
+    (j['L'] as num).toDouble(),
+    (j['a'] as num).toDouble(),
+    (j['b'] as num).toDouble(),
+  );
 
   Map<String, dynamic> toJson() => {'L': L, 'a': a, 'b': b};
 }
@@ -49,10 +53,11 @@ class LuminanceBalance {
   double horizontal;
 
   factory LuminanceBalance.fromJson(Map<String, dynamic> j) => LuminanceBalance(
-      (j['vertical'] as num).toDouble(), (j['horizontal'] as num).toDouble());
+    (j['vertical'] as num).toDouble(),
+    (j['horizontal'] as num).toDouble(),
+  );
 
-  Map<String, dynamic> toJson() =>
-      {'vertical': vertical, 'horizontal': horizontal};
+  Map<String, dynamic> toJson() => {'vertical': vertical, 'horizontal': horizontal};
 }
 
 /// 8-bin luminance histogram (length 8).
@@ -88,34 +93,34 @@ class SignalWeights {
   double contrastPattern;
 
   SignalWeights copy() => SignalWeights(
-        color: color,
-        luminancePattern: luminancePattern,
-        chromaPattern: chromaPattern,
-        edgePattern: edgePattern,
-        tonalHistogram: tonalHistogram,
-        brightnessEmphasis: brightnessEmphasis,
-        contrastPattern: contrastPattern,
-      );
+    color: color,
+    luminancePattern: luminancePattern,
+    chromaPattern: chromaPattern,
+    edgePattern: edgePattern,
+    tonalHistogram: tonalHistogram,
+    brightnessEmphasis: brightnessEmphasis,
+    contrastPattern: contrastPattern,
+  );
 
   factory SignalWeights.fromJson(Map<String, dynamic> j) => SignalWeights(
-        color: (j['color'] as num).toDouble(),
-        luminancePattern: (j['luminancePattern'] as num).toDouble(),
-        chromaPattern: (j['chromaPattern'] as num).toDouble(),
-        edgePattern: (j['edgePattern'] as num).toDouble(),
-        tonalHistogram: (j['tonalHistogram'] as num).toDouble(),
-        brightnessEmphasis: (j['brightnessEmphasis'] as num).toDouble(),
-        contrastPattern: (j['contrastPattern'] as num).toDouble(),
-      );
+    color: (j['color'] as num).toDouble(),
+    luminancePattern: (j['luminancePattern'] as num).toDouble(),
+    chromaPattern: (j['chromaPattern'] as num).toDouble(),
+    edgePattern: (j['edgePattern'] as num).toDouble(),
+    tonalHistogram: (j['tonalHistogram'] as num).toDouble(),
+    brightnessEmphasis: (j['brightnessEmphasis'] as num).toDouble(),
+    contrastPattern: (j['contrastPattern'] as num).toDouble(),
+  );
 
   Map<String, dynamic> toJson() => {
-        'color': color,
-        'luminancePattern': luminancePattern,
-        'chromaPattern': chromaPattern,
-        'edgePattern': edgePattern,
-        'tonalHistogram': tonalHistogram,
-        'brightnessEmphasis': brightnessEmphasis,
-        'contrastPattern': contrastPattern,
-      };
+    'color': color,
+    'luminancePattern': luminancePattern,
+    'chromaPattern': chromaPattern,
+    'edgePattern': edgePattern,
+    'tonalHistogram': tonalHistogram,
+    'brightnessEmphasis': brightnessEmphasis,
+    'contrastPattern': contrastPattern,
+  };
 }
 
 /// "original" | "blocks" | "square" | "landscape" | "portrait"
@@ -135,6 +140,8 @@ class MosaicSettings {
     required this.baseBlur,
     required this.colorBoost,
     required this.autoContrast,
+    this.maxTileUses = 0,
+    this.tileCrops,
     this.ancientStoneSize = 14,
     this.ancientGrout = 1.4,
     this.ancientIrregularity = 0.85,
@@ -161,6 +168,7 @@ class MosaicSettings {
   MosaicMode mosaicMode;
   double density;
   double outputWidth;
+
   /// PINNED to fixedReusePenalty by sanitizeSettings — no longer user-facing.
   double reusePenalty;
   double aspectWeight;
@@ -171,6 +179,23 @@ class MosaicSettings {
   double baseBlur;
   double colorBoost;
   double autoContrast;
+
+  /// Hard ceiling on how many cells one photo may fill.
+  ///
+  /// 0 = unlimited. [evenTileUses] (-1) = as even as the library allows, resolved to
+  /// cells / photos at build time. The sentinel exists because that floor moves: store
+  /// the computed number instead and changing the density afterwards leaves a cap that
+  /// no longer means "as even as possible", silently loosening a setting the user never
+  /// touched.
+  int maxTileUses;
+
+  /// Manual per-tile crops, so the MATCHER judges the pixels that will be shown.
+  ///
+  /// These already reach the renderer through the plan. They are here as well because a
+  /// crop changes which part of a photo appears, and a scorer that cannot see it picks
+  /// tiles by a framing the viewer never gets — the same defect `cropPortraitTop` had.
+  /// Keyed by crop slot (see [cropSlot]), not by bare tile id.
+  Map<String, TileCrop>? tileCrops;
 
   // Ancient-mosaic (tile-less stone renderer). Look settings only.
   double ancientStoneSize;
@@ -218,6 +243,8 @@ class MosaicSettings {
     double? baseBlur,
     double? colorBoost,
     double? autoContrast,
+    int? maxTileUses,
+    Map<String, TileCrop>? tileCrops,
     double? ancientStoneSize,
     double? ancientGrout,
     double? ancientIrregularity,
@@ -239,122 +266,122 @@ class MosaicSettings {
     double? outputSaturation,
     double? saBudgetFactor,
     SignalWeights? signalWeights,
-  }) =>
-      MosaicSettings(
-        mosaicMode: mosaicMode ?? this.mosaicMode,
-        density: density ?? this.density,
-        outputWidth: outputWidth ?? this.outputWidth,
-        reusePenalty: reusePenalty ?? this.reusePenalty,
-        aspectWeight: aspectWeight ?? this.aspectWeight,
-        detailWeight: detailWeight ?? this.detailWeight,
-        minBlockSize: minBlockSize ?? this.minBlockSize,
-        maxBlockSize: maxBlockSize ?? this.maxBlockSize,
-        tintStrength: tintStrength ?? this.tintStrength,
-        baseBlur: baseBlur ?? this.baseBlur,
-        colorBoost: colorBoost ?? this.colorBoost,
-        autoContrast: autoContrast ?? this.autoContrast,
-        ancientStoneSize: ancientStoneSize ?? this.ancientStoneSize,
-        ancientGrout: ancientGrout ?? this.ancientGrout,
-        ancientIrregularity: ancientIrregularity ?? this.ancientIrregularity,
-        ancientVariation: ancientVariation ?? this.ancientVariation,
-        ancientBevel: ancientBevel ?? this.ancientBevel,
-        ancientGroutColor: ancientGroutColor ?? this.ancientGroutColor,
-        ancientCurviness: ancientCurviness ?? this.ancientCurviness,
-        ancientShape: ancientShape ?? this.ancientShape,
-        wordartDensity: wordartDensity ?? this.wordartDensity,
-        wordartRotation: wordartRotation ?? this.wordartRotation,
-        wordartContrast: wordartContrast ?? this.wordartContrast,
-        wordartPalette: wordartPalette ?? this.wordartPalette,
-        wordartGround: wordartGround ?? this.wordartGround,
-        wordartVivid: wordartVivid ?? this.wordartVivid,
-        wordartEmpty: wordartEmpty ?? this.wordartEmpty,
-        wordartCoverage: wordartCoverage ?? this.wordartCoverage,
-        wordartCaption: wordartCaption ?? this.wordartCaption,
-        wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
-        outputSaturation: outputSaturation ?? this.outputSaturation,
-        saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
-        signalWeights: signalWeights ?? this.signalWeights,
-      );
+  }) => MosaicSettings(
+    mosaicMode: mosaicMode ?? this.mosaicMode,
+    density: density ?? this.density,
+    outputWidth: outputWidth ?? this.outputWidth,
+    reusePenalty: reusePenalty ?? this.reusePenalty,
+    aspectWeight: aspectWeight ?? this.aspectWeight,
+    detailWeight: detailWeight ?? this.detailWeight,
+    minBlockSize: minBlockSize ?? this.minBlockSize,
+    maxBlockSize: maxBlockSize ?? this.maxBlockSize,
+    tintStrength: tintStrength ?? this.tintStrength,
+    baseBlur: baseBlur ?? this.baseBlur,
+    colorBoost: colorBoost ?? this.colorBoost,
+    autoContrast: autoContrast ?? this.autoContrast,
+    maxTileUses: maxTileUses ?? this.maxTileUses,
+    tileCrops: tileCrops ?? this.tileCrops,
+    ancientStoneSize: ancientStoneSize ?? this.ancientStoneSize,
+    ancientGrout: ancientGrout ?? this.ancientGrout,
+    ancientIrregularity: ancientIrregularity ?? this.ancientIrregularity,
+    ancientVariation: ancientVariation ?? this.ancientVariation,
+    ancientBevel: ancientBevel ?? this.ancientBevel,
+    ancientGroutColor: ancientGroutColor ?? this.ancientGroutColor,
+    ancientCurviness: ancientCurviness ?? this.ancientCurviness,
+    ancientShape: ancientShape ?? this.ancientShape,
+    wordartDensity: wordartDensity ?? this.wordartDensity,
+    wordartRotation: wordartRotation ?? this.wordartRotation,
+    wordartContrast: wordartContrast ?? this.wordartContrast,
+    wordartPalette: wordartPalette ?? this.wordartPalette,
+    wordartGround: wordartGround ?? this.wordartGround,
+    wordartVivid: wordartVivid ?? this.wordartVivid,
+    wordartEmpty: wordartEmpty ?? this.wordartEmpty,
+    wordartCoverage: wordartCoverage ?? this.wordartCoverage,
+    wordartCaption: wordartCaption ?? this.wordartCaption,
+    wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
+    outputSaturation: outputSaturation ?? this.outputSaturation,
+    saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
+    signalWeights: signalWeights ?? this.signalWeights,
+  );
 
   factory MosaicSettings.fromJson(Map<String, dynamic> j) => MosaicSettings(
-        mosaicMode: j['mosaicMode'] as String,
-        density: (j['density'] as num).toDouble(),
-        outputWidth: (j['outputWidth'] as num).toDouble(),
-        reusePenalty: (j['reusePenalty'] as num).toDouble(),
-        aspectWeight: (j['aspectWeight'] as num).toDouble(),
-        detailWeight: (j['detailWeight'] as num).toDouble(),
-        minBlockSize: (j['minBlockSize'] as num).toDouble(),
-        maxBlockSize: (j['maxBlockSize'] as num).toDouble(),
-        tintStrength: (j['tintStrength'] as num).toDouble(),
-        baseBlur: (j['baseBlur'] as num).toDouble(),
-        colorBoost: (j['colorBoost'] as num).toDouble(),
-        autoContrast: (j['autoContrast'] as num).toDouble(),
-        ancientStoneSize:
-            (j['ancientStoneSize'] as num?)?.toDouble() ?? 14,
-        ancientGrout: (j['ancientGrout'] as num?)?.toDouble() ?? 1.4,
-        ancientIrregularity:
-            (j['ancientIrregularity'] as num?)?.toDouble() ?? 0.85,
-        ancientVariation: (j['ancientVariation'] as num?)?.toDouble() ?? 0.12,
-        ancientBevel: (j['ancientBevel'] as num?)?.toDouble() ?? 0.35,
-        ancientGroutColor: j['ancientGroutColor'] as String? ?? 'dark',
-        ancientCurviness: (j['ancientCurviness'] as num?)?.toDouble() ?? 0.55,
-        ancientShape: j['ancientShape'] as String? ?? 'none',
-        wordartDensity: (j['wordartDensity'] as num?)?.toDouble() ?? 43,
-        wordartRotation: (j['wordartRotation'] as num?)?.toDouble() ?? 0,
-        wordartContrast: (j['wordartContrast'] as num?)?.toDouble() ?? 1,
-        wordartPalette: (j['wordartPalette'] as num?)?.toDouble() ?? 64,
-        wordartGround: (j['wordartGround'] as num?)?.toDouble() ?? 0,
-        wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 1,
-        wordartEmpty: (j['wordartEmpty'] as num?)?.toDouble() ?? 1,
-        wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
-        wordartCaption: j['wordartCaption'] as String? ?? '',
-        wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
-        outputSaturation: (j['outputSaturation'] as num?)?.toDouble() ?? 1.2,
-        saBudgetFactor: (j['saBudgetFactor'] as num?)?.toDouble(),
-        signalWeights: j['signalWeights'] == null
-            ? null
-            : SignalWeights.fromJson(
-                (j['signalWeights'] as Map).cast<String, dynamic>()),
-      );
+    mosaicMode: j['mosaicMode'] as String,
+    density: (j['density'] as num).toDouble(),
+    outputWidth: (j['outputWidth'] as num).toDouble(),
+    reusePenalty: (j['reusePenalty'] as num).toDouble(),
+    aspectWeight: (j['aspectWeight'] as num).toDouble(),
+    detailWeight: (j['detailWeight'] as num).toDouble(),
+    minBlockSize: (j['minBlockSize'] as num).toDouble(),
+    maxBlockSize: (j['maxBlockSize'] as num).toDouble(),
+    tintStrength: (j['tintStrength'] as num).toDouble(),
+    baseBlur: (j['baseBlur'] as num).toDouble(),
+    colorBoost: (j['colorBoost'] as num).toDouble(),
+    autoContrast: (j['autoContrast'] as num).toDouble(),
+    maxTileUses: (j['maxTileUses'] as num?)?.toInt() ?? 0,
+    ancientStoneSize: (j['ancientStoneSize'] as num?)?.toDouble() ?? 14,
+    ancientGrout: (j['ancientGrout'] as num?)?.toDouble() ?? 1.4,
+    ancientIrregularity: (j['ancientIrregularity'] as num?)?.toDouble() ?? 0.85,
+    ancientVariation: (j['ancientVariation'] as num?)?.toDouble() ?? 0.12,
+    ancientBevel: (j['ancientBevel'] as num?)?.toDouble() ?? 0.35,
+    ancientGroutColor: j['ancientGroutColor'] as String? ?? 'dark',
+    ancientCurviness: (j['ancientCurviness'] as num?)?.toDouble() ?? 0.55,
+    ancientShape: j['ancientShape'] as String? ?? 'none',
+    wordartDensity: (j['wordartDensity'] as num?)?.toDouble() ?? 43,
+    wordartRotation: (j['wordartRotation'] as num?)?.toDouble() ?? 0,
+    wordartContrast: (j['wordartContrast'] as num?)?.toDouble() ?? 1,
+    wordartPalette: (j['wordartPalette'] as num?)?.toDouble() ?? 64,
+    wordartGround: (j['wordartGround'] as num?)?.toDouble() ?? 0,
+    wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 1,
+    wordartEmpty: (j['wordartEmpty'] as num?)?.toDouble() ?? 1,
+    wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
+    wordartCaption: j['wordartCaption'] as String? ?? '',
+    wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
+    outputSaturation: (j['outputSaturation'] as num?)?.toDouble() ?? 1.2,
+    saBudgetFactor: (j['saBudgetFactor'] as num?)?.toDouble(),
+    signalWeights: j['signalWeights'] == null
+        ? null
+        : SignalWeights.fromJson((j['signalWeights'] as Map).cast<String, dynamic>()),
+  );
 
   Map<String, dynamic> toJson() => {
-        'mosaicMode': mosaicMode,
-        'density': density,
-        'outputWidth': outputWidth,
-        'reusePenalty': reusePenalty,
-        'aspectWeight': aspectWeight,
-        'detailWeight': detailWeight,
-        'minBlockSize': minBlockSize,
-        'maxBlockSize': maxBlockSize,
-        'tintStrength': tintStrength,
-        'baseBlur': baseBlur,
-        'colorBoost': colorBoost,
-        'autoContrast': autoContrast,
-        'ancientStoneSize': ancientStoneSize,
-        'ancientGrout': ancientGrout,
-        'ancientIrregularity': ancientIrregularity,
-        'ancientVariation': ancientVariation,
-        'ancientBevel': ancientBevel,
-        'ancientGroutColor': ancientGroutColor,
-        'ancientCurviness': ancientCurviness,
-        'ancientShape': ancientShape,
-        'wordartDensity': wordartDensity,
-        'wordartRotation': wordartRotation,
-        'wordartContrast': wordartContrast,
-        'wordartPalette': wordartPalette,
-        'wordartGround': wordartGround,
-        'wordartVivid': wordartVivid,
-        'wordartEmpty': wordartEmpty,
-        'wordartCoverage': wordartCoverage,
-        'wordartCaption': wordartCaption,
-        'wordartTitleColor': wordartTitleColor,
-        'outputSaturation': outputSaturation,
-        if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
-        // NOT persisted: engine tuning, not user content. See
-        // ProjectsApi._parseSettings — writing these froze old tuning into saved
-        // projects, which is the opposite of what a tuning change is for.
-        if (signalWeights != null) 'signalWeights': signalWeights?.toJson(),
-      };
+    'mosaicMode': mosaicMode,
+    'density': density,
+    'outputWidth': outputWidth,
+    'reusePenalty': reusePenalty,
+    'aspectWeight': aspectWeight,
+    'detailWeight': detailWeight,
+    'minBlockSize': minBlockSize,
+    'maxBlockSize': maxBlockSize,
+    'tintStrength': tintStrength,
+    'baseBlur': baseBlur,
+    'colorBoost': colorBoost,
+    'autoContrast': autoContrast,
+    'maxTileUses': maxTileUses,
+    'ancientStoneSize': ancientStoneSize,
+    'ancientGrout': ancientGrout,
+    'ancientIrregularity': ancientIrregularity,
+    'ancientVariation': ancientVariation,
+    'ancientBevel': ancientBevel,
+    'ancientGroutColor': ancientGroutColor,
+    'ancientCurviness': ancientCurviness,
+    'ancientShape': ancientShape,
+    'wordartDensity': wordartDensity,
+    'wordartRotation': wordartRotation,
+    'wordartContrast': wordartContrast,
+    'wordartPalette': wordartPalette,
+    'wordartGround': wordartGround,
+    'wordartVivid': wordartVivid,
+    'wordartEmpty': wordartEmpty,
+    'wordartCoverage': wordartCoverage,
+    'wordartCaption': wordartCaption,
+    'wordartTitleColor': wordartTitleColor,
+    'outputSaturation': outputSaturation,
+    if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
+    // NOT persisted: engine tuning, not user content. See
+    // ProjectsApi._parseSettings — writing these froze old tuning into saved
+    // projects, which is the opposite of what a tuning change is for.
+    if (signalWeights != null) 'signalWeights': signalWeights?.toJson(),
+  };
 }
 
 class TileDescriptor {
@@ -397,44 +424,44 @@ class TileDescriptor {
   SubregionEdgeOrientations? subregionEdgeOrientations;
 
   factory TileDescriptor.fromJson(Map<String, dynamic> j) => TileDescriptor(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        width: (j['width'] as num).toDouble(),
-        height: (j['height'] as num).toDouble(),
-        aspectRatio: (j['aspectRatio'] as num).toDouble(),
-        orientation: j['orientation'] as String,
-        averageColor:
-            RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
-        averageLabColor: LabColor.fromJson(
-            (j['averageLabColor'] as Map).cast<String, dynamic>()),
-        detailScore: (j['detailScore'] as num).toDouble(),
-        subregionColors: _labList(j['subregionColors']),
-        subregionEdges: _doubleList(j['subregionEdges']),
-        contrastMap: _doubleList(j['contrastMap']),
-        luminanceBalance: j['luminanceBalance'] == null
-            ? null
-            : LuminanceBalance.fromJson(
-                (j['luminanceBalance'] as Map).cast<String, dynamic>()),
-        colorVariance: (j['colorVariance'] as num).toDouble(),
-        edgeOrientation: (j['edgeOrientation'] as num).toDouble(),
-        tonalHistogram: _doubleList(j['tonalHistogram']),
-        subregionEdgeOrientations: _floatList(j['subregionEdgeOrientations']),
-      );
+    id: j['id'] as String,
+    name: j['name'] as String,
+    width: (j['width'] as num).toDouble(),
+    height: (j['height'] as num).toDouble(),
+    aspectRatio: (j['aspectRatio'] as num).toDouble(),
+    orientation: j['orientation'] as String,
+    averageColor: RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
+    averageLabColor: LabColor.fromJson(
+      (j['averageLabColor'] as Map).cast<String, dynamic>(),
+    ),
+    detailScore: (j['detailScore'] as num).toDouble(),
+    subregionColors: _labList(j['subregionColors']),
+    subregionEdges: _doubleList(j['subregionEdges']),
+    contrastMap: _doubleList(j['contrastMap']),
+    luminanceBalance: j['luminanceBalance'] == null
+        ? null
+        : LuminanceBalance.fromJson(
+            (j['luminanceBalance'] as Map).cast<String, dynamic>(),
+          ),
+    colorVariance: (j['colorVariance'] as num).toDouble(),
+    edgeOrientation: (j['edgeOrientation'] as num).toDouble(),
+    tonalHistogram: _doubleList(j['tonalHistogram']),
+    subregionEdgeOrientations: _floatList(j['subregionEdgeOrientations']),
+  );
 }
 
 List<LabColor>? _labList(dynamic v) => v == null
     ? null
     : (v as List)
-        .map((e) => LabColor.fromJson((e as Map).cast<String, dynamic>()))
-        .toList();
+          .map((e) => LabColor.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
 
 List<double>? _doubleList(dynamic v) =>
     v == null ? null : (v as List).map((e) => (e as num).toDouble()).toList();
 
 Float32List? _floatList(dynamic v) => v == null
     ? null
-    : Float32List.fromList(
-        (v as List).map((e) => (e as num).toDouble()).toList());
+    : Float32List.fromList((v as List).map((e) => (e as num).toDouble()).toList());
 
 class RegionAnalysis {
   RegionAnalysis({
@@ -472,29 +499,29 @@ class RegionAnalysis {
   SubregionEdgeOrientations subregionEdgeOrientations;
 
   factory RegionAnalysis.fromJson(Map<String, dynamic> j) => RegionAnalysis(
-        x: (j['x'] as num).toDouble(),
-        y: (j['y'] as num).toDouble(),
-        width: (j['width'] as num).toDouble(),
-        height: (j['height'] as num).toDouble(),
-        averageColor:
-            RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
-        averageLabColor: LabColor.fromJson(
-            (j['averageLabColor'] as Map).cast<String, dynamic>()),
-        detailScore: (j['detailScore'] as num).toDouble(),
-        subregionColors: _labList(j['subregionColors'])!,
-        subregionEdges: _doubleList(j['subregionEdges'])!,
-        contrastMap: _doubleList(j['contrastMap'])!,
-        luminanceBalance: LuminanceBalance.fromJson(
-            (j['luminanceBalance'] as Map).cast<String, dynamic>()),
-        colorVariance: (j['colorVariance'] as num).toDouble(),
-        edgeOrientation: (j['edgeOrientation'] as num).toDouble(),
-        tonalHistogram: _doubleList(j['tonalHistogram'])!,
-        subregionEdgeOrientations: _floatList(j['subregionEdgeOrientations'])!,
-      );
+    x: (j['x'] as num).toDouble(),
+    y: (j['y'] as num).toDouble(),
+    width: (j['width'] as num).toDouble(),
+    height: (j['height'] as num).toDouble(),
+    averageColor: RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
+    averageLabColor: LabColor.fromJson(
+      (j['averageLabColor'] as Map).cast<String, dynamic>(),
+    ),
+    detailScore: (j['detailScore'] as num).toDouble(),
+    subregionColors: _labList(j['subregionColors'])!,
+    subregionEdges: _doubleList(j['subregionEdges'])!,
+    contrastMap: _doubleList(j['contrastMap'])!,
+    luminanceBalance: LuminanceBalance.fromJson(
+      (j['luminanceBalance'] as Map).cast<String, dynamic>(),
+    ),
+    colorVariance: (j['colorVariance'] as num).toDouble(),
+    edgeOrientation: (j['edgeOrientation'] as num).toDouble(),
+    tonalHistogram: _doubleList(j['tonalHistogram'])!,
+    subregionEdgeOrientations: _floatList(j['subregionEdgeOrientations'])!,
+  );
 
   /// Builds a placement from this region with an assigned tile.
-  MosaicPlacement toPlacement(
-          int index, String tileId, String tileName, double score) =>
+  MosaicPlacement toPlacement(int index, String tileId, String tileName, double score) =>
       MosaicPlacement(
         x: x,
         y: y,
@@ -590,19 +617,19 @@ class SlimPlacement {
   String? face;
 
   Map<String, dynamic> toJson() => {
-        'index': index,
-        'x': x,
-        'y': y,
-        'width': width,
-        'height': height,
-        'tileId': tileId,
-        if (regionAvgColor != null) 'regionAvgColor': regionAvgColor,
-        // 3D cubes: the cell is a parallelogram, and x/y/width/height describe only the
-        // matcher's sample rect. Without these the export falls back to rectangles and
-        // silently loses the whole effect.
-        if (quad != null) 'quad': quad,
-        if (face != null) 'face': face,
-      };
+    'index': index,
+    'x': x,
+    'y': y,
+    'width': width,
+    'height': height,
+    'tileId': tileId,
+    if (regionAvgColor != null) 'regionAvgColor': regionAvgColor,
+    // 3D cubes: the cell is a parallelogram, and x/y/width/height describe only the
+    // matcher's sample rect. Without these the export falls back to rectangles and
+    // silently loses the whole effect.
+    if (quad != null) 'quad': quad,
+    if (face != null) 'face': face,
+  };
 }
 
 class MosaicPlan {
@@ -648,11 +675,11 @@ class TileCrop {
   final double h;
 
   factory TileCrop.fromJson(Map<String, dynamic> j) => TileCrop(
-        (j['x'] as num).toDouble(),
-        (j['y'] as num).toDouble(),
-        (j['w'] as num).toDouble(),
-        (j['h'] as num).toDouble(),
-      );
+    (j['x'] as num).toDouble(),
+    (j['y'] as num).toDouble(),
+    (j['w'] as num).toDouble(),
+    (j['h'] as num).toDouble(),
+  );
 
   Map<String, dynamic> toJson() => {'x': x, 'y': y, 'w': w, 'h': h};
 
@@ -660,11 +687,7 @@ class TileCrop {
   /// preview repaints off exactly this comparison.
   @override
   bool operator ==(Object other) =>
-      other is TileCrop &&
-      other.x == x &&
-      other.y == y &&
-      other.w == w &&
-      other.h == h;
+      other is TileCrop && other.x == x && other.y == y && other.w == w && other.h == h;
 
   @override
   int get hashCode => Object.hash(x, y, w, h);
@@ -720,22 +743,20 @@ class SlimMosaicPlan {
   Map<String, TileCrop> tileCrops;
 
   Map<String, dynamic> toJson() => {
-        'baseWidth': baseWidth,
-        'baseHeight': baseHeight,
-        'outputWidth': outputWidth,
-        'outputHeight': outputHeight,
-        'tintStrength': tintStrength,
-        'baseBlur': baseBlur,
-        'cropPortraitTop': cropPortraitTop,
-        if (hexagon) 'hexagon': true,
-        'outputSaturation': outputSaturation,
-        // Omitted when empty — the server treats absent as "all automatic".
-        if (tileCrops.isNotEmpty)
-          'tileCrops': {
-            for (final e in tileCrops.entries) e.key: e.value.toJson(),
-          },
-        'placements': placements.map((p) => p.toJson()).toList(),
-      };
+    'baseWidth': baseWidth,
+    'baseHeight': baseHeight,
+    'outputWidth': outputWidth,
+    'outputHeight': outputHeight,
+    'tintStrength': tintStrength,
+    'baseBlur': baseBlur,
+    'cropPortraitTop': cropPortraitTop,
+    if (hexagon) 'hexagon': true,
+    'outputSaturation': outputSaturation,
+    // Omitted when empty — the server treats absent as "all automatic".
+    if (tileCrops.isNotEmpty)
+      'tileCrops': {for (final e in tileCrops.entries) e.key: e.value.toJson()},
+    'placements': placements.map((p) => p.toJson()).toList(),
+  };
 }
 
 class RenderPlacement {

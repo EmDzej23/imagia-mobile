@@ -145,8 +145,10 @@ NoTouchReport enforceNoTouchingTwins(
   List<MosaicPlacement> placements,
   Map<String, TileDescriptor> tileMap,
   List<Set<int>> adjacency,
-  List<double>? saliency,
-) {
+  List<double>? saliency, [
+  /// Reuse ceiling, already resolved to a feasible value. 0 = unlimited.
+  int maxUses = 0,
+]) {
   final n = placements.length;
   if (n < 2) return const NoTouchReport(0, 0, 0, false);
 
@@ -346,6 +348,11 @@ NoTouchReport enforceNoTouchingTwins(
     var bestCost = double.infinity;
     for (final base in cellsByBase.keys) {
       if (forbidden.contains(base)) continue;
+      // Respect the reuse ceiling — this pass reassigns, so without the check it could
+      // push a photo past a cap the matcher was careful to hold. If nothing is left
+      // under the cap the loop simply finds no candidate and the twin stays: one visible
+      // twin is a smaller lie than breaking a promised limit.
+      if (maxUses > 0 && (cellsByBase[base]?.length ?? 0) >= maxUses) continue;
       final c = cost(i, tileMap[base]);
       if (c < bestCost) {
         bestCost = c;

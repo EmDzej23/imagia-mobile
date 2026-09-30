@@ -61,43 +61,79 @@ double _cbrt(double t) {
 // and the colour gap is closed by tint + transfer downstream. Mirrors the web
 // DEFAULT_SIGNAL_WEIGHTS.
 SignalWeights defaultSignalWeights() => SignalWeights(
-      color: 0.45, // was 0.55
-      luminancePattern: 0.22, // was 0.15
-      chromaPattern: 0.06,
-      edgePattern: 0.18, // was 0.12
-      tonalHistogram: 0.05,
-      // Light/dark counts this much more than hue when scoring a tile.
-      //
-      // Raised from 3.5 to the ceiling. Recognising the subject in a mosaic is almost
-      // entirely a light/dark judgement, and with a fixed library the tonal range is
-      // the binding constraint — so it is worth spending hue accuracy to place tone
-      // correctly. Measured on a coarse luminance comparison against the original:
-      // 200 photos 5.60 → 4.04, 3000 photos 3.50 → 2.57, 32 photos 7.01 → 6.65.
-      // Small libraries gain least: no weighting conjures a tone they do not contain.
-      // Must match shared.ts.
-      brightnessEmphasis: 5.0,
-      contrastPattern: 0.12, // was 0.08
-    );
+  color: 0.45, // was 0.55
+  luminancePattern: 0.22, // was 0.15
+  chromaPattern: 0.06,
+  edgePattern: 0.18, // was 0.12
+  tonalHistogram: 0.05,
+  // Light/dark counts this much more than hue when scoring a tile.
+  //
+  // Raised from 3.5 to the ceiling. Recognising the subject in a mosaic is almost
+  // entirely a light/dark judgement, and with a fixed library the tonal range is
+  // the binding constraint — so it is worth spending hue accuracy to place tone
+  // correctly. Measured on a coarse luminance comparison against the original:
+  // 200 photos 5.60 → 4.04, 3000 photos 3.50 → 2.57, 32 photos 7.01 → 6.65.
+  // Small libraries gain least: no weighting conjures a tone they do not contain.
+  // Must match shared.ts.
+  brightnessEmphasis: 5.0,
+  contrastPattern: 0.12, // was 0.08
+);
 
 /// The one variety value. See sanitizeSettings for why this is no longer a choice.
 const double fixedReusePenalty = 0.01;
 
+/// The smallest cap on per-photo reuse that can actually be satisfied.
+///
+/// Every cell must hold something, so with [cells] cells and [tiles] photos at least one
+/// photo has to appear ceil(cells / tiles) times. A lower cap is not a stricter setting,
+/// it is an impossible one — it leaves the matcher with no legal photo for some cells.
+int minFeasibleTileUses(int tiles, int cells) {
+  if (tiles <= 0) return 1;
+  return math.max(1, (cells / tiles).ceil());
+}
+
+/// `maxTileUses` sentinel: spread the library as evenly as it will go.
+///
+/// Resolved against the live cell count on every build, so it keeps meaning "as even as
+/// possible" when the density changes underneath it.
+const int evenTileUses = -1;
+
+/// The cap actually applied. 0 means unlimited, [evenTileUses] means the feasible floor.
+///
+/// Raising rather than rejecting an impossible value matters because this arrives from
+/// saved projects and the API as well as from the UI: a project saved with 30 photos and
+/// reopened after 20 were deleted would otherwise stop building at all.
+int resolveMaxTileUses(int? maxTileUses, int tiles, int cells) {
+  if (maxTileUses == evenTileUses) {
+    // The sentinel is a RATIO, so it cannot be resolved without both counts. Some scorer
+    // call sites leave them out, and there minFeasibleTileUses(0, 0) answers 1 — a cap of
+    // one cell per photo, which sends every placement through the at-capacity fallback
+    // and wrecks the mosaic. Unknown counts mean unlimited: the same answer this gave
+    // before the sentinel existed, and the safe direction to be wrong in.
+    if (tiles <= 0 || cells <= 0) return 0;
+    return minFeasibleTileUses(tiles, cells);
+  }
+  if (maxTileUses == null || maxTileUses <= 0) return 0;
+  return math.max(maxTileUses, minFeasibleTileUses(tiles, cells));
+}
+
 MosaicSettings defaultSettings() => MosaicSettings(
-      mosaicMode: 'square',
-      density: 180,
-      outputWidth: 8000,
-      reusePenalty: fixedReusePenalty,
-      aspectWeight: 0.08,
-      detailWeight: 0.05,
-      minBlockSize: 4,
-      maxBlockSize: 10,
-      tintStrength: 0.4,
-      baseBlur: 1,
-      colorBoost: 1.0,
-      autoContrast: 0,
-      outputSaturation: 1.2,
-      signalWeights: defaultSignalWeights(),
-    );
+  mosaicMode: 'square',
+  density: 180,
+  outputWidth: 8000,
+  reusePenalty: fixedReusePenalty,
+  aspectWeight: 0.08,
+  detailWeight: 0.05,
+  minBlockSize: 4,
+  maxBlockSize: 10,
+  tintStrength: 0.4,
+  baseBlur: 1,
+  colorBoost: 1.0,
+  autoContrast: 0,
+  maxTileUses: 0, // unlimited
+  outputSaturation: 1.2,
+  signalWeights: defaultSignalWeights(),
+);
 
 /// Luminance-preserving saturation matrix (the SVG/CSS `saturate()` matrix, Rec.709
 /// weights) as a Flutter 4x5 colour matrix. Shared so the preview painters, the loupe
@@ -203,8 +239,7 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
   const validAncientShape = ['none', 'heart', 'basketball', 'flower'];
 
   return MosaicSettings(
-    mosaicMode:
-        validModes.contains(input.mosaicMode) ? input.mosaicMode : 'original',
+    mosaicMode: validModes.contains(input.mosaicMode) ? input.mosaicMode : 'original',
     density: clampD(jsRound(input.density), minDensity, maxDensity),
     outputWidth: clampD(jsRound(input.outputWidth), minOutputWidth, maxOutputWidth),
     // PINNED. Measured across 12 / 67 / 200 / 3000-photo libraries, a flat 0.01 matches
@@ -220,8 +255,19 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     baseBlur: clampD(input.baseBlur, 0, 5),
     colorBoost: clampD(input.colorBoost, 1.0, 2.0),
     autoContrast: clampD(input.autoContrast, 0, 1),
+    // Clamped to 0 EXCEPT the sentinel, which is negative on purpose — rounding it away
+    // here would turn "spread evenly" back into "unlimited" on every reload.
+    // Passed through, not validated: `resolveTileSourceRect` clamps every crop at the
+    // point of use, so a stale one cannot produce an out-of-bounds read here either.
+    tileCrops: input.tileCrops,
+    maxTileUses: input.maxTileUses == evenTileUses
+        ? evenTileUses
+        : math.max(0, input.maxTileUses),
     outputSaturation: clampD(
-        input.outputSaturation, minOutputSaturation, maxOutputSaturation),
+      input.outputSaturation,
+      minOutputSaturation,
+      maxOutputSaturation,
+    ),
     ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
     ancientGrout: clampD(input.ancientGrout, 0, 4),
     ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),
@@ -249,7 +295,10 @@ double getOutputHeight(double baseWidth, double baseHeight, double outputWidth) 
     math.max(1, jsRound(outputWidth * baseHeight / baseWidth));
 
 List<RenderPlacement> scalePlacements(
-    MosaicPlan plan, double targetWidth, double targetHeight) {
+  MosaicPlan plan,
+  double targetWidth,
+  double targetHeight,
+) {
   final scaleX = targetWidth / plan.baseWidth;
   final scaleY = targetHeight / plan.baseHeight;
   return plan.placements.map((p) {
@@ -284,8 +333,7 @@ double _srgbToLinear(double c) {
 const double _labEpsilon = 0.008856;
 const double _labKappa = 903.3;
 
-double _labF(double t) =>
-    t > _labEpsilon ? _cbrt(t) : (_labKappa * t + 16) / 116;
+double _labF(double t) => t > _labEpsilon ? _cbrt(t) : (_labKappa * t + 16) / 116;
 
 LabColor rgbToLab(RgbColor rgb) {
   final r = _srgbToLinear(rgb.r);
@@ -314,8 +362,7 @@ double aspectPenalty(double tileAspectRatio, double regionAspectRatio) {
   final regionIsLandscape = regionAspectRatio > 1.1;
   final regionIsPortrait = regionAspectRatio < 0.9;
 
-  if ((tileIsPortrait && regionIsLandscape) ||
-      (tileIsLandscape && regionIsPortrait)) {
+  if ((tileIsPortrait && regionIsLandscape) || (tileIsLandscape && regionIsPortrait)) {
     return 10;
   }
 
@@ -368,12 +415,87 @@ const List<double> subregionWeights = [
   0.8, 1.2, 1.5, 1.2, 0.8,
   0.5, 0.8, 1.0, 0.8, 0.5,
 ];
-final double subregionWeightSum =
-    subregionWeights.fold(0.0, (s, w) => s + w);
+final double subregionWeightSum = subregionWeights.fold(0.0, (s, w) => s + w);
 
-List<double>? computeCropWeights(double tileAR, double cellAR,
-    [List<double>? out]) {
-  if ((math.log(tileAR / cellAR)).abs() < 0.05) return null;
+/// Which of a tile's 25 subregions will actually be SEEN in a cell of [cellAR].
+///
+/// These weights must model the same crop `resolveTileSourceRect` draws. That function
+/// anchors a portrait tile to the TOP in square layout (it keeps faces); this one used
+/// to assume a centre crop unconditionally, so square mode matched a tall photo on its
+/// middle band and then displayed its top band — scored on pixels the viewer never sees,
+/// and blind to the ones they do. For a 9:16 photo in a square cell the two disagreed
+/// completely: the visible top row was weighted 0.21 while the half-cut middle row was
+/// weighted 1.0.
+///
+/// [anchorTop] must match `cropPortraitTop` on the plan.
+/// Source rectangle, in TILE PIXELS, to draw into a cell of [cellAR].
+///
+/// ONE place decides which part of a tile ends up in a cell, because the scorer and
+/// every renderer have to agree. They did not: the scorer modelled a centre crop while
+/// square layout drew the TOP, so tall photos were matched on a band that was then
+/// thrown away. Pure geometry so the engine can call it too — `centerCropSrc` in
+/// preview_painter applies the same rule to a `ui.Image`.
+///
+/// Must match `resolveTileSourceRect` in foto-mozaik/lib/mosaic/shared.ts.
+class TileSourceRect {
+  const TileSourceRect(this.sx, this.sy, this.sw, this.sh);
+  final double sx, sy, sw, sh;
+}
+
+TileSourceRect resolveTileSourceRect(
+  double tileW,
+  double tileH,
+  double cellAR,
+  bool cropPortraitTop, [
+  TileCrop? crop,
+]) {
+  if (crop != null) {
+    // Clamp into the image: a stale crop must never produce an out-of-bounds rect.
+    final cw = clampD(crop.w, 0.01, 1);
+    final ch = clampD(crop.h, 0.01, 1);
+    final cx = clampD(crop.x, 0, 1 - cw);
+    final cy = clampD(crop.y, 0, 1 - ch);
+
+    final rw = cw * tileW;
+    final rh = ch * tileH;
+    final rx = cx * tileW;
+    final ry = cy * tileH;
+
+    final rectAR = rw / rh;
+    if (rectAR > cellAR) {
+      final sw = rh * cellAR;
+      return TileSourceRect(rx + (rw - sw) / 2, ry, sw, rh);
+    }
+    final sh = rw / cellAR;
+    return TileSourceRect(rx, ry + (rh - sh) / 2, rw, sh);
+  }
+
+  final tileAR = tileW / tileH;
+  if (tileAR > cellAR) {
+    final sw = tileH * cellAR;
+    return TileSourceRect((tileW - sw) / 2, 0, sw, tileH);
+  }
+  final sh = tileW / cellAR;
+  return TileSourceRect(0, cropPortraitTop ? 0 : (tileH - sh) / 2, tileW, sh);
+}
+
+List<double>? computeCropWeights(
+  double tileAR,
+  double cellAR, [
+  List<double>? out,
+  bool anchorTop = false,
+  TileCrop? crop,
+]) {
+  // Ask the SAME function the renderer asks, so there is no second model of the crop to
+  // drift out of step with the first. Unit tile, so the rect comes back normalised.
+  final r = resolveTileSourceRect(tileAR, 1, cellAR, anchorTop, crop);
+  final x0 = r.sx / tileAR;
+  final x1 = (r.sx + r.sw) / tileAR;
+  final y0 = r.sy;
+  final y1 = r.sy + r.sh;
+
+  // Nothing cropped away — the caller can skip the weighting entirely.
+  if (x0 <= 1e-6 && y0 <= 1e-6 && x1 >= 1 - 1e-6 && y1 >= 1 - 1e-6) return null;
 
   List<double> weights;
   if (out != null) {
@@ -385,26 +507,16 @@ List<double>? computeCropWeights(double tileAR, double cellAR,
     weights = List<double>.from(subregionWeights);
   }
 
-  if (tileAR < cellAR) {
-    final cropFrac = 1 - tileAR / cellAR;
-    final edgeVis = math.max(0, 1 - 1.8 * cropFrac).toDouble();
-    final midVis = math.max(0, 1 - 0.8 * cropFrac).toDouble();
-    for (var c = 0; c < 5; c++) {
-      weights[c] *= edgeVis;
-      weights[5 + c] *= midVis;
-      weights[15 + c] *= midVis;
-      weights[20 + c] *= edgeVis;
-    }
-  } else {
-    final cropFrac = 1 - cellAR / tileAR;
-    final edgeVis = math.max(0, 1 - 1.8 * cropFrac).toDouble();
-    final midVis = math.max(0, 1 - 0.8 * cropFrac).toDouble();
-    for (var r = 0; r < 5; r++) {
-      weights[r * 5] *= edgeVis;
-      weights[r * 5 + 1] *= midVis;
-      weights[r * 5 + 3] *= midVis;
-      weights[r * 5 + 4] *= edgeVis;
-    }
+  // Overlap of each 1/5 x 1/5 subregion with the visible rectangle, as a fraction of its
+  // own area. A fully cropped row goes to zero and stops influencing the match; a
+  // half-cut row counts half. This replaces a pair of hand-tuned falloffs that
+  // approximated a CENTRE crop and could express nothing else.
+  for (var i = 0; i < 25; i++) {
+    final c = i % 5;
+    final rw = math.max(0.0, math.min(x1, (c + 1) / 5) - math.max(x0, c / 5)) * 5;
+    final rr = i ~/ 5;
+    final rh = math.max(0.0, math.min(y1, (rr + 1) / 5) - math.max(y0, rr / 5)) * 5;
+    weights[i] *= rw * rh;
   }
 
   return weights;
@@ -418,8 +530,11 @@ double subregionDistance(SubregionColors a, SubregionColors b) {
   return total / subregionWeightSum;
 }
 
-double luminancePatternDistance(SubregionColors a, SubregionColors b,
-    [List<double>? cropWeights]) {
+double luminancePatternDistance(
+  SubregionColors a,
+  SubregionColors b, [
+  List<double>? cropWeights,
+]) {
   final w = cropWeights ?? subregionWeights;
   var wSum = 0.0;
   var total = 0.0;
@@ -431,8 +546,11 @@ double luminancePatternDistance(SubregionColors a, SubregionColors b,
   return total / (wSum == 0 ? 1 : wSum);
 }
 
-double chromaPatternDistance(SubregionColors a, SubregionColors b,
-    [List<double>? cropWeights]) {
+double chromaPatternDistance(
+  SubregionColors a,
+  SubregionColors b, [
+  List<double>? cropWeights,
+]) {
   final w = cropWeights ?? subregionWeights;
   var wSum = 0.0;
   var total = 0.0;
@@ -445,8 +563,11 @@ double chromaPatternDistance(SubregionColors a, SubregionColors b,
   return total / (wSum == 0 ? 1 : wSum);
 }
 
-double edgePatternDistance(SubregionEdges a, SubregionEdges b,
-    [List<double>? cropWeights]) {
+double edgePatternDistance(
+  SubregionEdges a,
+  SubregionEdges b, [
+  List<double>? cropWeights,
+]) {
   final w = cropWeights ?? subregionWeights;
   var wSum = 0.0;
   var total = 0.0;
@@ -457,8 +578,11 @@ double edgePatternDistance(SubregionEdges a, SubregionEdges b,
   return total / (wSum == 0 ? 1 : wSum);
 }
 
-double contrastPatternDistance(ContrastMap a, ContrastMap b,
-    [List<double>? cropWeights]) {
+double contrastPatternDistance(
+  ContrastMap a,
+  ContrastMap b, [
+  List<double>? cropWeights,
+]) {
   final w = cropWeights ?? subregionWeights;
   var wSum = 0.0;
   var total = 0.0;
@@ -470,14 +594,17 @@ double contrastPatternDistance(ContrastMap a, ContrastMap b,
 }
 
 double edgeOrientationPatternDistance(
-    SubregionEdgeOrientations a, SubregionEdgeOrientations b,
-    [List<double>? cropWeights]) {
+  SubregionEdgeOrientations a,
+  SubregionEdgeOrientations b, [
+  List<double>? cropWeights,
+]) {
   final w = cropWeights ?? subregionWeights;
   var wSum = 0.0;
   var total = 0.0;
   for (var i = 0; i < 25; i++) {
     final off = i * 4;
-    final cellDist = ((a[off] - b[off]).abs() +
+    final cellDist =
+        ((a[off] - b[off]).abs() +
             (a[off + 1] - b[off + 1]).abs() +
             (a[off + 2] - b[off + 2]).abs() +
             (a[off + 3] - b[off + 3]).abs()) *
@@ -504,10 +631,9 @@ double histogramDistance(LuminanceHistogram a, LuminanceHistogram b) {
 
 const String flipSuffix = ':flip';
 
-String getBaseTileId(String tileId) =>
-    tileId.endsWith(flipSuffix)
-        ? tileId.substring(0, tileId.length - flipSuffix.length)
-        : tileId;
+String getBaseTileId(String tileId) => tileId.endsWith(flipSuffix)
+    ? tileId.substring(0, tileId.length - flipSuffix.length)
+    : tileId;
 
 bool isTileFlipped(String tileId) => tileId.endsWith(flipSuffix);
 
@@ -562,8 +688,12 @@ String cropSlot(String tileId, double cellAR, [CropShape? shape]) {
 
 /// The crop for a placement's tile, if the user set one for cells of this shape.
 /// Keyed by BASE id, so a mirrored placement shares its source photo's crop.
-TileCrop? cropForTile(Map<String, TileCrop>? tileCrops, String tileId,
-    [double cellAR = 1, CropShape? shape]) {
+TileCrop? cropForTile(
+  Map<String, TileCrop>? tileCrops,
+  String tileId, [
+  double cellAR = 1,
+  CropShape? shape,
+]) {
   if (tileCrops == null || tileCrops.isEmpty) return null;
   return tileCrops[cropSlot(tileId, cellAR, shape)];
 }

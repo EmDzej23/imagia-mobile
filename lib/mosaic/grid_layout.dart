@@ -34,8 +34,10 @@ int _i32(int x) {
 /// Stable sort preserving original order on ties (matches JS Array.sort for
 /// transitive comparators).
 void _stableSort<T>(List<T> list, int Function(T a, T b) cmp) {
-  final indexed =
-      List<MapEntry<int, T>>.generate(list.length, (i) => MapEntry(i, list[i]));
+  final indexed = List<MapEntry<int, T>>.generate(
+    list.length,
+    (i) => MapEntry(i, list[i]),
+  );
   indexed.sort((a, b) {
     final c = cmp(a.value, b.value);
     return c != 0 ? c : a.key.compareTo(b.key);
@@ -105,8 +107,7 @@ SpatialGrid _createSpatialGrid(double cellSize, double totalWidth) {
 }
 
 void _spatialInsert(SpatialGrid grid, int index, double cx, double cy) {
-  final key =
-      (cy / grid.cellSize).floor() * grid.cols + (cx / grid.cellSize).floor();
+  final key = (cy / grid.cellSize).floor() * grid.cols + (cx / grid.cellSize).floor();
   (grid.buckets[key] ??= []).add(index);
 }
 
@@ -132,7 +133,9 @@ double _cropFraction(double tileAR, double shapeAR) =>
     1 - math.min(tileAR, shapeAR) / math.max(tileAR, shapeAR);
 
 List<TileDescriptor>? _poolForShape(
-    Map<double, List<TileDescriptor>> tilePools, double ar) {
+  Map<double, List<TileDescriptor>> tilePools,
+  double ar,
+) {
   final exact = tilePools[ar];
   if (exact != null) return exact;
   double? bestKey;
@@ -147,7 +150,23 @@ List<TileDescriptor>? _poolForShape(
   return bestKey != null ? tilePools[bestKey] : null;
 }
 
-const List<double> _cellArCandidates = [2 / 3, 3 / 4, 1.0, 4 / 3, 3 / 2];
+/// Cell aspects the grid may adopt, chosen from the library by [dominantCellAspect].
+///
+/// 9:16 and 16:9 are in this list because a phone shoots them and the list used to stop
+/// at 2:3 and 3:2.
+///
+/// With the +/-15% tolerance, a 9:16 photo (0.5625) agrees with NOTHING on the old list
+/// — 2:3 is 17% away, just outside. So a library of tall phone photos reached consensus
+/// on no candidate at all and `dominantCellAspect` fell through to its 1.0 default:
+/// SQUARE cells, for a library with no square photo in it. Every 1x1 then centre-cropped
+/// a tall photo to fit, and 1x1 is most of the mosaic.
+///
+/// Measured on a 55x9:16 + 2x3:2 library — a real reported one, read off its debug
+/// output: cell aspect 1.01 -> 0.56, mean crop 37% -> 2%, worst crop 63% -> 25%.
+///
+/// The tolerance keeps these from stealing libraries that already worked: a 3:2 photo is
+/// 17% from 16:9 and a 4:3 photo 29%, so neither counts toward the new candidates.
+const List<double> _cellArCandidates = [9 / 16, 2 / 3, 3 / 4, 1.0, 4 / 3, 3 / 2, 16 / 9];
 
 /// Fraction of the library that must agree on an aspect before the grid adopts it.
 ///
@@ -213,7 +232,15 @@ double dominantCellAspect(List<TileDescriptor> tiles) {
 /// bits and every pool lookup misses.
 List<double> _poolARsForCellAR(double cellAR) {
   const shapes = [
-    [1, 1], [1, 2], [2, 1], [2, 3], [3, 2], [3, 3], [2, 2], [2, 4], [4, 2],
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [2, 3],
+    [3, 2],
+    [3, 3],
+    [2, 2],
+    [2, 4],
+    [4, 2],
   ];
   final out = <double>{};
   for (final sh in shapes) {
@@ -247,21 +274,29 @@ double cellAspectForTile(double tileAR, double cellAR) {
 /// exact 33% crop this exists to remove. The 1x1 fill is the true last resort and is
 /// never pruned.
 List<CellShape> _shapesForCellAR(
-    List<CellShape> shapes, double cellAR, List<TileDescriptor> tiles) {
+  List<CellShape> shapes,
+  double cellAR,
+  List<TileDescriptor> tiles,
+) {
   final derived = cellAR == 1.0
       ? shapes
       : shapes
-          .map((sh) =>
-              CellShape(sh.cols, sh.rows, sh.cells, (cellAR * sh.cols) / sh.rows))
-          .toList();
+            .map(
+              (sh) => CellShape(sh.cols, sh.rows, sh.cells, (cellAR * sh.cols) / sh.rows),
+            )
+            .toList();
   return derived
-      .where((sh) =>
-          sh.cells == 1 ||
-          (tiles.any((t) =>
-                  _orientationCompatible(t.aspectRatio, sh.ar) &&
-                  _cropFraction(t.aspectRatio, sh.ar) < _maxCrop) &&
-              sh.ar >= 1 / _shapeArLimit &&
-              sh.ar <= _shapeArLimit))
+      .where(
+        (sh) =>
+            sh.cells == 1 ||
+            (tiles.any(
+                  (t) =>
+                      _orientationCompatible(t.aspectRatio, sh.ar) &&
+                      _cropFraction(t.aspectRatio, sh.ar) < _maxCrop,
+                ) &&
+                sh.ar >= 1 / _shapeArLimit &&
+                sh.ar <= _shapeArLimit),
+      )
       .toList();
 }
 
@@ -289,33 +324,37 @@ const double _baseDiffuseStrength = 0.35;
 
 String _cellKey(int col, int row) => '$col,$row';
 
-void _addCellError(Map<String, LabColor> errors, int col, int row, double dL,
-    double da, double db, double strength) {
+void _addCellError(
+  Map<String, LabColor> errors,
+  int col,
+  int row,
+  double dL,
+  double da,
+  double db,
+  double strength,
+) {
   final key = _cellKey(col, row);
   final prev = errors[key];
   errors[key] = LabColor(
-    math.max(-_maxColorError,
-        math.min(_maxColorError, (prev?.L ?? 0) + dL * strength)),
-    math.max(-_maxColorError,
-        math.min(_maxColorError, (prev?.a ?? 0) + da * strength)),
-    math.max(-_maxColorError,
-        math.min(_maxColorError, (prev?.b ?? 0) + db * strength)),
+    math.max(-_maxColorError, math.min(_maxColorError, (prev?.L ?? 0) + dL * strength)),
+    math.max(-_maxColorError, math.min(_maxColorError, (prev?.a ?? 0) + da * strength)),
+    math.max(-_maxColorError, math.min(_maxColorError, (prev?.b ?? 0) + db * strength)),
   );
 }
 
 void _spreadColorError(
-    Map<String, LabColor> errors,
-    int col,
-    int row,
-    CellShape shape,
-    int M,
-    int N,
-    List<List<bool>> occupied,
-    double residualL,
-    double residualA,
-    double residualB) {
-  final magSq =
-      residualL * residualL + residualA * residualA + residualB * residualB;
+  Map<String, LabColor> errors,
+  int col,
+  int row,
+  CellShape shape,
+  int M,
+  int N,
+  List<List<bool>> occupied,
+  double residualL,
+  double residualA,
+  double residualB,
+) {
+  final magSq = residualL * residualL + residualA * residualA + residualB * residualB;
   if (magSq > _diffuseMaxColorD * _diffuseMaxColorD) return;
 
   final neighbors = <List<int>>[];
@@ -333,8 +372,7 @@ void _spreadColorError(
 
   final perNeighbor = _baseDiffuseStrength / neighbors.length;
   for (final nb in neighbors) {
-    _addCellError(errors, nb[0], nb[1], residualL, residualA, residualB,
-        perNeighbor);
+    _addCellError(errors, nb[0], nb[1], residualL, residualA, residualB, perNeighbor);
   }
 }
 
@@ -343,6 +381,7 @@ void _spreadColorError(
 const int _maxPlacements = 6500;
 const int _optimalAssignmentMaxRegions = 4000;
 const int _lowCountSeedAttempts = 3;
+
 /// Average cells one photo occupies in `original` mode.
 ///
 /// MEASURED on the web bench, not assumed: with the fill-first layout the mix is
@@ -354,6 +393,32 @@ const int _lowCountSeedAttempts = 3;
 const double _originalCellsPerTile = 1.3;
 const double _blocksCellsPerTile = 5.0;
 const int _maxCellsOriginal = 45000;
+
+/// Below this share of the requested cell count, `original`/`blocks` re-grid once.
+///
+/// The density control promises a number of cells, and the density→grid mapping assumes
+/// a fixed merge rate (`_originalCellsPerTile`). That rate is not fixed: it is set by how
+/// many multi-cell shapes the library can fill, and a library whose aspects spread evenly
+/// enough that no orientation reaches the cell-aspect consensus gets SQUARE cells, where
+/// almost the whole shape menu survives pruning. Measured on the web bench asking for
+/// 1600 cells: normal libraries delivered 1234–1534, a library of 16:9 + 9:16 + 4:3 + 3:4
+/// delivered 812.
+///
+/// Half the requested detail means every photo covers twice the intended area, and a
+/// photo spread over a large region rarely matches what is under it — which is what
+/// "some tiles look out of place" is. Only `original` shows it; the uniform modes place
+/// one tile per cell and always land on target.
+///
+/// Measured delivered/estimated: 0.85, 0.86, 0.87 for the healthy libraries, 0.70 for a
+/// 60/40 land/port mix, 0.47 for the reported one. 0.6 sits in the gap, so only the
+/// genuinely-short case re-grids. A threshold of 0.7 caught the 60/40 mix by a hair and
+/// moved it from 1234 cells to 1781 — not a fix, a second regression.
+const double _regridShortfall = 0.6;
+
+/// Cap on how much finer the second attempt may go. A bound, not a target: without a
+/// ceiling a pathological library could ask for a grid several times denser and pay for
+/// it in build time on a phone. 1.6x covers the measured 812→1600 case (needs 1.40x).
+const double _maxRegridScale = 1.6;
 
 class _GridDims {
   _GridDims(this.M, this.N, this.cellW, this.cellH);
@@ -393,14 +458,11 @@ List<MosaicPlacement> buildGridLayout({
   if (mode == 'square') {
     gridDims = _computeSquareGrid(baseWidth, baseHeight, settings.density);
   } else if (mode == 'landscape') {
-    gridDims =
-        _computeFixedARGrid(baseWidth, baseHeight, settings.density, 3 / 2);
+    gridDims = _computeFixedARGrid(baseWidth, baseHeight, settings.density, 3 / 2);
   } else if (mode == 'portrait') {
-    gridDims =
-        _computeFixedARGrid(baseWidth, baseHeight, settings.density, 2 / 3);
+    gridDims = _computeFixedARGrid(baseWidth, baseHeight, settings.density, 2 / 3);
   } else if (cellAR != 1.0) {
-    gridDims =
-        _computeFixedARGrid(baseWidth, baseHeight, settings.density, cellAR);
+    gridDims = _computeFixedARGrid(baseWidth, baseHeight, settings.density, cellAR);
   } else {
     gridDims = _computeGrid(baseWidth, baseHeight, settings.density);
   }
@@ -420,23 +482,33 @@ List<MosaicPlacement> buildGridLayout({
   // The REAL cell aspect after the grid rounded M/N to whole cells — shapes and pools
   // must both key off this, not off the requested value, or a shape's declared aspect
   // and the rectangle actually drawn drift apart.
-  final actualCellAR = cellW / cellH;
+  var actualCellAR = cellW / cellH;
   // Uniform modes look their pool up by the mode's EXACT aspect (3/2, 2/3, 1). Keying
   // off the rounded actualCellAR would put 1.4983 in the map where 1.5 is looked up — a
   // miss, which falls through to the whole library and silently drops landscape/portrait
   // mode's orientation restriction.
   final poolCellAR = uniformMode
-      ? (mode == 'landscape' ? 3 / 2 : mode == 'portrait' ? 2 / 3 : 1.0)
+      ? (mode == 'landscape'
+            ? 3 / 2
+            : mode == 'portrait'
+            ? 2 / 3
+            : 1.0)
       : actualCellAR;
-  final tilePools = _buildTilePools(tiles, poolCellAR);
+  var tilePools = _buildTilePools(tiles, poolCellAR);
   final placements = <MosaicPlacement>[];
-  final grid = _createSpatialGrid(math.max(cellW, cellH), baseWidth + cellW);
-  final cellSaliency = _computeCellSaliency(
-      M, N, cellW, cellH, baseWidth, baseHeight, faceRegions);
+  var grid = _createSpatialGrid(math.max(cellW, cellH), baseWidth + cellW);
+  var cellSaliency = _computeCellSaliency(
+    M,
+    N,
+    cellW,
+    cellH,
+    baseWidth,
+    baseHeight,
+    faceRegions,
+  );
 
   final totalGridCells = M * N;
-  final cellsPerTile =
-      mode == 'blocks' ? _blocksCellsPerTile : _originalCellsPerTile;
+  final cellsPerTile = mode == 'blocks' ? _blocksCellsPerTile : _originalCellsPerTile;
   final estimatedPlacements = uniformMode
       ? totalGridCells
       : jsRound(totalGridCells / cellsPerTile).toInt();
@@ -449,18 +521,39 @@ List<MosaicPlacement> buildGridLayout({
     // Rhombi are not an MxN lattice, so this bypasses the grid machinery entirely and
     // matches over the cells directly. Everything downstream — SA, palette balance,
     // coverage — is untouched: a placement is still a region plus a tile id.
-    _fillRhombilleCells(baseWidth, baseHeight, settings, tiles, analyzer,
-        placements, grid, faceRegions, estimatedPlacements);
+    _fillRhombilleCells(
+      baseWidth,
+      baseHeight,
+      settings,
+      tiles,
+      analyzer,
+      placements,
+      grid,
+      faceRegions,
+      estimatedPlacements,
+    );
   } else if (mode == 'hexagon') {
     // A honeycomb is not an MxN lattice, so this bypasses the grid machinery and
     // matches over its own cells. Everything downstream — SA, palette balance,
     // coverage, the no-touch pass — is untouched: a placement is still a region plus a
     // tile id.
-    _fillHexCells(baseWidth, baseHeight, settings, tiles, analyzer, placements,
-        grid, faceRegions, estimatedPlacements);
+    _fillHexCells(
+      baseWidth,
+      baseHeight,
+      settings,
+      tiles,
+      analyzer,
+      placements,
+      grid,
+      faceRegions,
+      estimatedPlacements,
+    );
   } else if (uniformMode) {
-    final cellAR =
-        mode == 'landscape' ? 3 / 2 : mode == 'portrait' ? 2 / 3 : 1.0;
+    final cellAR = mode == 'landscape'
+        ? 3 / 2
+        : mode == 'portrait'
+        ? 2 / 3
+        : 1.0;
     // `??` is not enough: _buildTilePools returns an EMPTY list when no photo matches
     // the orientation (and deliberately empties near-square pools that are too small),
     // and an empty list is not null. A library of only landscape photos therefore handed
@@ -474,52 +567,194 @@ List<MosaicPlacement> buildGridLayout({
         ? orientationPool
         : tiles;
     eligibleTiles = pool;
-    final resolved = preResolveTiles(pool, cellAR);
-    _fillUniformGrid(M, N, cellW, cellH, cellSaliency, resolved, analyzer,
-        settings, placements, grid, pool.length, estimatedPlacements);
+    // Square mode anchors portrait tiles to the TOP when drawing, so the scorer has to
+    // weight the top band — see computeCropWeights.
+    final resolved = preResolveTiles(pool, cellAR, mode == 'square', settings.tileCrops);
+    _fillUniformGrid(
+      M,
+      N,
+      cellW,
+      cellH,
+      cellSaliency,
+      resolved,
+      analyzer,
+      settings,
+      placements,
+      grid,
+      pool.length,
+      estimatedPlacements,
+    );
   } else {
-    final occupied =
-        List.generate(N, (_) => List<bool>.filled(M, false), growable: false);
-    final usageCounts = <String, int>{};
-    final baselinePool = tilePools[_anyOrientationAR] ?? tiles;
-    final baselines =
-        _computeBaselines(M, N, cellW, cellH, analyzer, baselinePool, settings);
+    // Two attempts at most: the requested grid, then — only if the layout merged away
+    // far more cells than the density model assumes — one finer grid. See
+    // [_regridShortfall] for why a single fixed merge rate cannot hold.
+    for (var attempt = 0; ; attempt++) {
+      final occupied = List.generate(
+        N,
+        (_) => List<bool>.filled(M, false),
+        growable: false,
+      );
+      final usageCounts = <String, int>{};
+      final baselinePool = tilePools[_anyOrientationAR] ?? tiles;
+      final baselines = _computeBaselines(
+        M,
+        N,
+        cellW,
+        cellH,
+        analyzer,
+        baselinePool,
+        settings,
+      );
 
-    final isBlocks = mode == 'blocks';
-    final colorErrors = <String, LabColor>{};
-    // `original` lays the picture out fill-first (see `_fillFirstLayout`). `blocks`
-    // keeps the shapes-first path: its whole premise is that every cell is covered by a
-    // block shape, and fill-first would leave it a 1x1 mosaic.
-    if (!isBlocks) {
-      _fillFirstLayout(
-          M, N, cellW, cellH, occupied, cellSaliency, tilePools, analyzer,
-          settings, usageCounts, placements, grid, tiles.length,
+      final isBlocks = mode == 'blocks';
+      final colorErrors = <String, LabColor>{};
+
+      // GEOMETRY IS DECIDED WITH THE REUSE CAP OFF.
+      //
+      // Cell shapes here are chosen by comparing scores: is one photo across these four
+      // cells better than four photos in them, is a 2x1 better than two 1x1s. A cap makes
+      // those scores incomparable, and not evenly — 1x1 draws from the whole library while
+      // every multi-cell shape draws from a narrow orientation pool, so the cap starves
+      // the big shapes first and 1x1 wins every comparison it is in. A setting about how
+      // often a photo REPEATS was silently deciding how big the cells are: on the web
+      // bench's mixed-200 library it took 782 cells at 1.61 cells/tile to 966 at 1.30 — a
+      // mixed-block mosaic rebuilt as a field of small squares.
+      //
+      // Gating each comparison individually is not enough: the tiles this pass commits
+      // feed the next cell's neighbour context, so a capped assignment still drags the
+      // geometry with it. The cut has to be above the whole layout — shapes come out
+      // identical with the cap on or off, and the cap binds afterwards in the passes that
+      // only REASSIGN tiles (Vogel, SA swaps, palette balance, coverage, no-touch), none
+      // of which can move a cell.
+      final layoutSettings = settings.maxTileUses != 0
+          ? settings.copyWith(maxTileUses: 0)
+          : settings;
+      // `original` lays the picture out fill-first (see `_fillFirstLayout`). `blocks`
+      // keeps the shapes-first path: its whole premise is that every cell is covered by a
+      // block shape, and fill-first would leave it a 1x1 mosaic.
+      if (!isBlocks) {
+        _fillFirstLayout(
+          M,
+          N,
+          cellW,
+          cellH,
+          occupied,
+          cellSaliency,
+          tilePools,
+          analyzer,
+          layoutSettings,
+          usageCounts,
+          placements,
+          grid,
+          tiles.length,
           estimatedPlacements,
           _shapesForCellAR(_multiCellShapes, actualCellAR, tiles),
           _shapesForCellAR(_fillShapes, actualCellAR, tiles),
-          colorErrors, actualCellAR);
-    } else {
-      // Shape aspects are cols/rows x the CELL aspect, so the menu is derived per build
-      // rather than taken from the module constants (which assume square cells).
-      _placeMultiCellShapes(
-          M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-          analyzer, settings, usageCounts, placements, grid, tiles.length,
+          colorErrors,
+          actualCellAR,
+        );
+      } else {
+        // Shape aspects are cols/rows x the CELL aspect, so the menu is derived per build
+        // rather than taken from the module constants (which assume square cells).
+        _placeMultiCellShapes(
+          M,
+          N,
+          cellW,
+          cellH,
+          occupied,
+          baselines,
+          cellSaliency,
+          tilePools,
+          analyzer,
+          layoutSettings,
+          usageCounts,
+          placements,
+          grid,
+          tiles.length,
           estimatedPlacements,
-          _shapesForCellAR(_blocksShapes, actualCellAR, tiles), colorErrors);
+          _shapesForCellAR(_blocksShapes, actualCellAR, tiles),
+          colorErrors,
+        );
 
-      _fillRemainingCells(
-          M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-          analyzer, settings, usageCounts, placements, grid, tiles.length,
+        _fillRemainingCells(
+          M,
+          N,
+          cellW,
+          cellH,
+          occupied,
+          baselines,
+          cellSaliency,
+          tilePools,
+          analyzer,
+          layoutSettings,
+          usageCounts,
+          placements,
+          grid,
+          tiles.length,
           estimatedPlacements,
           _shapesForCellAR(_blocksFillShapes, actualCellAR, tiles),
           // In blocks mode raise the saliency guard so 1x1 is used only when no block
           // shape fits, not whenever a cell happens to be salient.
-          0.95, colorErrors);
-    }
+          0.95,
+          colorErrors,
+        );
+      }
 
-    if (isMinimumDetailOriginalMode(settings)) {
-      _refineShapesByMerging(placements, cellW, cellH, tilePools, analyzer,
-          settings, usageCounts, tiles.length, estimatedPlacements);
+      if (isMinimumDetailOriginalMode(settings)) {
+        // Cap-free like the rest of the geometry: this pass MERGES cells, so under a
+        // cap it is one more place where a setting about repeats decides cell size.
+        _refineShapesByMerging(
+          placements,
+          cellW,
+          cellH,
+          tilePools,
+          analyzer,
+          layoutSettings,
+          usageCounts,
+          tiles.length,
+          estimatedPlacements,
+        );
+      }
+
+      // Did the density deliver? `estimatedPlacements` is fixed at the FIRST grid, so the
+      // target does not chase the grid that is being adjusted to meet it.
+      final delivered = placements.length;
+      if (attempt == 0 &&
+          delivered > 0 &&
+          delivered < estimatedPlacements * _regridShortfall) {
+        final scale = math.min(
+          _maxRegridScale,
+          math.sqrt(estimatedPlacements / delivered),
+        );
+        M = math.max(4, jsRound(M * scale).toInt());
+        N = math.max(4, jsRound(N * scale).toInt());
+        if (M * N > _maxCellsOriginal) {
+          final back = math.sqrt(_maxCellsOriginal / (M * N));
+          M = math.max(4, jsRound(M * back).toInt());
+          N = math.max(4, jsRound(N * back).toInt());
+        }
+        cellW = baseWidth / M;
+        cellH = baseHeight / N;
+        // Everything keyed off the cell must be rebuilt, not reused: pools are keyed by
+        // the cell aspect, the spatial grid by the cell size, saliency by MxN. Carrying
+        // any of them over would leave the second attempt matching against the first
+        // attempt's geometry.
+        actualCellAR = cellW / cellH;
+        tilePools = _buildTilePools(tiles, actualCellAR);
+        grid = _createSpatialGrid(math.max(cellW, cellH), baseWidth + cellW);
+        cellSaliency = _computeCellSaliency(
+          M,
+          N,
+          cellW,
+          cellH,
+          baseWidth,
+          baseHeight,
+          faceRegions,
+        );
+        placements.clear();
+        continue;
+      }
+      break;
     }
   }
 
@@ -535,7 +770,12 @@ List<MosaicPlacement> buildGridLayout({
       ? buildHexAdjacency(placements)
       : _buildAdjacencyMap(placements);
   final saliency = _computePlacementSaliency(
-      placements, adjacency, baseWidth, baseHeight, faceRegions);
+    placements,
+    adjacency,
+    baseWidth,
+    baseHeight,
+    faceRegions,
+  );
 
   // Vogel + best-of-N seeded SA path is gated purely on region count. The SA iteration
   // BUDGET is separate and admin-overridable (settings.saBudgetFactor) so it can be A/B'd
@@ -562,15 +802,13 @@ List<MosaicPlacement> buildGridLayout({
   // `original`/`blocks` keep Vogel — their FACE error gets worse without it.
   // `rhombille` is deliberately excluded: it measured neutral, so there is no evidence
   // to justify changing how that mode looks.
-  final modeSkipsVogel = mode == 'square' ||
-      mode == 'landscape' ||
-      mode == 'portrait' ||
-      mode == 'hexagon';
+  final modeSkipsVogel =
+      mode == 'square' || mode == 'landscape' || mode == 'portrait' || mode == 'hexagon';
   // Size and mode are kept apart on purpose, so dropping Vogel for a mode does not
   // silently also quadruple this device's annealing — the budget below keys off SIZE
   // only and is unchanged for every mode.
-  final withinOptimalSize = placements.isNotEmpty &&
-      placements.length <= _optimalAssignmentMaxRegions;
+  final withinOptimalSize =
+      placements.isNotEmpty && placements.length <= _optimalAssignmentMaxRegions;
   final isOptimalPath = withinOptimalSize && !modeSkipsVogel;
   // Measured on web: 0.5 lifts raw composition SSIM over the old 0.25 with acceptable
   // cost on desktop. Mobile stays 0.25 (SA is main-thread + its iteration cap is already
@@ -586,8 +824,7 @@ List<MosaicPlacement> buildGridLayout({
 
     final n = placements.length;
     final vogelTileIds = List<String>.generate(n, (i) => placements[i].tileId);
-    final vogelTileNames =
-        List<String>.generate(n, (i) => placements[i].tileName);
+    final vogelTileNames = List<String>.generate(n, (i) => placements[i].tileName);
 
     var bestScore = double.infinity;
     final bestTileIds = List<String>.filled(n, '');
@@ -601,17 +838,25 @@ List<MosaicPlacement> buildGridLayout({
         }
       }
 
-      optimizePlacementSwaps(placements, tileMap, settings,
-          adjacency: adjacency,
-          saliency: saliency,
-          budgetFactor: saBudgetFactor,
-          seedOffset: attempt,
-          isMobile: isMobile);
-      balanceGlobalPalette(placements, tileMap, settings,
-          adjacency: adjacency, saliency: saliency);
+      optimizePlacementSwaps(
+        placements,
+        tileMap,
+        settings,
+        adjacency: adjacency,
+        saliency: saliency,
+        budgetFactor: saBudgetFactor,
+        seedOffset: attempt,
+        isMobile: isMobile,
+      );
+      balanceGlobalPalette(
+        placements,
+        tileMap,
+        settings,
+        adjacency: adjacency,
+        saliency: saliency,
+      );
 
-      final score =
-          _scoreMosaicReconstruction(placements, tileMap, saliency, adjacency);
+      final score = _scoreMosaicReconstruction(placements, tileMap, saliency, adjacency);
       if (score < bestScore) {
         bestScore = score;
         for (var i = 0; i < n; i++) {
@@ -626,25 +871,41 @@ List<MosaicPlacement> buildGridLayout({
       placements[i].tileName = bestTileNames[i];
     }
   } else {
-    optimizePlacementSwaps(placements, tileMap, settings,
-        adjacency: adjacency, saliency: saliency, budgetFactor: saBudgetFactor,
-        isMobile: isMobile);
-    balanceGlobalPalette(placements, tileMap, settings,
-        adjacency: adjacency, saliency: saliency);
+    optimizePlacementSwaps(
+      placements,
+      tileMap,
+      settings,
+      adjacency: adjacency,
+      saliency: saliency,
+      budgetFactor: saBudgetFactor,
+      isMobile: isMobile,
+    );
+    balanceGlobalPalette(
+      placements,
+      tileMap,
+      settings,
+      adjacency: adjacency,
+      saliency: saliency,
+    );
   }
 
   // Every tile in the library appears at least once. Runs last so nothing can evict
   // what it places; each hole is filled from a cell whose tile is used elsewhere, so
   // it can never open a new one. A no-op when the library is already fully used.
-  ensureTileCoverage(placements, eligibleTiles, tileMap, settings,
-      saliency: saliency);
+  ensureTileCoverage(placements, eligibleTiles, tileMap, settings, saliency: saliency);
 
   // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
   // coverage specifically, because coverage places rare photos wherever it can and is
   // the one pass that can reintroduce a twin. It only ever swaps two cells' tiles, so
   // the coverage guarantee it just established survives intact.
   if (strictNoTouchingTwins) {
-    enforceNoTouchingTwins(placements, tileMap, adjacency, saliency);
+    enforceNoTouchingTwins(
+      placements,
+      tileMap,
+      adjacency,
+      saliency,
+      resolveMaxTileUses(settings.maxTileUses, tiles.length, placements.length),
+    );
   }
 
   return placements;
@@ -661,8 +922,7 @@ _GridDims _computeGrid(double baseWidth, double baseHeight, double density) {
   return _GridDims(M, N, baseWidth / M, baseHeight / N);
 }
 
-_GridDims _computeSquareGrid(
-    double baseWidth, double baseHeight, double density) {
+_GridDims _computeSquareGrid(double baseWidth, double baseHeight, double density) {
   final shorter = math.min(baseWidth, baseHeight);
   final cellsOnShort = math.max(4, jsRound(density / 4).toInt());
   final cellSize = shorter / cellsOnShort;
@@ -672,7 +932,11 @@ _GridDims _computeSquareGrid(
 }
 
 _GridDims _computeFixedARGrid(
-    double baseWidth, double baseHeight, double density, double cellAR) {
+  double baseWidth,
+  double baseHeight,
+  double density,
+  double cellAR,
+) {
   final cellsOnShort = math.max(4, jsRound(density / 4).toInt());
   final shorter = math.min(baseWidth, baseHeight);
   final targetArea = math.pow(shorter / cellsOnShort, 2).toDouble();
@@ -685,8 +949,7 @@ _GridDims _computeFixedARGrid(
 
 /// Pools are a pure function of (tiles, cellAR) — the cell aspect changes which tiles
 /// are even eligible for a given shape — so the cache is keyed by both.
-final Expando<Map<double, Map<double, List<TileDescriptor>>>> _tilePoolsCache =
-    Expando();
+final Expando<Map<double, Map<double, List<TileDescriptor>>>> _tilePoolsCache = Expando();
 
 /// Pool key for "any orientation": the 1x1 fill, which may draw on the whole library.
 const double _anyOrientationAR = 0;
@@ -695,7 +958,9 @@ const double _anyOrientationAR = 0;
 const int _minSquareShapePool = 3;
 
 Map<double, List<TileDescriptor>> _buildTilePools(
-    List<TileDescriptor> tiles, double cellAR) {
+  List<TileDescriptor> tiles,
+  double cellAR,
+) {
   var byCellAR = _tilePoolsCache[tiles];
   if (byCellAR == null) {
     byCellAR = <double, Map<double, List<TileDescriptor>>>{};
@@ -709,15 +974,19 @@ Map<double, List<TileDescriptor>> _buildTilePools(
 
   for (final ar in uniqueARs) {
     var pool = tiles
-        .where((t) =>
-            _orientationCompatible(t.aspectRatio, ar) &&
-            _cropFraction(t.aspectRatio, ar) < _maxCrop)
+        .where(
+          (t) =>
+              _orientationCompatible(t.aspectRatio, ar) &&
+              _cropFraction(t.aspectRatio, ar) < _maxCrop,
+        )
         .toList();
     if (pool.length < 3) {
       pool = tiles
-          .where((t) =>
-              _orientationCompatible(t.aspectRatio, ar) &&
-              _cropFraction(t.aspectRatio, ar) < _maxCropFallback)
+          .where(
+            (t) =>
+                _orientationCompatible(t.aspectRatio, ar) &&
+                _cropFraction(t.aspectRatio, ar) < _maxCropFallback,
+          )
           .toList();
     }
     pools[ar] = pool;
@@ -747,49 +1016,58 @@ Map<double, List<TileDescriptor>> _buildTilePools(
 }
 
 // scoring-pool.ts sync equivalents (the worker output is bit-identical).
-Float64List _scoreRegionsSync(List<RegionAnalysis> regions,
-    List<TileDescriptor> tiles, MosaicSettings settings) {
+Float64List _scoreRegionsSync(
+  List<RegionAnalysis> regions,
+  List<TileDescriptor> tiles,
+  MosaicSettings settings,
+) {
   final out = Float64List(regions.length);
   final emptyUsage = <String, int>{};
   for (var i = 0; i < regions.length; i++) {
-    out[i] = selectBestTileMatch(MatchInput(
-            region: regions[i],
-            tiles: tiles,
-            settings: settings,
-            usageCounts: emptyUsage))
-        .score;
+    out[i] = selectBestTileMatch(
+      MatchInput(
+        region: regions[i],
+        tiles: tiles,
+        settings: settings,
+        usageCounts: emptyUsage,
+      ),
+    ).score;
   }
   return out;
 }
 
 Float64List _scoreMultiPoolRegionsSync(
-    List<RegionAnalysis> regions,
-    Float32List saliencies,
-    List<int> poolIndex,
-    List<List<TileDescriptor>> pools,
-    MosaicSettings settings) {
+  List<RegionAnalysis> regions,
+  Float32List saliencies,
+  List<int> poolIndex,
+  List<List<TileDescriptor>> pools,
+  MosaicSettings settings,
+) {
   final out = Float64List(regions.length);
   final emptyUsage = <String, int>{};
   for (var i = 0; i < regions.length; i++) {
-    out[i] = selectBestTileMatch(MatchInput(
-            region: regions[i],
-            tiles: pools[poolIndex[i]],
-            settings: settings,
-            usageCounts: emptyUsage,
-            saliency: saliencies[i]))
-        .score;
+    out[i] = selectBestTileMatch(
+      MatchInput(
+        region: regions[i],
+        tiles: pools[poolIndex[i]],
+        settings: settings,
+        usageCounts: emptyUsage,
+        saliency: saliencies[i],
+      ),
+    ).score;
   }
   return out;
 }
 
 List<List<double>> _computeBaselines(
-    int M,
-    int N,
-    double cellW,
-    double cellH,
-    ImageAnalyzer analyzer,
-    List<TileDescriptor> allTiles,
-    MosaicSettings settings) {
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  ImageAnalyzer analyzer,
+  List<TileDescriptor> allTiles,
+  MosaicSettings settings,
+) {
   const maxSample = 60;
   List<TileDescriptor> sample;
   if (allTiles.length <= maxSample) {
@@ -812,13 +1090,18 @@ List<List<double>> _computeBaselines(
   }
 
   final regions = List<RegionAnalysis>.filled(
-      M * N,
-      analyzer.sampleRegion(x: 0, y: 0, width: 1, height: 1),
-      growable: false);
+    M * N,
+    analyzer.sampleRegion(x: 0, y: 0, width: 1, height: 1),
+    growable: false,
+  );
   for (var r = 0; r < N; r++) {
     for (var c = 0; c < M; c++) {
       regions[r * M + c] = analyzer.sampleRegion(
-          x: c * cellW, y: r * cellH, width: cellW, height: cellH);
+        x: c * cellW,
+        y: r * cellH,
+        width: cellW,
+        height: cellH,
+      );
     }
   }
 
@@ -834,8 +1117,15 @@ List<List<double>> _computeBaselines(
   return scores;
 }
 
-List<List<double>> _computeCellSaliency(int M, int N, double cellW,
-    double cellH, double baseWidth, double baseHeight, List<FaceRect> faceRegions) {
+List<List<double>> _computeCellSaliency(
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  double baseWidth,
+  double baseHeight,
+  List<FaceRect> faceRegions,
+) {
   final cx = baseWidth / 2;
   final cy = baseHeight / 2;
   final maxDist = math.sqrt(cx * cx + cy * cy);
@@ -848,9 +1138,9 @@ List<List<double>> _computeCellSaliency(int M, int N, double cellW,
     for (var c = 0; c < M; c++) {
       final rcx = (c + 0.5) * cellW;
       final rcy = (r + 0.5) * cellH;
-      final centerProximity = 1 -
-          math.sqrt(math.pow(rcx - cx, 2).toDouble() +
-                  math.pow(rcy - cy, 2).toDouble()) /
+      final centerProximity =
+          1 -
+          math.sqrt(math.pow(rcx - cx, 2).toDouble() + math.pow(rcy - cy, 2).toDouble()) /
               maxDist;
 
       var faceOverlap = 0.0;
@@ -858,20 +1148,18 @@ List<List<double>> _computeCellSaliency(int M, int N, double cellW,
         final cellArea = cellW * cellH;
         for (final f in faceRegions) {
           final ox = math.max(
-              0,
-              math.min(c * cellW + cellW, f.x + f.width) -
-                  math.max(c * cellW, f.x));
+            0,
+            math.min(c * cellW + cellW, f.x + f.width) - math.max(c * cellW, f.x),
+          );
           final oy = math.max(
-              0,
-              math.min(r * cellH + cellH, f.y + f.height) -
-                  math.max(r * cellH, f.y));
+            0,
+            math.min(r * cellH + cellH, f.y + f.height) - math.max(r * cellH, f.y),
+          );
           faceOverlap = math.max(faceOverlap, (ox * oy) / cellArea);
         }
       }
 
-      final val = hasFaces
-          ? centerProximity * 0.3 + faceOverlap * 0.7
-          : centerProximity;
+      final val = hasFaces ? centerProximity * 0.3 + faceOverlap * 0.7 : centerProximity;
       row.add(val);
       if (val > maxVal) maxVal = val;
     }
@@ -890,7 +1178,11 @@ List<List<double>> _computeCellSaliency(int M, int N, double cellW,
 }
 
 double _avgCellSaliency(
-    int col, int row, CellShape shape, List<List<double>> cellSaliency) {
+  int col,
+  int row,
+  CellShape shape,
+  List<List<double>> cellSaliency,
+) {
   var sum = 0.0;
   for (var dr = 0; dr < shape.rows; dr++) {
     for (var dc = 0; dc < shape.cols; dc++) {
@@ -901,8 +1193,14 @@ double _avgCellSaliency(
 }
 
 class _ShapeCandidate {
-  _ShapeCandidate(this.col, this.row, this.shape, this.totalImprovement,
-      this.region, this.saliency);
+  _ShapeCandidate(
+    this.col,
+    this.row,
+    this.shape,
+    this.totalImprovement,
+    this.region,
+    this.saliency,
+  );
   int col;
   int row;
   CellShape shape;
@@ -913,8 +1211,13 @@ class _ShapeCandidate {
 
 /// Saliency at a point — face rects score 1, everything else 0. Mirrors
 /// `_computeCellSaliency` without needing a rectangular lattice.
-double _saliencyAtPoint(double x, double y, double baseW, double baseH,
-    List<FaceRect> faceRegions) {
+double _saliencyAtPoint(
+  double x,
+  double y,
+  double baseW,
+  double baseH,
+  List<FaceRect> faceRegions,
+) {
   if (faceRegions.isEmpty) return 0;
   for (final f in faceRegions) {
     if (x >= f.x && x <= f.x + f.width && y >= f.y && y <= f.y + f.height) {
@@ -925,9 +1228,14 @@ double _saliencyAtPoint(double x, double y, double baseW, double baseH,
 }
 
 /// Nearby-tile proximities around an arbitrary POINT, for layouts with no MxN lattice.
-Map<String, double> _collectNearbyTilesAt(double cx, double cy, double cellSize,
-    List<MosaicPlacement> placements, SpatialGrid grid,
-    [double reusePenalty = 0]) {
+Map<String, double> _collectNearbyTilesAt(
+  double cx,
+  double cy,
+  double cellSize,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid, [
+  double reusePenalty = 0,
+]) {
   final nearby = <String, double>{};
   // Radius over which the duplicate penalty applies. Tightened from 3 cells: it is
   // meant to stop a photo clustering ON TOP of itself, not to keep it out of a whole
@@ -936,8 +1244,9 @@ Map<String, double> _collectNearbyTilesAt(double cx, double cy, double cellSize,
   final candidates = _spatialQuery(grid, cx, cy, reach);
   for (var k = 0; k < candidates.length; k++) {
     final p = placements[candidates[k]];
-    final d = math.sqrt(math.pow(p.x + p.width / 2 - cx, 2) +
-        math.pow(p.y + p.height / 2 - cy, 2));
+    final d = math.sqrt(
+      math.pow(p.x + p.width / 2 - cx, 2) + math.pow(p.y + p.height / 2 - cy, 2),
+    );
     if (d > reach) continue;
     final id = getBaseTileId(p.tileId);
     final w = 1 - d / reach;
@@ -957,15 +1266,16 @@ Map<String, double> _collectNearbyTilesAt(double cx, double cy, double cellSize,
 ///
 /// Must match `fillRhombilleCells` in foto-mozaik/lib/mosaic/grid-layout.ts.
 void _fillRhombilleCells(
-    double baseWidth,
-    double baseHeight,
-    MosaicSettings settings,
-    List<TileDescriptor> tiles,
-    ImageAnalyzer analyzer,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    List<FaceRect> faceRegions,
-    int placementCount) {
+  double baseWidth,
+  double baseHeight,
+  MosaicSettings settings,
+  List<TileDescriptor> tiles,
+  ImageAnalyzer analyzer,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  List<FaceRect> faceRegions,
+  int placementCount,
+) {
   final cellsOnShort = math.max(3, jsRound(settings.density / 6).toInt());
   final cells = buildRhombilleCells(baseWidth, baseHeight, cellsOnShort);
   if (cells.isEmpty) return;
@@ -975,12 +1285,8 @@ void _fillRhombilleCells(
   // still covering most of the area the photo will occupy.
   final side = rhombEdge(cells[0]) * 0.62;
 
-  final scored = <({
-    RhombCell cell,
-    RegionAnalysis region,
-    double sal,
-    double priority
-  })>[];
+  final scored =
+      <({RhombCell cell, RegionAnalysis region, double sal, double priority})>[];
   for (final cell in cells) {
     final rect = sampleRect(cell, side);
     // Clamp into the image — edge rhombi hang off the canvas by design.
@@ -989,8 +1295,7 @@ void _fillRhombilleCells(
     final w = math.max(1.0, math.min(baseWidth - x, rect.width));
     final h = math.max(1.0, math.min(baseHeight - y, rect.height));
     final region = analyzer.sampleRegion(x: x, y: y, width: w, height: h);
-    final sal = _saliencyAtPoint(
-        cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
+    final sal = _saliencyAtPoint(cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
     scored.add((
       cell: cell,
       region: region,
@@ -1004,23 +1309,35 @@ void _fillRhombilleCells(
   for (final entry in scored) {
     final cell = entry.cell;
     final nearbyTiles = _collectNearbyTilesAt(
-        cell.cx, cell.cy, side, placements, grid, settings.reusePenalty);
-    final match = selectBestTileMatch(MatchInput(
-      region: entry.region,
-      tiles: tiles,
-      settings: settings,
-      usageCounts: usageCounts,
-      nearbyTiles: nearbyTiles,
-      saliency: entry.sal,
-      tilePoolSize: tiles.length,
-      placementCount: placementCount,
-    ));
+      cell.cx,
+      cell.cy,
+      side,
+      placements,
+      grid,
+      settings.reusePenalty,
+    );
+    final match = selectBestTileMatch(
+      MatchInput(
+        region: entry.region,
+        tiles: tiles,
+        settings: settings,
+        usageCounts: usageCounts,
+        nearbyTiles: nearbyTiles,
+        saliency: entry.sal,
+        tilePoolSize: tiles.length,
+        placementCount: placementCount,
+      ),
+    );
     final baseId = getBaseTileId(match.tile.id);
     usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
 
     final idx = placements.length;
-    final placement = entry.region
-        .toPlacement(idx, match.tile.id, match.tile.name, match.score);
+    final placement = entry.region.toPlacement(
+      idx,
+      match.tile.id,
+      match.tile.name,
+      match.score,
+    );
     placement.quad = cell.quad;
     placement.face = cell.face;
     placements.add(placement);
@@ -1048,27 +1365,25 @@ void _fillRhombilleCells(
 ///
 /// Must match `fillHexCells` in foto-mozaik/lib/mosaic/grid-layout.ts.
 void _fillHexCells(
-    double baseWidth,
-    double baseHeight,
-    MosaicSettings settings,
-    List<TileDescriptor> tiles,
-    ImageAnalyzer analyzer,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    List<FaceRect> faceRegions,
-    int placementCount) {
+  double baseWidth,
+  double baseHeight,
+  MosaicSettings settings,
+  List<TileDescriptor> tiles,
+  ImageAnalyzer analyzer,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  List<FaceRect> faceRegions,
+  int placementCount,
+) {
   // Same divisor as rhombille, so the density slider means the same thing in both.
   final cellsOnShort = math.max(3, jsRound(settings.density / 6).toInt());
   final cells = buildHexCells(baseWidth, baseHeight, cellsOnShort);
   if (cells.isEmpty) return;
 
-  final scored = <({
-    HexCell cell,
-    HexRect rect,
-    RegionAnalysis region,
-    double sal,
-    double priority
-  })>[];
+  final scored =
+      <
+        ({HexCell cell, HexRect rect, RegionAnalysis region, double sal, double priority})
+      >[];
   for (final cell in cells) {
     final rect = hexSampleRect(cell);
     final x = math.max(0.0, math.min(baseWidth - 1, rect.x));
@@ -1076,8 +1391,7 @@ void _fillHexCells(
     final w = math.max(1.0, math.min(baseWidth - x, rect.width));
     final h = math.max(1.0, math.min(baseHeight - y, rect.height));
     final region = analyzer.sampleRegion(x: x, y: y, width: w, height: h);
-    final sal = _saliencyAtPoint(
-        cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
+    final sal = _saliencyAtPoint(cell.cx, cell.cy, baseWidth, baseHeight, faceRegions);
     scored.add((
       cell: cell,
       rect: rect,
@@ -1091,24 +1405,36 @@ void _fillHexCells(
   final usageCounts = <String, int>{};
   for (final entry in scored) {
     final cell = entry.cell;
-    final nearbyTiles = _collectNearbyTilesAt(cell.cx, cell.cy,
-        entry.rect.width, placements, grid, settings.reusePenalty);
-    final match = selectBestTileMatch(MatchInput(
-      region: entry.region,
-      tiles: tiles,
-      settings: settings,
-      usageCounts: usageCounts,
-      nearbyTiles: nearbyTiles,
-      saliency: entry.sal,
-      tilePoolSize: tiles.length,
-      placementCount: placementCount,
-    ));
+    final nearbyTiles = _collectNearbyTilesAt(
+      cell.cx,
+      cell.cy,
+      entry.rect.width,
+      placements,
+      grid,
+      settings.reusePenalty,
+    );
+    final match = selectBestTileMatch(
+      MatchInput(
+        region: entry.region,
+        tiles: tiles,
+        settings: settings,
+        usageCounts: usageCounts,
+        nearbyTiles: nearbyTiles,
+        saliency: entry.sal,
+        tilePoolSize: tiles.length,
+        placementCount: placementCount,
+      ),
+    );
     final baseId = getBaseTileId(match.tile.id);
     usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
 
     final idx = placements.length;
-    final placement = entry.region
-        .toPlacement(idx, match.tile.id, match.tile.name, match.score);
+    final placement = entry.region.toPlacement(
+      idx,
+      match.tile.id,
+      match.tile.name,
+      match.score,
+    );
     // Overwrite with the TRUE, unclamped geometry — see the note above. The region was
     // sampled from a clamped rect so the analyser stays inside the image, but the
     // placement must record where the hexagon really is.
@@ -1132,8 +1458,17 @@ void _fillHexCells(
 /// higher, and a direct comparison would reject every shape. Colour distance between a
 /// region's average and the colour its tile displays is size-independent, which makes
 /// it the right basis.
-LabColor _shownLab(TileDescriptor tile, double cellAR) {
-  final cw = computeCropWeights(tile.aspectRatio, cellAR);
+LabColor _shownLab(TileDescriptor tile, double cellAR, [Map<String, TileCrop>? crops]) {
+  // "The colour this tile DISPLAYS" — so it has to honour a manual crop as well as the
+  // automatic one, or the upgrade pass compares a shape against a colour the cell will
+  // never show. `original` never anchors to the top, hence the literal false.
+  final cw = computeCropWeights(
+    tile.aspectRatio,
+    cellAR,
+    null,
+    false,
+    crops != null ? cropForTile(crops, tile.id, cellAR) : null,
+  );
   if (cw == null || tile.subregionColors == null) return tile.averageLabColor;
   var l = 0.0, a = 0.0, b = 0.0, w = 0.0;
   for (var i = 0; i < 25; i++) {
@@ -1179,31 +1514,40 @@ const double _upgradeMargin = 2.5;
 ///
 /// Must match `fillFirstLayout` in foto-mozaik/lib/mosaic/grid-layout.ts.
 void _fillFirstLayout(
-    int M,
-    int N,
-    double cellW,
-    double cellH,
-    List<List<bool>> occupied,
-    List<List<double>> cellSaliency,
-    Map<double, List<TileDescriptor>> tilePools,
-    ImageAnalyzer analyzer,
-    MosaicSettings settings,
-    Map<String, int> usageCounts,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    int tilePoolSize,
-    int placementCount,
-    List<CellShape> shapes,
-    List<CellShape> fillShapes,
-    Map<String, LabColor> colorErrors,
-    double cellAR) {
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  List<List<bool>> occupied,
+  List<List<double>> cellSaliency,
+  Map<double, List<TileDescriptor>> tilePools,
+  ImageAnalyzer analyzer,
+  MosaicSettings settings,
+  Map<String, int> usageCounts,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  int tilePoolSize,
+  int placementCount,
+  List<CellShape> shapes,
+  List<CellShape> fillShapes,
+  Map<String, LabColor> colorErrors,
+  double cellAR,
+) {
   // `_fillRemainingCells` orders cells by baseline detail, so it needs real baselines
   // even though this pass does not use them to gate shapes.
-  final baselinePool = tilePools[_anyOrientationAR] ??
+  final baselinePool =
+      tilePools[_anyOrientationAR] ??
       _poolForShape(tilePools, cellAR) ??
       const <TileDescriptor>[];
-  final baselines =
-      _computeBaselines(M, N, cellW, cellH, analyzer, baselinePool, settings);
+  final baselines = _computeBaselines(
+    M,
+    N,
+    cellW,
+    cellH,
+    analyzer,
+    baselinePool,
+    settings,
+  );
 
   // ── Phase A: the whole picture in the FULL fill menu ──────────────────────
   //
@@ -1220,16 +1564,34 @@ void _fillFirstLayout(
     }
   }
   _fillRemainingCells(
-      M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-      analyzer, settings, usageCounts, placements, grid, tilePoolSize,
-      placementCount, fillShapes, 0.5, colorErrors);
+    M,
+    N,
+    cellW,
+    cellH,
+    occupied,
+    baselines,
+    cellSaliency,
+    tilePools,
+    analyzer,
+    settings,
+    usageCounts,
+    placements,
+    grid,
+    tilePoolSize,
+    placementCount,
+    fillShapes,
+    0.5,
+    colorErrors,
+  );
 
   // Which placement owns each cell. A fill placement may be multi-cell, so several
   // cells can share one owner — the upgrade pass dedupes and checks containment.
   final owner = List.generate(N, (_) => List<int>.filled(M, -1), growable: false);
   final achieved = List.generate(
-      N, (_) => List<double>.filled(M, double.infinity),
-      growable: false);
+    N,
+    (_) => List<double>.filled(M, double.infinity),
+    growable: false,
+  );
   final cellsOf = <int, int>{};
   for (var i = 0; i < placements.length; i++) {
     final p = placements[i];
@@ -1250,8 +1612,7 @@ void _fillFirstLayout(
 
   // ── Phase B: shortlist candidates ─────────────────────────────────────────
   final regions = <RegionAnalysis>[];
-  final positions =
-      <({int col, int row, CellShape shape, double gain})>[];
+  final positions = <({int col, int row, CellShape shape, double gain})>[];
   final saliencyList = <double>[];
   final poolIndexList = <int>[];
   final poolList = <List<TileDescriptor>>[];
@@ -1281,13 +1642,15 @@ void _fillFirstLayout(
           }
         }
         if (!ok) continue;
-        regions.add(analyzer.sampleRegion(
+        regions.add(
+          analyzer.sampleRegion(
             x: c * cellW,
             y: r * cellH,
             width: shape.cols * cellW,
-            height: shape.rows * cellH));
-        positions.add(
-            (col: c, row: r, shape: shape, gain: sum / shape.cells));
+            height: shape.rows * cellH,
+          ),
+        );
+        positions.add((col: c, row: r, shape: shape, gain: sum / shape.cells));
         saliencyList.add(_avgCellSaliency(c, r, shape, cellSaliency));
         poolIndexList.add(poolIdx);
       }
@@ -1296,11 +1659,12 @@ void _fillFirstLayout(
   if (regions.isEmpty) return;
 
   final batch = _scoreMultiPoolRegionsSync(
-      regions,
-      Float32List.fromList(saliencyList),
-      poolIndexList,
-      poolList,
-      settings);
+    regions,
+    Float32List.fromList(saliencyList),
+    poolIndexList,
+    poolList,
+    settings,
+  );
 
   // Rank by OPTIMISTIC net gain — the shortlist only has to be generous, because every
   // entry is verified for real below.
@@ -1311,8 +1675,7 @@ void _fillFirstLayout(
   }
   _stableSort(shortlist, (a, b) => b.net.compareTo(a.net));
   final cap = math.max(64, jsRound((M * N) / 2).toInt());
-  final candidates =
-      shortlist.length > cap ? shortlist.sublist(0, cap) : shortlist;
+  final candidates = shortlist.length > cap ? shortlist.sublist(0, cap) : shortlist;
 
   // ── Phase C: verify each candidate for real, then commit ──────────────────
   final dead = <int>{};
@@ -1368,36 +1731,58 @@ void _fillFirstLayout(
     }
 
     final pool = _poolForShape(tilePools, pos.shape.ar)!;
-    final nearbyTiles = _collectNearbyTiles(pos.col, pos.row, cellW, cellH,
-        placements, grid, settings.reusePenalty, dead);
+    final nearbyTiles = _collectNearbyTiles(
+      pos.col,
+      pos.row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+      settings.reusePenalty,
+      dead,
+    );
     final neighborAvgColor = _computeNeighborAvgColor(
-        pos.col, pos.row, cellW, cellH, placements, grid, dead);
-    final match = selectBestTileMatch(MatchInput(
-      region: regions[i],
-      tiles: pool,
-      settings: settings,
-      usageCounts: usageCounts,
-      nearbyTiles: nearbyTiles,
-      saliency: saliencyList[i],
-      neighborAvgColor: neighborAvgColor,
-      tilePoolSize: tilePoolSize,
-      placementCount: placementCount,
-      colorBias: colorErrors[_cellKey(pos.col, pos.row)],
-    ));
+      pos.col,
+      pos.row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+      dead,
+    );
+    final match = selectBestTileMatch(
+      MatchInput(
+        region: regions[i],
+        tiles: pool,
+        settings: settings,
+        usageCounts: usageCounts,
+        nearbyTiles: nearbyTiles,
+        saliency: saliencyList[i],
+        neighborAvgColor: neighborAvgColor,
+        tilePoolSize: tilePoolSize,
+        placementCount: placementCount,
+        colorBias: colorErrors[_cellKey(pos.col, pos.row)],
+      ),
+    );
 
     // The real test: does ONE photo reconstruct this region better than the several
     // photos already there? Compared as colour distance, which is size-independent.
     final dShape = labDistance(
-        regions[i].averageLabColor, _shownLab(match.tile, pos.shape.ar));
+      regions[i].averageLabColor,
+      _shownLab(match.tile, pos.shape.ar, settings.tileCrops),
+    );
     var dVictims = 0.0;
     for (final v in victims) {
       final vp = placements[v];
       final vt = tileById[getBaseTileId(vp.tileId)];
       final w = cellsOf[v] ?? 1;
-      dVictims += w *
+      dVictims +=
+          w *
           (vt != null
               ? labDistance(
-                  vp.averageLabColor, _shownLab(vt, vp.width / vp.height))
+                  vp.averageLabColor,
+                  _shownLab(vt, vp.width / vp.height, settings.tileCrops),
+                )
               : dShape);
     }
     dVictims /= covered;
@@ -1424,8 +1809,20 @@ void _fillFirstLayout(
         }
       }
     }
-    _commitPlacement(pos.col, pos.row, pos.shape, cellW, cellH, regions[i],
-        match.tile, match.score, occupied, usageCounts, placements, grid);
+    _commitPlacement(
+      pos.col,
+      pos.row,
+      pos.shape,
+      cellW,
+      cellH,
+      regions[i],
+      match.tile,
+      match.score,
+      occupied,
+      usageCounts,
+      placements,
+      grid,
+    );
   }
 
   // ── Phase D: compact ──────────────────────────────────────────────────────
@@ -1446,29 +1843,46 @@ void _fillFirstLayout(
   // Any cell a shape could not cover is already filled from Phase A, so the only work
   // left is the fill shapes for cells never claimed at all (edges).
   _fillRemainingCells(
-      M, N, cellW, cellH, occupied, baselines, cellSaliency, tilePools,
-      analyzer, settings, usageCounts, placements, grid, tilePoolSize,
-      placementCount, fillShapes, 0.5, colorErrors);
+    M,
+    N,
+    cellW,
+    cellH,
+    occupied,
+    baselines,
+    cellSaliency,
+    tilePools,
+    analyzer,
+    settings,
+    usageCounts,
+    placements,
+    grid,
+    tilePoolSize,
+    placementCount,
+    fillShapes,
+    0.5,
+    colorErrors,
+  );
 }
 
 void _placeMultiCellShapes(
-    int M,
-    int N,
-    double cellW,
-    double cellH,
-    List<List<bool>> occupied,
-    List<List<double>> baselines,
-    List<List<double>> cellSaliency,
-    Map<double, List<TileDescriptor>> tilePools,
-    ImageAnalyzer analyzer,
-    MosaicSettings settings,
-    Map<String, int> usageCounts,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    int tilePoolSize,
-    int placementCount,
-    List<CellShape>? shapesOverride,
-    Map<String, LabColor>? colorErrors) {
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  List<List<bool>> occupied,
+  List<List<double>> baselines,
+  List<List<double>> cellSaliency,
+  Map<double, List<TileDescriptor>> tilePools,
+  ImageAnalyzer analyzer,
+  MosaicSettings settings,
+  Map<String, int> usageCounts,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  int tilePoolSize,
+  int placementCount,
+  List<CellShape>? shapesOverride,
+  Map<String, LabColor>? colorErrors,
+) {
   final regions = <RegionAnalysis>[];
   final positions = <({int col, int row, CellShape shape, double avgBaseline})>[];
   final saliencyList = <double>[];
@@ -1495,7 +1909,11 @@ void _placeMultiCellShapes(
     if (pool == null || pool.isEmpty) continue;
     final poolIdx = getPoolIndex(pool, shape.ar);
 
-    final posStride = shape.cells >= 16 ? 3 : shape.cells >= 8 ? 2 : 1;
+    final posStride = shape.cells >= 16
+        ? 3
+        : shape.cells >= 8
+        ? 2
+        : 1;
 
     for (var r = 0; r <= N - shape.rows; r += posStride) {
       for (var c = 0; c <= M - shape.cols; c += posStride) {
@@ -1509,10 +1927,11 @@ void _placeMultiCellShapes(
         if (avgBaseline < minBaselineForShape) continue;
 
         final region = analyzer.sampleRegion(
-            x: c * cellW,
-            y: r * cellH,
-            width: shape.cols * cellW,
-            height: shape.rows * cellH);
+          x: c * cellW,
+          y: r * cellH,
+          width: shape.cols * cellW,
+          height: shape.rows * cellH,
+        );
         final sal = _avgCellSaliency(c, r, shape, cellSaliency);
 
         regions.add(region);
@@ -1527,7 +1946,12 @@ void _placeMultiCellShapes(
   if (regions.isNotEmpty) {
     final saliencies = Float32List.fromList(saliencyList);
     final scores = _scoreMultiPoolRegionsSync(
-        regions, saliencies, poolIndexList, poolList, settings);
+      regions,
+      saliencies,
+      poolIndexList,
+      poolList,
+      settings,
+    );
     for (var i = 0; i < regions.length; i++) {
       final pos = positions[i];
       final perCellImprovement = pos.avgBaseline - scores[i];
@@ -1543,8 +1967,16 @@ void _placeMultiCellShapes(
         // oversized candidates are evaluated. The saliency penalty stays: faces want
         // granular control, so a large shape over a salient region is still pushed down.
         final weight = 1 / salPenalty;
-        candidates.add(_ShapeCandidate(pos.col, pos.row, pos.shape,
-            perCellImprovement * weight, regions[i], sal));
+        candidates.add(
+          _ShapeCandidate(
+            pos.col,
+            pos.row,
+            pos.shape,
+            perCellImprovement * weight,
+            regions[i],
+            sal,
+          ),
+        );
       }
     }
   }
@@ -1560,11 +1992,25 @@ void _placeMultiCellShapes(
 
     final pool = _poolForShape(tilePools, cand.shape.ar)!;
     final nearbyTiles = _collectNearbyTiles(
-        cand.col, cand.row, cellW, cellH, placements, grid, settings.reusePenalty);
+      cand.col,
+      cand.row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+      settings.reusePenalty,
+    );
     final neighborAvgColor = _computeNeighborAvgColor(
-        cand.col, cand.row, cellW, cellH, placements, grid);
+      cand.col,
+      cand.row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+    );
     final colorBias = colorErrors?[_cellKey(cand.col, cand.row)];
-    final m = selectBestTileMatch(MatchInput(
+    final m = selectBestTileMatch(
+      MatchInput(
         region: cand.region,
         tiles: pool,
         settings: settings,
@@ -1574,36 +2020,52 @@ void _placeMultiCellShapes(
         neighborAvgColor: neighborAvgColor,
         tilePoolSize: tilePoolSize,
         placementCount: placementCount,
-        colorBias: colorBias));
+        colorBias: colorBias,
+      ),
+    );
 
-    _commitPlacement(cand.col, cand.row, cand.shape, cellW, cellH, cand.region,
-        m.tile, m.score, occupied, usageCounts, placements, grid);
+    _commitPlacement(
+      cand.col,
+      cand.row,
+      cand.shape,
+      cellW,
+      cellH,
+      cand.region,
+      m.tile,
+      m.score,
+      occupied,
+      usageCounts,
+      placements,
+      grid,
+    );
     if (colorErrors != null) {
       _spreadColorError(
-          colorErrors,
-          cand.col,
-          cand.row,
-          cand.shape,
-          M,
-          N,
-          occupied,
-          cand.region.averageLabColor.L + (colorBias?.L ?? 0) - m.tile.averageLabColor.L,
-          cand.region.averageLabColor.a + (colorBias?.a ?? 0) - m.tile.averageLabColor.a,
-          cand.region.averageLabColor.b + (colorBias?.b ?? 0) - m.tile.averageLabColor.b);
+        colorErrors,
+        cand.col,
+        cand.row,
+        cand.shape,
+        M,
+        N,
+        occupied,
+        cand.region.averageLabColor.L + (colorBias?.L ?? 0) - m.tile.averageLabColor.L,
+        cand.region.averageLabColor.a + (colorBias?.a ?? 0) - m.tile.averageLabColor.a,
+        cand.region.averageLabColor.b + (colorBias?.b ?? 0) - m.tile.averageLabColor.b,
+      );
     }
   }
 }
 
 void _refineShapesByMerging(
-    List<MosaicPlacement> placements,
-    double cellW,
-    double cellH,
-    Map<double, List<TileDescriptor>> tilePools,
-    ImageAnalyzer analyzer,
-    MosaicSettings settings,
-    Map<String, int> usageCounts,
-    int tilePoolSize,
-    int placementCount) {
+  List<MosaicPlacement> placements,
+  double cellW,
+  double cellH,
+  Map<double, List<TileDescriptor>> tilePools,
+  ImageAnalyzer analyzer,
+  MosaicSettings settings,
+  Map<String, int> usageCounts,
+  int tilePoolSize,
+  int placementCount,
+) {
   const maxMergedCells = 9;
   const perCellTolerance = 1.15;
   const maxIterations = 2;
@@ -1614,8 +2076,14 @@ void _refineShapesByMerging(
     final infos = placements.map((p) {
       final cols = math.max(1, jsRound(p.width / cellW).toInt());
       final rows = math.max(1, jsRound(p.height / cellH).toInt());
-      return _MergeInfo(jsRound(p.x / cellW).toInt(),
-          jsRound(p.y / cellH).toInt(), cols, rows, cols * rows, p);
+      return _MergeInfo(
+        jsRound(p.x / cellW).toInt(),
+        jsRound(p.y / cellH).toInt(),
+        cols,
+        rows,
+        cols * rows,
+        p,
+      );
     }).toList();
 
     final cornerMap = <String, int>{};
@@ -1659,10 +2127,11 @@ void _refineShapesByMerging(
         final cells = cols * rows;
 
         final region = analyzer.sampleRegion(
-            x: a.col * cellW,
-            y: a.row * cellH,
-            width: cols * cellW,
-            height: rows * cellH);
+          x: a.col * cellW,
+          y: a.row * cellH,
+          width: cols * cellW,
+          height: rows * cellH,
+        );
         final mergedAR = (cols * cellW) / (rows * cellH);
 
         var nearestDiff = double.infinity;
@@ -1679,17 +2148,19 @@ void _refineShapesByMerging(
         final pool = _poolForShape(tilePools, mergedAR);
         if (pool == null || pool.isEmpty) continue;
 
-        final m = selectBestTileMatch(MatchInput(
+        final m = selectBestTileMatch(
+          MatchInput(
             region: region,
             tiles: pool,
             settings: settings,
             usageCounts: emptyUsage,
             tilePoolSize: tilePoolSize,
-            placementCount: placementCount));
+            placementCount: placementCount,
+          ),
+        );
 
         final mergedPerCell = m.score / cells;
-        final sumPerCell =
-            (a.placement.score + b.placement.score) / (a.cells + b.cells);
+        final sumPerCell = (a.placement.score + b.placement.score) / (a.cells + b.cells);
         if (mergedPerCell > sumPerCell * perCellTolerance) continue;
 
         a.removed = true;
@@ -1699,8 +2170,7 @@ void _refineShapesByMerging(
         final newBaseId = getBaseTileId(m.tile.id);
         usageCounts[newBaseId] = (usageCounts[newBaseId] ?? 0) + 1;
 
-        mergedThisPass
-            .add(region.toPlacement(-1, m.tile.id, m.tile.name, m.score));
+        mergedThisPass.add(region.toPlacement(-1, m.tile.id, m.tile.name, m.score));
         mergeCountThisPass++;
         break;
       }
@@ -1745,31 +2215,31 @@ void _decrementUsage(Map<String, int> usageCounts, String tileId) {
 }
 
 void _fillRemainingCells(
-    int M,
-    int N,
-    double cellW,
-    double cellH,
-    List<List<bool>> occupied,
-    List<List<double>> baselines,
-    List<List<double>> cellSaliency,
-    Map<double, List<TileDescriptor>> tilePools,
-    ImageAnalyzer analyzer,
-    MosaicSettings settings,
-    Map<String, int> usageCounts,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    int tilePoolSize,
-    int placementCount,
-    List<CellShape>? shapesOverride,
-    double fillSalThreshold,
-    Map<String, LabColor>? colorErrors) {
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  List<List<bool>> occupied,
+  List<List<double>> baselines,
+  List<List<double>> cellSaliency,
+  Map<double, List<TileDescriptor>> tilePools,
+  ImageAnalyzer analyzer,
+  MosaicSettings settings,
+  Map<String, int> usageCounts,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  int tilePoolSize,
+  int placementCount,
+  List<CellShape>? shapesOverride,
+  double fillSalThreshold,
+  Map<String, LabColor>? colorErrors,
+) {
   final cells = <({int col, int row, double priority, double sal})>[];
   for (var r = 0; r < N; r++) {
     for (var c = 0; c < M; c++) {
       if (occupied[r][c]) continue;
       final sal = cellSaliency[r][c];
-      cells.add(
-          (col: c, row: r, priority: baselines[r][c] * 0.5 + sal * 0.5, sal: sal));
+      cells.add((col: c, row: r, priority: baselines[r][c] * 0.5 + sal * 0.5, sal: sal));
     }
   }
   _stableSort(cells, (a, b) => b.priority.compareTo(a.priority));
@@ -1779,9 +2249,22 @@ void _fillRemainingCells(
     if (occupied[row][col]) continue;
 
     final nearbyTiles = _collectNearbyTiles(
-        col, row, cellW, cellH, placements, grid, settings.reusePenalty);
-    final neighborAvgColor =
-        _computeNeighborAvgColor(col, row, cellW, cellH, placements, grid);
+      col,
+      row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+      settings.reusePenalty,
+    );
+    final neighborAvgColor = _computeNeighborAvgColor(
+      col,
+      row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+    );
 
     var bestShape = _shape1x1;
     RegionAnalysis? bestRegion;
@@ -1798,21 +2281,21 @@ void _fillRemainingCells(
       // deliberately EMPTIES when too few photos are square, so the one shape that must
       // always have something to place could be starved or skipped outright, leaving
       // the fill to larger shapes that fit worse.
-      final pool = shape.cells == 1
-          ? tilePools[_anyOrientationAR]
-          : tilePools[shape.ar];
+      final pool = shape.cells == 1 ? tilePools[_anyOrientationAR] : tilePools[shape.ar];
       if (pool == null || pool.isEmpty) continue;
 
       final region = analyzer.sampleRegion(
-          x: col * cellW,
-          y: row * cellH,
-          width: shape.cols * cellW,
-          height: shape.rows * cellH);
+        x: col * cellW,
+        y: row * cellH,
+        width: shape.cols * cellW,
+        height: shape.rows * cellH,
+      );
 
       final shapeSal = shape.cells > 1
           ? _avgCellSaliency(col, row, shape, cellSaliency)
           : sal;
-      final m = selectBestTileMatch(MatchInput(
+      final m = selectBestTileMatch(
+        MatchInput(
           region: region,
           tiles: pool,
           settings: settings,
@@ -1822,7 +2305,9 @@ void _fillRemainingCells(
           neighborAvgColor: neighborAvgColor,
           tilePoolSize: tilePoolSize,
           placementCount: placementCount,
-          colorBias: colorBias));
+          colorBias: colorBias,
+        ),
+      );
 
       if (m.score < bestScore) {
         bestScore = m.score;
@@ -1833,27 +2318,44 @@ void _fillRemainingCells(
     }
 
     if (bestTile != null && bestRegion != null) {
-      _commitPlacement(col, row, bestShape, cellW, cellH, bestRegion, bestTile,
-          bestScore, occupied, usageCounts, placements, grid);
+      _commitPlacement(
+        col,
+        row,
+        bestShape,
+        cellW,
+        cellH,
+        bestRegion,
+        bestTile,
+        bestScore,
+        occupied,
+        usageCounts,
+        placements,
+        grid,
+      );
       if (colorErrors != null) {
         _spreadColorError(
-            colorErrors,
-            col,
-            row,
-            bestShape,
-            M,
-            N,
-            occupied,
-            bestRegion.averageLabColor.L + (colorBias?.L ?? 0) - bestTile.averageLabColor.L,
-            bestRegion.averageLabColor.a + (colorBias?.a ?? 0) - bestTile.averageLabColor.a,
-            bestRegion.averageLabColor.b + (colorBias?.b ?? 0) - bestTile.averageLabColor.b);
+          colorErrors,
+          col,
+          row,
+          bestShape,
+          M,
+          N,
+          occupied,
+          bestRegion.averageLabColor.L + (colorBias?.L ?? 0) - bestTile.averageLabColor.L,
+          bestRegion.averageLabColor.a + (colorBias?.a ?? 0) - bestTile.averageLabColor.a,
+          bestRegion.averageLabColor.b + (colorBias?.b ?? 0) - bestTile.averageLabColor.b,
+        );
       }
     }
   }
 }
 
-void _vogelAssign(List<MosaicPlacement> placements, List<TileDescriptor> tiles,
-    MosaicSettings settings, Float64List placementSaliency) {
+void _vogelAssign(
+  List<MosaicPlacement> placements,
+  List<TileDescriptor> tiles,
+  MosaicSettings settings,
+  Float64List placementSaliency,
+) {
   if (placements.isEmpty || tiles.isEmpty) return;
 
   final n = placements.length;
@@ -1861,8 +2363,13 @@ void _vogelAssign(List<MosaicPlacement> placements, List<TileDescriptor> tiles,
 
   final candidateLists = List<List<RegionCandidate>>.filled(n, const []);
   for (var i = 0; i < n; i++) {
-    candidateLists[i] =
-        getTopKCandidates(placements[i], tiles, settings, placementSaliency[i], K);
+    candidateLists[i] = getTopKCandidates(
+      placements[i],
+      tiles,
+      settings,
+      placementSaliency[i],
+      K,
+    );
     if (candidateLists[i].isEmpty) return;
   }
 
@@ -1876,6 +2383,7 @@ void _vogelAssign(List<MosaicPlacement> placements, List<TileDescriptor> tiles,
   _stableSort(order, (a, b) => regrets[b].compareTo(regrets[a]));
 
   final tilePoolSize = tiles.length;
+  final maxUses = resolveMaxTileUses(settings.maxTileUses, tiles.length, n);
   final usageCounts = <String, int>{};
 
   for (var oi = 0; oi < n; oi++) {
@@ -1886,18 +2394,40 @@ void _vogelAssign(List<MosaicPlacement> placements, List<TileDescriptor> tiles,
     final unusedCount = math.max(0, tilePoolSize - usageCounts.length);
     final expectedUsage = n / tilePoolSize;
     final varietyStrength = settings.reusePenalty > 0
-        ? (settings.reusePenalty * settings.reusePenalty * 2 +
-                settings.reusePenalty) *
-            salVarietyScale
+        ? (settings.reusePenalty * settings.reusePenalty * 2 + settings.reusePenalty) *
+              salVarietyScale
         : 0.0;
 
-    var bestTile = cands[0].tile;
+    TileDescriptor? bestTile;
     var bestTotal = double.infinity;
+    // Every candidate already at the cap is not a dead end — the cell still has to hold
+    // something. The one used LEAST is the least-bad answer, and picking it keeps the
+    // overflow spread across the library.
+    //
+    // This must not fall back to cands[0]: that is the globally cheapest tile, so every
+    // exhausted cell picks the SAME photo and the cap inverts into a magnet. Measured on
+    // a 200-photo library at a cap of 9, that fallback drove one photo to 247 cells —
+    // six times what removing the cap entirely produces.
+    TileDescriptor? fallbackTile;
+    var fallbackUse = double.infinity;
+    var fallbackCost = double.infinity;
 
     for (final cand in cands) {
       final tile = cand.tile;
       final baseCost = cand.baseCost;
       final baseId = getBaseTileId(tile.id);
+      // Vogel assigns every cell from scratch, so the cap has to hold here too —
+      // enforcing it only in the greedy pass would leave it undone for any mosaic small
+      // enough to take this path.
+      if (maxUses > 0 && (usageCounts[baseId] ?? 0) >= maxUses) {
+        final used = (usageCounts[baseId] ?? 0).toDouble();
+        if (used < fallbackUse || (used == fallbackUse && baseCost < fallbackCost)) {
+          fallbackUse = used;
+          fallbackCost = baseCost;
+          fallbackTile = tile;
+        }
+        continue;
+      }
       final usageCount = usageCounts[baseId] ?? 0;
 
       var varietyAdj = 0.0;
@@ -1922,58 +2452,77 @@ void _vogelAssign(List<MosaicPlacement> placements, List<TileDescriptor> tiles,
       }
     }
 
-    placements[i].tileId = bestTile.id;
-    placements[i].tileName = bestTile.name;
-    final baseId = getBaseTileId(bestTile.id);
+    final chosen = bestTile ?? fallbackTile ?? cands[0].tile;
+    placements[i].tileId = chosen.id;
+    placements[i].tileName = chosen.name;
+    final baseId = getBaseTileId(chosen.id);
     usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
   }
 }
 
 void _fillUniformGrid(
-    int M,
-    int N,
-    double cellW,
-    double cellH,
-    List<List<double>> cellSaliency,
-    List<ResolvedTileEntry> resolved,
-    ImageAnalyzer analyzer,
-    MosaicSettings settings,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid,
-    int tilePoolSize,
-    int placementCount) {
+  int M,
+  int N,
+  double cellW,
+  double cellH,
+  List<List<double>> cellSaliency,
+  List<ResolvedTileEntry> resolved,
+  ImageAnalyzer analyzer,
+  MosaicSettings settings,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+  int tilePoolSize,
+  int placementCount,
+) {
   final cells =
       <({int col, int row, double priority, double sal, RegionAnalysis region})>[];
   for (var r = 0; r < N; r++) {
     for (var c = 0; c < M; c++) {
       final region = analyzer.sampleRegion(
-          x: c * cellW, y: r * cellH, width: cellW, height: cellH);
+        x: c * cellW,
+        y: r * cellH,
+        width: cellW,
+        height: cellH,
+      );
       final sal = cellSaliency[r][c];
       cells.add((
         col: c,
         row: r,
         priority: region.detailScore * 0.5 + sal * 0.5,
         sal: sal,
-        region: region
+        region: region,
       ));
     }
   }
   _stableSort(cells, (a, b) => b.priority.compareTo(a.priority));
 
   final usageCounts = <String, int>{};
-  final occupied =
-      List.generate(N, (_) => List<bool>.filled(M, false), growable: false);
+  final occupied = List.generate(N, (_) => List<bool>.filled(M, false), growable: false);
   final colorErrors = <String, LabColor>{};
 
   for (final cell in cells) {
     final col = cell.col, row = cell.row, sal = cell.sal, region = cell.region;
     final nearbyTiles = _collectNearbyTiles(
-        col, row, cellW, cellH, placements, grid, settings.reusePenalty);
-    final neighborAvgColor =
-        _computeNeighborAvgColor(col, row, cellW, cellH, placements, grid);
+      col,
+      row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+      settings.reusePenalty,
+    );
+    final neighborAvgColor = _computeNeighborAvgColor(
+      col,
+      row,
+      cellW,
+      cellH,
+      placements,
+      grid,
+    );
     final colorBias = colorErrors[_cellKey(col, row)];
 
-    final m = selectBestTileUniform(UniformMatchInput(
+    final m = selectBestTileUniform(
+      UniformMatchInput(
         region: region,
         resolved: resolved,
         settings: settings,
@@ -1983,14 +2532,17 @@ void _fillUniformGrid(
         neighborAvgColor: neighborAvgColor,
         tilePoolSize: tilePoolSize,
         placementCount: placementCount,
-        colorBias: colorBias));
+        colorBias: colorBias,
+      ),
+    );
 
     occupied[row][col] = true;
     final baseId = getBaseTileId(m.tile.id);
     usageCounts[baseId] = (usageCounts[baseId] ?? 0) + 1;
 
-    placements
-        .add(region.toPlacement(placements.length, m.tile.id, m.tile.name, m.score));
+    placements.add(
+      region.toPlacement(placements.length, m.tile.id, m.tile.name, m.score),
+    );
 
     final cx = col * cellW + cellW / 2;
     final cy = row * cellH + cellH / 2;
@@ -2000,24 +2552,32 @@ void _fillUniformGrid(
     (grid.buckets[key] ??= []).add(placements.length - 1);
 
     _spreadColorError(
-        colorErrors,
-        col,
-        row,
-        _shape1x1,
-        M,
-        N,
-        occupied,
-        region.averageLabColor.L + (colorBias?.L ?? 0) - m.tile.averageLabColor.L,
-        region.averageLabColor.a + (colorBias?.a ?? 0) - m.tile.averageLabColor.a,
-        region.averageLabColor.b + (colorBias?.b ?? 0) - m.tile.averageLabColor.b);
+      colorErrors,
+      col,
+      row,
+      _shape1x1,
+      M,
+      N,
+      occupied,
+      region.averageLabColor.L + (colorBias?.L ?? 0) - m.tile.averageLabColor.L,
+      region.averageLabColor.a + (colorBias?.a ?? 0) - m.tile.averageLabColor.a,
+      region.averageLabColor.b + (colorBias?.b ?? 0) - m.tile.averageLabColor.b,
+    );
   }
 }
 
 /// [dead] holds indices displaced by the upgrade pass — still present in the array and
 /// the spatial grid until compaction, but no longer part of the mosaic.
-Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
-    double cellH, List<MosaicPlacement> placements, SpatialGrid grid,
-    [double reusePenalty = 0, Set<int>? dead]) {
+Map<String, double> _collectNearbyTiles(
+  int col,
+  int row,
+  double cellW,
+  double cellH,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid, [
+  double reusePenalty = 0,
+  Set<int>? dead,
+]) {
   final nearby = <String, double>{};
   final cx = (col + 0.5) * cellW;
   final cy = (row + 0.5) * cellH;
@@ -2033,8 +2593,9 @@ Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
     final p = placements[candidates[k]];
     final nearestX = math.max(p.x, math.min(cx, p.x + p.width));
     final nearestY = math.max(p.y, math.min(cy, p.y + p.height));
-    final edgeDist = math.sqrt(math.pow(nearestX - cx, 2).toDouble() +
-        math.pow(nearestY - cy, 2).toDouble());
+    final edgeDist = math.sqrt(
+      math.pow(nearestX - cx, 2).toDouble() + math.pow(nearestY - cy, 2).toDouble(),
+    );
     final proximity = math.max(0, 1 - edgeDist / reach).toDouble();
     if (proximity <= 0) continue;
 
@@ -2046,8 +2607,15 @@ Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
   return nearby;
 }
 
-LabColor? _computeNeighborAvgColor(int col, int row, double cellW, double cellH,
-    List<MosaicPlacement> placements, SpatialGrid grid, [Set<int>? dead]) {
+LabColor? _computeNeighborAvgColor(
+  int col,
+  int row,
+  double cellW,
+  double cellH,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid, [
+  Set<int>? dead,
+]) {
   final cx = (col + 0.5) * cellW;
   final cy = (row + 0.5) * cellH;
   final cellSize = math.max(cellW, cellH);
@@ -2060,8 +2628,9 @@ LabColor? _computeNeighborAvgColor(int col, int row, double cellW, double cellH,
     final p = placements[candidates[k]];
     final nearestX = math.max(p.x, math.min(cx, p.x + p.width));
     final nearestY = math.max(p.y, math.min(cy, p.y + p.height));
-    final dist = math.sqrt(math.pow(nearestX - cx, 2).toDouble() +
-        math.pow(nearestY - cy, 2).toDouble());
+    final dist = math.sqrt(
+      math.pow(nearestX - cx, 2).toDouble() + math.pow(nearestY - cy, 2).toDouble(),
+    );
     final prox = math.max(0, 1 - dist / reach).toDouble();
     if (prox <= 0) continue;
     sL += p.averageLabColor.L * prox;
@@ -2074,7 +2643,13 @@ LabColor? _computeNeighborAvgColor(int col, int row, double cellW, double cellH,
 }
 
 bool _shapeFits(
-    int col, int row, CellShape shape, int M, int N, List<List<bool>> occupied) {
+  int col,
+  int row,
+  CellShape shape,
+  int M,
+  int N,
+  List<List<bool>> occupied,
+) {
   if (col + shape.cols > M || row + shape.rows > N) return false;
   for (var dr = 0; dr < shape.rows; dr++) {
     for (var dc = 0; dc < shape.cols; dc++) {
@@ -2084,8 +2659,7 @@ bool _shapeFits(
   return true;
 }
 
-void _markOccupied(
-    int col, int row, CellShape shape, List<List<bool>> occupied) {
+void _markOccupied(int col, int row, CellShape shape, List<List<bool>> occupied) {
   for (var dr = 0; dr < shape.rows; dr++) {
     for (var dc = 0; dc < shape.cols; dc++) {
       occupied[row + dr][col + dc] = true;
@@ -2094,18 +2668,19 @@ void _markOccupied(
 }
 
 void _commitPlacement(
-    int col,
-    int row,
-    CellShape shape,
-    double cellW,
-    double cellH,
-    RegionAnalysis region,
-    TileDescriptor tile,
-    double score,
-    List<List<bool>> occupied,
-    Map<String, int> usageCounts,
-    List<MosaicPlacement> placements,
-    SpatialGrid grid) {
+  int col,
+  int row,
+  CellShape shape,
+  double cellW,
+  double cellH,
+  RegionAnalysis region,
+  TileDescriptor tile,
+  double score,
+  List<List<bool>> occupied,
+  Map<String, int> usageCounts,
+  List<MosaicPlacement> placements,
+  SpatialGrid grid,
+) {
   _markOccupied(col, row, shape, occupied);
 
   final baseId = getBaseTileId(tile.id);
@@ -2117,27 +2692,29 @@ void _commitPlacement(
   final pw = shape.cols * cellW;
   final ph = shape.rows * cellH;
 
-  placements.add(MosaicPlacement(
-    index: idx,
-    x: px,
-    y: py,
-    width: pw,
-    height: ph,
-    averageColor: region.averageColor,
-    averageLabColor: region.averageLabColor,
-    detailScore: region.detailScore,
-    subregionColors: region.subregionColors,
-    subregionEdges: region.subregionEdges,
-    contrastMap: region.contrastMap,
-    luminanceBalance: region.luminanceBalance,
-    colorVariance: region.colorVariance,
-    edgeOrientation: region.edgeOrientation,
-    tonalHistogram: region.tonalHistogram,
-    subregionEdgeOrientations: region.subregionEdgeOrientations,
-    tileId: tile.id,
-    tileName: tile.name,
-    score: score,
-  ));
+  placements.add(
+    MosaicPlacement(
+      index: idx,
+      x: px,
+      y: py,
+      width: pw,
+      height: ph,
+      averageColor: region.averageColor,
+      averageLabColor: region.averageLabColor,
+      detailScore: region.detailScore,
+      subregionColors: region.subregionColors,
+      subregionEdges: region.subregionEdges,
+      contrastMap: region.contrastMap,
+      luminanceBalance: region.luminanceBalance,
+      colorVariance: region.colorVariance,
+      edgeOrientation: region.edgeOrientation,
+      tonalHistogram: region.tonalHistogram,
+      subregionEdgeOrientations: region.subregionEdgeOrientations,
+      tileId: tile.id,
+      tileName: tile.name,
+      score: score,
+    ),
+  );
 
   if (shape.cells > 1) {
     final margin = math.min(cellW, cellH) * 0.3;
@@ -2153,9 +2730,12 @@ void _commitPlacement(
 
 const double _coherenceWeight = 2.0;
 
-double _scoreMosaicReconstruction(List<MosaicPlacement> placements,
-    Map<String, TileDescriptor> tileMap, Float64List saliency,
-    List<Set<int>> adjacency) {
+double _scoreMosaicReconstruction(
+  List<MosaicPlacement> placements,
+  Map<String, TileDescriptor> tileMap,
+  Float64List saliency,
+  List<Set<int>> adjacency,
+) {
   final n = placements.length;
 
   var perCellWeighted = 0.0;
@@ -2192,15 +2772,18 @@ double _scoreMosaicReconstruction(List<MosaicPlacement> placements,
       coherenceTotalW += w;
     }
   }
-  final coherenceScore =
-      coherenceTotalW > 0 ? coherenceWeighted / coherenceTotalW : 0.0;
+  final coherenceScore = coherenceTotalW > 0 ? coherenceWeighted / coherenceTotalW : 0.0;
 
   return perCellScore + _coherenceWeight * coherenceScore;
 }
 
-Float64List _computePlacementSaliency(List<RegionAnalysis> regions,
-    List<Set<int>> adjacency, double baseWidth, double baseHeight,
-    List<FaceRect> faceRegions) {
+Float64List _computePlacementSaliency(
+  List<RegionAnalysis> regions,
+  List<Set<int>> adjacency,
+  double baseWidth,
+  double baseHeight,
+  List<FaceRect> faceRegions,
+) {
   final n = regions.length;
   final sal = Float64List(n);
   final cx = baseWidth / 2;
@@ -2212,30 +2795,31 @@ Float64List _computePlacementSaliency(List<RegionAnalysis> regions,
     final r = regions[i];
     final rcx = r.x + r.width / 2;
     final rcy = r.y + r.height / 2;
-    final centerProximity = 1 -
-        math.sqrt(math.pow(rcx - cx, 2).toDouble() +
-                math.pow(rcy - cy, 2).toDouble()) /
+    final centerProximity =
+        1 -
+        math.sqrt(math.pow(rcx - cx, 2).toDouble() + math.pow(rcy - cy, 2).toDouble()) /
             maxDist;
 
     var neighborContrast = 0.0;
     if (adjacency[i].isNotEmpty) {
       var contrastSum = 0.0;
       for (final ni in adjacency[i]) {
-        contrastSum +=
-            labDistance(r.averageLabColor, regions[ni].averageLabColor);
+        contrastSum += labDistance(r.averageLabColor, regions[ni].averageLabColor);
       }
       neighborContrast = contrastSum / adjacency[i].length;
     }
 
     if (hasFaces) {
       final fb = _regionFaceOverlap(r, faceRegions);
-      sal[i] = r.detailScore * 0.20 +
+      sal[i] =
+          r.detailScore * 0.20 +
           r.colorVariance * 0.10 +
           centerProximity * 0.10 +
           neighborContrast * 0.15 +
           fb * 0.45;
     } else {
-      sal[i] = r.detailScore * 0.30 +
+      sal[i] =
+          r.detailScore * 0.30 +
           r.colorVariance * 0.20 +
           centerProximity * 0.25 +
           neighborContrast * 0.25;
@@ -2261,10 +2845,8 @@ double _regionFaceOverlap(RegionAnalysis r, List<FaceRect> faces) {
   if (area <= 0) return 0;
   var best = 0.0;
   for (final f in faces) {
-    final ox = math.max(
-        0, math.min(r.x + r.width, f.x + f.width) - math.max(r.x, f.x));
-    final oy = math.max(
-        0, math.min(r.y + r.height, f.y + f.height) - math.max(r.y, f.y));
+    final ox = math.max(0, math.min(r.x + r.width, f.x + f.width) - math.max(r.x, f.x));
+    final oy = math.max(0, math.min(r.y + r.height, f.y + f.height) - math.max(r.y, f.y));
     best = math.max(best, (ox * oy) / area);
   }
   return best;
@@ -2288,7 +2870,8 @@ List<Set<int>> _buildAdjacencyMap(List<RegionAnalysis> regions) {
   final buckets = <int, List<int>>{};
 
   for (var i = 0; i < n; i++) {
-    final key = ((regions[i].y + regions[i].height / 2) / cs).floor() * cols +
+    final key =
+        ((regions[i].y + regions[i].height / 2) / cs).floor() * cols +
         ((regions[i].x + regions[i].width / 2) / cs).floor();
     (buckets[key] ??= []).add(i);
   }

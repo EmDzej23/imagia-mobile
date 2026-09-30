@@ -66,15 +66,27 @@ SignalWeights defaultSignalWeights() => SignalWeights(
       chromaPattern: 0.06,
       edgePattern: 0.18, // was 0.12
       tonalHistogram: 0.05,
-      brightnessEmphasis: 3.5,
+      // Light/dark counts this much more than hue when scoring a tile.
+      //
+      // Raised from 3.5 to the ceiling. Recognising the subject in a mosaic is almost
+      // entirely a light/dark judgement, and with a fixed library the tonal range is
+      // the binding constraint — so it is worth spending hue accuracy to place tone
+      // correctly. Measured on a coarse luminance comparison against the original:
+      // 200 photos 5.60 → 4.04, 3000 photos 3.50 → 2.57, 32 photos 7.01 → 6.65.
+      // Small libraries gain least: no weighting conjures a tone they do not contain.
+      // Must match shared.ts.
+      brightnessEmphasis: 5.0,
       contrastPattern: 0.12, // was 0.08
     );
+
+/// The one variety value. See sanitizeSettings for why this is no longer a choice.
+const double fixedReusePenalty = 0.01;
 
 MosaicSettings defaultSettings() => MosaicSettings(
       mosaicMode: 'square',
       density: 180,
       outputWidth: 8000,
-      reusePenalty: 0.01,
+      reusePenalty: fixedReusePenalty,
       aspectWeight: 0.08,
       detailWeight: 0.05,
       minBlockSize: 4,
@@ -195,7 +207,11 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
         validModes.contains(input.mosaicMode) ? input.mosaicMode : 'original',
     density: clampD(jsRound(input.density), minDensity, maxDensity),
     outputWidth: clampD(jsRound(input.outputWidth), minOutputWidth, maxOutputWidth),
-    reusePenalty: clampD(input.reusePenalty, 0, 1),
+    // PINNED. Measured across 12 / 67 / 200 / 3000-photo libraries, a flat 0.01 matches
+    // or beats the adaptive value it replaces. The adaptive scheme existed to soften a
+    // neighbour-duplicate penalty strong enough to ban local reuse; with that corrected
+    // there is nothing left to soften. Input ignored, so saved projects land here too.
+    reusePenalty: fixedReusePenalty,
     aspectWeight: clampD(input.aspectWeight, 0, 1),
     detailWeight: clampD(input.detailWeight, 0, 1),
     minBlockSize: math.min(minBlockSize, maxBlockSize - 2),

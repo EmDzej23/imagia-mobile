@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -51,6 +52,18 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
   ui.Image? _sharp;
   int _token = 0;
 
+  /// Last laid-out size, captured in [build] from the LayoutBuilder.
+  ///
+  /// NOT `context.size`: that throws if read during build, and the render request is
+  /// triggered from `didUpdateWidget`, which IS build. Taking the box from the
+  /// LayoutBuilder removes the timing dependency entirely.
+  Size? _box;
+
+  /// Coalesces render requests while the box is still moving — the preview pane
+  /// resizes continuously as the studio's settings are scrolled, and re-rendering the
+  /// geometry on every frame of that would be ruinous.
+  Timer? _resize;
+
   static const double _maxZoom = 40;
 
   double get _imgW => widget.image.width.toDouble();
@@ -65,14 +78,26 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
       _token++;
       _sharp?.dispose();
       _sharp = null;
-      _requestSharp();
+      _scheduleSharp();
     }
   }
 
   @override
   void dispose() {
+    _resize?.cancel();
     _sharp?.dispose();
     super.dispose();
+  }
+
+  /// Request a sharp render once things have stopped moving.
+  ///
+  /// Safe to call from build: the work always starts on a later turn of the event
+  /// loop, so it can never read layout that this frame has not produced yet.
+  void _scheduleSharp() {
+    _resize?.cancel();
+    _resize = Timer(const Duration(milliseconds: 120), () {
+      if (mounted) _requestSharp();
+    });
   }
 
   /// Window centre, clamped so it can never leave the picture. When the window is
@@ -96,11 +121,11 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
 
   Future<void> _requestSharp() async {
     final render = widget.cropRenderer;
-    final box = context.size;
-    if (render == null || box == null || box.isEmpty) return;
+    final box = _box;
+    if (render == null || box == null || box.isEmpty || !mounted) return;
     final token = ++_token;
     final crop = _window(box);
-    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1;
     // Ask for the window at its true device resolution — that, not the zoom factor,
     // is how many pixels actually reach the screen.
     final outW = (box.width * dpr).round().clamp(64, 2048);
@@ -131,6 +156,12 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final box = constraints.biggest;
+      if (_box != box) {
+        _box = box;
+        // Debounced, not immediate: the studio's preview pane resizes on every frame
+        // while the settings are scrolled, and this fires for each of those.
+        _scheduleSharp();
+      }
       final win = _window(box);
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -140,7 +171,7 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
             _focus = null;
             _dropSharp();
           });
-          _requestSharp();
+          _scheduleSharp();
         },
         onScaleStart: (_) => _zoomAtGestureStart = _zoom,
         onScaleUpdate: (d) {
@@ -161,7 +192,7 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
         },
         // Re-render once the gesture settles, not per frame: each render repaints the
         // whole geometry and would make the pinch stutter.
-        onScaleEnd: (_) => _requestSharp(),
+        onScaleEnd: (_) => _scheduleSharp(),
         child: ClipRect(
           child: CustomPaint(
             size: Size.infinite,

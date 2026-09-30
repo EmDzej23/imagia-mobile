@@ -375,18 +375,10 @@ List<MosaicPlacement> buildGridLayout({
   List<FaceRect> faceRegions = const [],
   bool isMobile = false,
 }) {
-  // The variety default follows the LIBRARY, not a constant. `reusePenalty` is really
-  // answering "how often will each photo be reused?", which is cells / photos — and a
-  // value tuned on a 500-photo library leaves a 12-photo one looking like wallpaper.
-  // Only the stored DEFAULT is replaced: any other value is a deliberate choice by the
-  // user, including 0, and is passed through untouched.
-  final rawSettings = settings;
-  if (rawSettings.reusePenalty == defaultSettings().reusePenalty) {
-    settings = rawSettings.copyWith(
-      reusePenalty: adaptiveReusePenalty(
-          tiles.length, densityToCells(rawSettings.density)),
-    );
-  }
+  // Variety is pinned in sanitizeSettings — see fixedReusePenalty. The adaptive
+  // per-library value that used to be derived here is gone: it existed to soften a
+  // neighbour-duplicate penalty strong enough to ban local reuse, and once that was
+  // corrected a flat 0.01 measured better at every library size.
 
   final mode = settings.mosaicMode;
   final uniformMode = mode != 'original' && mode != 'blocks';
@@ -937,7 +929,10 @@ Map<String, double> _collectNearbyTilesAt(double cx, double cy, double cellSize,
     List<MosaicPlacement> placements, SpatialGrid grid,
     [double reusePenalty = 0]) {
   final nearby = <String, double>{};
-  final reach = cellSize * (3 + reusePenalty * 4);
+  // Radius over which the duplicate penalty applies. Tightened from 3 cells: it is
+  // meant to stop a photo clustering ON TOP of itself, not to keep it out of a whole
+  // region — see _neighborDuplicatePenaltyBase.
+  final reach = cellSize * (1.6 + reusePenalty * 4);
   final candidates = _spatialQuery(grid, cx, cy, reach);
   for (var k = 0; k < candidates.length; k++) {
     final p = placements[candidates[k]];
@@ -2027,7 +2022,10 @@ Map<String, double> _collectNearbyTiles(int col, int row, double cellW,
   final cx = (col + 0.5) * cellW;
   final cy = (row + 0.5) * cellH;
   final cellSize = math.max(cellW, cellH);
-  final reach = cellSize * (3 + reusePenalty * 4);
+  // Radius over which the duplicate penalty applies. Tightened from 3 cells: it is
+  // meant to stop a photo clustering ON TOP of itself, not to keep it out of a whole
+  // region — see _neighborDuplicatePenaltyBase.
+  final reach = cellSize * (1.6 + reusePenalty * 4);
 
   final candidates = _spatialQuery(grid, cx, cy, reach);
   for (var k = 0; k < candidates.length; k++) {

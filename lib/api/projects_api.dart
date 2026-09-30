@@ -127,7 +127,16 @@ class ProjectDetail {
     final decoded = _deepDecode(raw);
     if (decoded is! Map) return null;
     try {
-      return MosaicSettings.fromJson(decoded.cast<String, dynamic>());
+      final map = decoded.cast<String, dynamic>();
+      // Stored scorer weights are dropped, deliberately.
+      //
+      // They are ENGINE TUNING, not a user choice — nothing in this app ever sets
+      // them — but they were being written into every saved project. A project saved
+      // before the weights were retuned would then keep rebuilding with the old
+      // numbers forever, so the one place the improvement matters least (a brand new
+      // mosaic) would get it and every existing project would not.
+      map.remove('signalWeights');
+      return MosaicSettings.fromJson(map);
     } catch (_) {
       return null;
     }

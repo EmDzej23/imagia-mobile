@@ -1126,15 +1126,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                       max: 500,
                                       onChanged: (v) => update(settings.copyWith(density: v)),
                                     ),
-                                    LabeledSlider(
-                                      label: 'Variety',
-                                      value: settings.reusePenalty,
-                                      min: 0,
-                                      max: 1,
-                                      valueLabel: settings.reusePenalty.toStringAsFixed(2),
-                                      onChanged: (v) =>
-                                          update(settings.copyWith(reusePenalty: v)),
-                                    ),
+                                    // Variety dial retired — pinned to
+                                    // fixedReusePenalty. Measured better than every
+                                    // value of the old dial at every library size.
                                     LabeledSlider(
                                       label: 'Tint',
                                       value: settings.tintStrength,

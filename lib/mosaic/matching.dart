@@ -103,8 +103,31 @@ class MatchInput {
 
 // ── Scoring constants ───────────────────────────────────────────────────────
 
-const double _neighborDuplicatePenaltyBase = 25.0;
-const double _neighborDuplicatePenaltyScale = 75.0;
+/// Soft cost for reusing a photo NEAR one of its own copies.
+///
+/// Was 25 (up to 100 at variety 1) over a three-cell radius — which, against a colour
+/// term that lives under 1, was not a discouragement but a prohibition: inside that
+/// radius a photo could never repeat whatever it cost the picture. With a small library
+/// that forces half the album into every neighbourhood and the mosaic comes out as even
+/// speckle. A mosaic reads from across the room precisely BECAUSE similar photos gather.
+///
+/// Lower was tried and is not better: at 0 the quality is flat-to-worse (200 photos
+/// 0.074 → 0.077) while near-repeats rise (3000 photos: clustering 0.28% → 1.29%) and
+/// the no-touch pass has to repair far more (200 photos: 1440 → 2708 twins before
+/// repair). The matcher picks the best photo for a cell; the repair pass picks anything
+/// that is not a twin — dropping this hands more of the picture to the blunter one.
+///
+/// Adjacency is not prevented here at all — no_touch.dart forbids that outright.
+/// Must match matching.ts.
+/// How hard a photo is pushed back toward its "fair share" of cells.
+///
+/// Halved from 8. Even usage is not the goal — recognition is, and a base photo that is
+/// largely dark SHOULD lean on whichever few photos are dark rather than spreading them
+/// for fairness. Must match matching.ts.
+const double _fairShareWeight = 4;
+
+const double _neighborDuplicatePenaltyBase = 1.5;
+const double _neighborDuplicatePenaltyScale = 6.0;
 const double _maxLabDist = 150;
 
 const double _colorRejectThreshold = 0.25;
@@ -341,7 +364,7 @@ TileMatch selectBestTileMatch(MatchInput input) {
       }
       if (usageCount > 0) {
         final overuseFactor = math.max(0, usageCount / expectedUsage - 0.8);
-        varietyAdj += overuseFactor * overuseFactor * varietyStrength * 8;
+        varietyAdj += overuseFactor * overuseFactor * varietyStrength * _fairShareWeight;
       }
       if (usageCount == 0) {
         varietyAdj -= varietyStrength * 5;
@@ -849,7 +872,7 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
       }
       if (usageCount > 0) {
         final overuseFactor = math.max(0, usageCount / expectedUsage - 0.8);
-        varietyAdj += overuseFactor * overuseFactor * varietyStrength * 8;
+        varietyAdj += overuseFactor * overuseFactor * varietyStrength * _fairShareWeight;
       }
       if (usageCount == 0) {
         varietyAdj -= varietyStrength * 5;

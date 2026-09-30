@@ -67,13 +67,19 @@ const double _skipAboveTwinRate = 0.4;
 /// off for the pathological case; this only bounds the tail.
 const double _maxSwapFraction = 0.25;
 
+/// Ceiling when twins are pervasive (variety 0, or a library far too small for the
+/// cell count). Repairing those needs to touch most of the picture, so a budget tuned
+/// for incidental twins stops well short and leaves the defect half-fixed.
+const double _maxSwapFractionHeavy = 0.9;
+
 /// Search width per violation.
 const int _legalBasesPerFix = 12;
 const int _holdersPerBase = 6;
 const int _randomCandidatesPerFix = 24;
 
 /// Passes over the violation list. Stops early as soon as a pass makes no progress.
-const int _maxPasses = 8;
+/// Measured: the search saturates by ~24; beyond that it re-scans dead ends.
+const int _maxPasses = 24;
 
 /// How hard the shape mismatch counts against a swap. A colour-only cost happily trades
 /// a landscape photo into a portrait cell because the average colour still fits, and
@@ -207,11 +213,20 @@ NoTouchReport enforceNoTouchingTwins(
       if (j > i) edgePairs++;
     }
   }
-  if (edgePairs > 0 && initial / edgePairs > _skipAboveTwinRate) {
-    return NoTouchReport(initial, initial, 0, true);
-  }
-
-  final budget = math.max(8, (n * _maxSwapFraction).ceil());
+  // The pass used to bow out here when twins were everywhere, reading a high rate as
+  // "the settings asked for this". They did not: two copies of the same photo sharing a
+  // border is the most obvious flaw a mosaic can have. Variety 0 means "reuse photos
+  // freely", not "print them in pairs" — repeating three cells away is the intent,
+  // touching is the defect. So it always runs, and the budget scales with the size of
+  // the problem instead. Must match no-touch.ts.
+  final twinRate = edgePairs > 0 ? initial / edgePairs : 0;
+  final budget = math.max(
+      8,
+      (n *
+              (twinRate > _skipAboveTwinRate
+                  ? _maxSwapFractionHeavy
+                  : _maxSwapFraction))
+          .ceil());
   final rnd = _Mulberry(0x5eed);
   var swaps = 0;
 
@@ -311,6 +326,40 @@ NoTouchReport enforceNoTouchingTwins(
     }
 
     if (fixedThisPass == 0 || swaps >= budget) break;
+  }
+
+  // ── Last resort: REASSIGN the survivors ───────────────────────────────────
+  //
+  // Swapping preserves which photos are used, which is why it is the default. It is
+  // also why it gets stuck: when one photo covers a whole region there is no partner
+  // that clears the twin without creating another, and a visible seam of identical
+  // neighbours survives. Here the cell simply takes a different photo. That does shift
+  // the usage counts — so it is reached only after the swap passes give up, and only
+  // for cells still violating. Must match no-touch.ts.
+  for (var i = 0; i < n; i++) {
+    if (twinCount(i, baseIds[i], -1) == 0) continue;
+    final forbidden = <String>{};
+    for (final m in edges[i]) {
+      forbidden.add(baseIds[m]);
+    }
+    String? bestBase;
+    var bestCost = double.infinity;
+    for (final base in cellsByBase.keys) {
+      if (forbidden.contains(base)) continue;
+      final c = cost(i, tileMap[base]);
+      if (c < bestCost) {
+        bestCost = c;
+        bestBase = base;
+      }
+    }
+    if (bestBase == null) continue; // every photo borders this cell — genuinely stuck
+    final t = tileMap[bestBase];
+    if (t == null) continue;
+    cellsByBase[baseIds[i]]?.remove(i);
+    placements[i].tileId = t.id;
+    placements[i].tileName = t.name;
+    baseIds[i] = bestBase;
+    cellsByBase[bestBase]?.add(i);
   }
 
   return NoTouchReport(initial, countPairs(), swaps, false);

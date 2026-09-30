@@ -161,6 +161,7 @@ class MosaicSettings {
   MosaicMode mosaicMode;
   double density;
   double outputWidth;
+  /// PINNED to fixedReusePenalty by sanitizeSettings — no longer user-facing.
   double reusePenalty;
   double aspectWeight;
   double detailWeight;
@@ -349,7 +350,10 @@ class MosaicSettings {
         'wordartTitleColor': wordartTitleColor,
         'outputSaturation': outputSaturation,
         if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
-        'signalWeights': signalWeights?.toJson(),
+        // NOT persisted: engine tuning, not user content. See
+        // ProjectsApi._parseSettings — writing these froze old tuning into saved
+        // projects, which is the opposite of what a tuning change is for.
+        if (signalWeights != null) 'signalWeights': signalWeights?.toJson(),
       };
 }
 

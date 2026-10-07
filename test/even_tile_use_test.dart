@@ -143,4 +143,86 @@ void main() {
       reason: 'unlimited must stay the deterministic path it always was',
     );
   });
+
+  // ── A library LARGER than the mosaic ────────────────────────────────────────────
+  // The leak this guards against: every scorer shortlists the photos nearest in colour
+  // and only then applies the cap. Once those nearest photos were used up, the cap fell
+  // back to a repeat while hundreds of unused photos never made the shortlist — on the
+  // web a 2000-photo library came out with photos used 4–7× under "limit repeats".
+  // Small libraries (above) cannot see it: their floor is already the cap.
+  // All landscape: original mode only puts landscape photos in landscape cells, so a
+  // half-portrait library can be larger than the mosaic and still be too small for its
+  // landscape cells (measured: 483 landscape cells vs 450 landscape photos → exactly 33
+  // repeats, the true minimum). One orientation keeps "fewer cells than photos" honest.
+  List<TileDescriptor> makeLandscapeTiles(int n) => List.generate(n, (i) {
+    final t = i / n;
+    return createTileDescriptor(
+      'L$i',
+      'L$i',
+      133,
+      100,
+      RgbColor(255 * t, 255 * (1 - t), 128 + 100 * ((i % 7) / 7 - 0.5)),
+      0.5,
+      List.filled(25, LabColor(60 * t, 10 + (i % 5) * 4.0, -10)),
+      List.filled(25, 0.2),
+      List.filled(25, 0.3),
+      LuminanceBalance(0, 0),
+      0.2,
+      0,
+      List.filled(8, 0.125),
+      Float32List(100),
+    );
+  });
+
+  List<MosaicPlacement> buildBig({
+    required String mode,
+    required int maxTileUses,
+  }) => buildGridLayout(
+    baseWidth: w,
+    baseHeight: h,
+    analyzer: makeAnalyzer(),
+    tiles: makeLandscapeTiles(900),
+    settings: defaultSettings()
+      ..mosaicMode = mode
+      ..density = 90
+      ..maxTileUses = maxTileUses,
+  );
+
+  int distinct(List<MosaicPlacement> placements) =>
+      placements.map((p) => getBaseTileId(p.tileId)).toSet().length;
+
+  for (final mode in ['square', 'original']) {
+    test(
+      '$mode · Unique: every photo once when the library is larger than the mosaic',
+      () {
+        final placements = buildBig(mode: mode, maxTileUses: uniqueTileUses);
+        expect(
+          placements.length,
+          lessThanOrEqualTo(900),
+          reason: 'precondition: fewer cells than photos',
+        );
+        expect(worstReuse(placements), 1);
+        expect(distinct(placements), placements.length);
+      },
+    );
+
+    test('$mode · Max 3: no photo more than 3 times', () {
+      final placements = buildBig(mode: mode, maxTileUses: evenTileUses);
+      expect(worstReuse(placements), lessThanOrEqualTo(limitedRepeatsMax));
+    });
+  }
+
+  test(
+    'resolveMaxTileUses: Off / Max 3 / Unique, and the floor wins when higher',
+    () {
+      expect(resolveMaxTileUses(0, 2000, 1600), 0);
+      expect(resolveMaxTileUses(evenTileUses, 2000, 1600), 3);
+      expect(resolveMaxTileUses(uniqueTileUses, 2000, 1600), 1);
+      // 32 photos over 1962 cells: no cap below 62 is possible.
+      expect(resolveMaxTileUses(evenTileUses, 32, 1962), 62);
+      expect(resolveMaxTileUses(uniqueTileUses, 32, 1962), 62);
+      // Unknown counts: unlimited, never a cap of 1.
+      expect(resolveMaxTileUses(uniqueTileUses, 0, 0), 0);
+    },
+  );
 }

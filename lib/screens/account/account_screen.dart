@@ -32,8 +32,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   TokenPackage? _loading;
   bool _deleting = false;
 
-  // iOS In-App Purchase state.
-  final bool _useIap = Platform.isIOS;
+  // Store billing (App Store / Google Play). Both stores require their own billing
+  // for in-app digital credits, so neither phone may fall through to the Creem web
+  // checkout — that remains for the web app, and for prints (physical goods).
+  final bool _useIap = Platform.isIOS || Platform.isAndroid;
   List<ProductDetails> _iapProducts = [];
   bool _iapLoading = false;
   bool _iapUnavailable = false;
@@ -56,10 +58,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     setState(() => _iapLoading = true);
     final iap = ref.read(iapServiceProvider);
     // Listen first so interrupted/pending transactions are delivered on launch.
-    _purchaseSub = iap.purchaseStream.listen(
-      _onPurchaseUpdates,
-      onError: (_) {},
-    );
+    _purchaseSub = iap.purchaseStream.listen(_onPurchaseUpdates, onError: (_) {});
     try {
       if (!await iap.available()) {
         if (mounted) setState(() => _iapUnavailable = true);
@@ -67,6 +66,8 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       }
       final products = await iap.loadProducts();
       if (mounted) setState(() => _iapProducts = products);
+      // Android: pick up any purchase a previous verify failed to finish. No-op on iOS.
+      await iap.recoverUnfinished();
     } finally {
       if (mounted) setState(() => _iapLoading = false);
     }
@@ -153,22 +154,19 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       return const [
         Padding(
           padding: EdgeInsets.all(AppSpacing.x4),
-          child: Center(
-              child: CircularProgressIndicator(color: AppColors.accent)),
+          child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
         ),
       ];
     }
     // Unavailable covers both "StoreKit said no" and "no products came back" —
     // which is every state before the products are Ready to Submit.
     final unavailable = _iapUnavailable || _iapProducts.isEmpty;
-    final products =
-        unavailable && kDebugMode ? _placeholderProducts : _iapProducts;
+    final products = unavailable && kDebugMode ? _placeholderProducts : _iapProducts;
     if (products.isEmpty) {
       return [
         Text(
           'Token purchases are unavailable right now. Please try again later.',
-          style:
-              AppTypography.caption.copyWith(color: AppColors.textSecondary),
+          style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
         ),
       ];
     }
@@ -194,9 +192,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       }
       if (!mounted) return;
       final ok = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => CheckoutWebviewScreen(checkoutUrl: res.data!),
-        ),
+        MaterialPageRoute(builder: (_) => CheckoutWebviewScreen(checkoutUrl: res.data!)),
       );
       // Refresh balance regardless — the purchase may have completed even if we
       // didn't detect the redirect.
@@ -213,8 +209,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Delete account?'),
         content: const Text(
-            'This permanently deletes your account, mosaics, projects, tokens '
-            'and order history. This cannot be undone.'),
+          'This permanently deletes your account, mosaics, projects, tokens '
+          'and order history. This cannot be undone.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -263,53 +260,56 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(user?.name ?? '—', style: AppTypography.title),
-                  Text(user?.email ?? '',
-                      style: AppTypography.body
-                          .copyWith(color: AppColors.textSecondary)),
+                  Text(
+                    user?.email ?? '',
+                    style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+                  ),
                   const SizedBox(height: AppSpacing.x3),
                   if (AppConfig.freeRenders)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.x3, vertical: AppSpacing.x1),
+                        horizontal: AppSpacing.x3,
+                        vertical: AppSpacing.x1,
+                      ),
                       decoration: BoxDecoration(
                         color: AppColors.surfaceRaised,
                         borderRadius: BorderRadius.circular(AppRadius.chip),
                         border: Border.all(color: AppColors.border),
                       ),
-                      child: Text('Mosaics are free to create',
-                          style: AppTypography.label
-                              .copyWith(color: AppColors.accent)),
+                      child: Text(
+                        'Mosaics are free to create',
+                        style: AppTypography.label.copyWith(color: AppColors.accent),
+                      ),
                     )
                   else
                     Row(
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: AppSpacing.x3,
-                              vertical: AppSpacing.x1),
+                            horizontal: AppSpacing.x3,
+                            vertical: AppSpacing.x1,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.surfaceRaised,
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.chip),
+                            borderRadius: BorderRadius.circular(AppRadius.chip),
                             border: Border.all(color: AppColors.border),
                           ),
                           child: TweenAnimationBuilder<int>(
-                            tween: IntTween(
-                                begin: 0, end: user?.tokenBalance ?? 0),
+                            tween: IntTween(begin: 0, end: user?.tokenBalance ?? 0),
                             duration: const Duration(milliseconds: 600),
                             curve: Curves.easeOut,
                             builder: (_, value, _) => Text(
                               '$value token${value == 1 ? '' : 's'}',
-                              style: AppTypography.number(AppTypography.label)
-                                  .copyWith(color: AppColors.accent),
+                              style: AppTypography.number(
+                                AppTypography.label,
+                              ).copyWith(color: AppColors.accent),
                             ),
                           ),
                         ),
                         const Spacer(),
                         TextButton(
-                          onPressed: () => ref
-                              .read(authControllerProvider.notifier)
-                              .refreshUser(),
+                          onPressed: () =>
+                              ref.read(authControllerProvider.notifier).refreshUser(),
                           child: const Text('Refresh'),
                         ),
                       ],
@@ -324,8 +324,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
               const SizedBox(height: AppSpacing.x6),
               Text('Buy tokens', style: AppTypography.label),
               const SizedBox(height: AppSpacing.x1),
-              Text('Each token renders one high-resolution mosaic.',
-                  style: AppTypography.caption),
+              Text(
+                'Each token renders one high-resolution mosaic.',
+                style: AppTypography.caption,
+              ),
               const SizedBox(height: AppSpacing.x3),
               // In DEBUG, the StoreKit tiles win whenever real products have not
               // loaded — whatever platform this is. That is what makes the App
@@ -348,9 +350,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
               _LinkTile(
                 icon: Icons.local_shipping_outlined,
                 label: 'My print orders',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const MyOrdersScreen()),
-                ),
+                onTap: () => Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const MyOrdersScreen())),
               ),
             ],
             const SizedBox(height: AppSpacing.x6),
@@ -359,23 +361,23 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             _LinkTile(
               icon: Icons.help_outline,
               label: 'How it works',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const HelpScreen()),
-              ),
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const HelpScreen())),
             ),
             _LinkTile(
               icon: Icons.privacy_tip_outlined,
               label: 'Privacy Policy',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => LegalScreen.privacy()),
-              ),
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => LegalScreen.privacy())),
             ),
             _LinkTile(
               icon: Icons.description_outlined,
               label: 'Terms of Service',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => LegalScreen.terms()),
-              ),
+              onTap: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => LegalScreen.terms())),
             ),
             const SizedBox(height: AppSpacing.x6),
             SecondaryButton(
@@ -393,7 +395,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                       width: 16,
                       height: 16,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.error),
+                        strokeWidth: 2,
+                        color: AppColors.error,
+                      ),
                     )
                   : const Icon(Icons.delete_outline, size: 18),
               label: const Text('Delete account'),
@@ -407,8 +411,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 }
 
 class _LinkTile extends StatelessWidget {
-  const _LinkTile(
-      {required this.icon, required this.label, required this.onTap});
+  const _LinkTile({required this.icon, required this.label, required this.onTap});
   final IconData icon;
   final String label;
   final VoidCallback onTap;
@@ -475,8 +478,7 @@ class _PackageTile extends StatelessWidget {
               const SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.accent),
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
               )
             else
               DecoratedBox(
@@ -486,10 +488,13 @@ class _PackageTile extends StatelessWidget {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
-                  child: Text('€${pkg.price.toStringAsFixed(2)}',
-                      style: AppTypography.label
-                          .copyWith(color: AppColors.textPrimary)),
+                    horizontal: AppSpacing.x3,
+                    vertical: AppSpacing.x2,
+                  ),
+                  child: Text(
+                    '€${pkg.price.toStringAsFixed(2)}',
+                    style: AppTypography.label.copyWith(color: AppColors.textPrimary),
+                  ),
                 ),
               ),
           ],
@@ -531,8 +536,10 @@ class _IapTile extends StatelessWidget {
                 children: [
                   Text(label, style: AppTypography.label),
                   const SizedBox(height: 2),
-                  Text('Renders ${tokens == 1 ? 'one mosaic' : '$tokens mosaics'}',
-                      style: AppTypography.caption),
+                  Text(
+                    'Renders ${tokens == 1 ? 'one mosaic' : '$tokens mosaics'}',
+                    style: AppTypography.caption,
+                  ),
                 ],
               ),
             ),
@@ -540,8 +547,7 @@ class _IapTile extends StatelessWidget {
               const SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.accent),
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
               )
             else
               DecoratedBox(
@@ -551,10 +557,13 @@ class _IapTile extends StatelessWidget {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
-                  child: Text(product.price,
-                      style: AppTypography.label
-                          .copyWith(color: AppColors.textPrimary)),
+                    horizontal: AppSpacing.x3,
+                    vertical: AppSpacing.x2,
+                  ),
+                  child: Text(
+                    product.price,
+                    style: AppTypography.label.copyWith(color: AppColors.textPrimary),
+                  ),
                 ),
               ),
           ],

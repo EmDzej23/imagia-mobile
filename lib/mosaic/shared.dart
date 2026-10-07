@@ -92,18 +92,35 @@ int minFeasibleTileUses(int tiles, int cells) {
   return math.max(1, (cells / tiles).ceil());
 }
 
-/// `maxTileUses` sentinel: spread the library as evenly as it will go.
+/// `maxTileUses` sentinel — "Max 3": no photo more than [limitedRepeatsMax] times, or the
+/// fewest the library allows when that is higher. Mirrors web `EVEN_TILE_USES`.
 ///
-/// Resolved against the live cell count on every build, so it keeps meaning "as even as
-/// possible" when the density changes underneath it.
+/// Resolved against the live cell count on every build, so it keeps its meaning when the
+/// density changes underneath it. (The name predates the 3-use floor; the stored value
+/// is unchanged, so saved projects keep working.)
 const int evenTileUses = -1;
 
-/// The cap actually applied. 0 means unlimited, [evenTileUses] means the feasible floor.
+/// Most uses per photo under "Max 3". Not 1 even when the library is big enough:
+/// measured on 2000 photos over ~1600 cells, a cap of 1 made the colour error 2.5×
+/// worse (0.060 → 0.156); 3 measured 0.069 — indistinguishable from unlimited.
+const int limitedRepeatsMax = 3;
+
+/// `maxTileUses` sentinel — "Unique": every photo at most once when the library has at
+/// least as many photos as cells; the floor (cells / photos) when it has fewer. Mirrors
+/// web `UNIQUE_TILE_USES`.
+const int uniqueTileUses = -2;
+
+/// The cap actually applied. 0 means unlimited; [evenTileUses] means [limitedRepeatsMax]
+/// or the feasible floor when higher; [uniqueTileUses] means the feasible floor.
 ///
 /// Raising rather than rejecting an impossible value matters because this arrives from
 /// saved projects and the API as well as from the UI: a project saved with 30 photos and
 /// reopened after 20 were deleted would otherwise stop building at all.
 int resolveMaxTileUses(int? maxTileUses, int tiles, int cells) {
+  if (maxTileUses == uniqueTileUses) {
+    if (tiles <= 0 || cells <= 0) return 0;
+    return minFeasibleTileUses(tiles, cells);
+  }
   if (maxTileUses == evenTileUses) {
     // The sentinel is a RATIO, so it cannot be resolved without both counts. Some scorer
     // call sites leave them out, and there minFeasibleTileUses(0, 0) answers 1 — a cap of
@@ -111,7 +128,7 @@ int resolveMaxTileUses(int? maxTileUses, int tiles, int cells) {
     // and wrecks the mosaic. Unknown counts mean unlimited: the same answer this gave
     // before the sentinel existed, and the safe direction to be wrong in.
     if (tiles <= 0 || cells <= 0) return 0;
-    return minFeasibleTileUses(tiles, cells);
+    return math.max(limitedRepeatsMax, minFeasibleTileUses(tiles, cells));
   }
   if (maxTileUses == null || maxTileUses <= 0) return 0;
   return math.max(maxTileUses, minFeasibleTileUses(tiles, cells));
@@ -239,9 +256,15 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
   const validAncientShape = ['none', 'heart', 'basketball', 'flower'];
 
   return MosaicSettings(
-    mosaicMode: validModes.contains(input.mosaicMode) ? input.mosaicMode : 'original',
+    mosaicMode: validModes.contains(input.mosaicMode)
+        ? input.mosaicMode
+        : 'original',
     density: clampD(jsRound(input.density), minDensity, maxDensity),
-    outputWidth: clampD(jsRound(input.outputWidth), minOutputWidth, maxOutputWidth),
+    outputWidth: clampD(
+      jsRound(input.outputWidth),
+      minOutputWidth,
+      maxOutputWidth,
+    ),
     // PINNED. Measured across 12 / 67 / 200 / 3000-photo libraries, a flat 0.01 matches
     // or beats the adaptive value it replaces. The adaptive scheme existed to soften a
     // neighbour-duplicate penalty strong enough to ban local reuse; with that corrected
@@ -255,13 +278,14 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     baseBlur: clampD(input.baseBlur, 0, 5),
     colorBoost: clampD(input.colorBoost, 1.0, 2.0),
     autoContrast: clampD(input.autoContrast, 0, 1),
-    // Clamped to 0 EXCEPT the sentinel, which is negative on purpose — rounding it away
-    // here would turn "spread evenly" back into "unlimited" on every reload.
+    // Clamped to 0 EXCEPT the sentinels, which are negative on purpose — rounding them
+    // away here would turn "Max 3" / "Unique" back into "unlimited" on every reload.
     // Passed through, not validated: `resolveTileSourceRect` clamps every crop at the
     // point of use, so a stale one cannot produce an out-of-bounds read here either.
     tileCrops: input.tileCrops,
-    maxTileUses: input.maxTileUses == evenTileUses
-        ? evenTileUses
+    maxTileUses:
+        input.maxTileUses == evenTileUses || input.maxTileUses == uniqueTileUses
+        ? input.maxTileUses
         : math.max(0, input.maxTileUses),
     outputSaturation: clampD(
       input.outputSaturation,
@@ -291,8 +315,11 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
   );
 }
 
-double getOutputHeight(double baseWidth, double baseHeight, double outputWidth) =>
-    math.max(1, jsRound(outputWidth * baseHeight / baseWidth));
+double getOutputHeight(
+  double baseWidth,
+  double baseHeight,
+  double outputWidth,
+) => math.max(1, jsRound(outputWidth * baseHeight / baseWidth));
 
 List<RenderPlacement> scalePlacements(
   MosaicPlan plan,
@@ -327,13 +354,16 @@ double colorDistance(RgbColor left, RgbColor right) {
 
 double _srgbToLinear(double c) {
   final v = c / 255;
-  return v <= 0.04045 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
+  return v <= 0.04045
+      ? v / 12.92
+      : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
 }
 
 const double _labEpsilon = 0.008856;
 const double _labKappa = 903.3;
 
-double _labF(double t) => t > _labEpsilon ? _cbrt(t) : (_labKappa * t + 16) / 116;
+double _labF(double t) =>
+    t > _labEpsilon ? _cbrt(t) : (_labKappa * t + 16) / 116;
 
 LabColor rgbToLab(RgbColor rgb) {
   final r = _srgbToLinear(rgb.r);
@@ -362,7 +392,8 @@ double aspectPenalty(double tileAspectRatio, double regionAspectRatio) {
   final regionIsLandscape = regionAspectRatio > 1.1;
   final regionIsPortrait = regionAspectRatio < 0.9;
 
-  if ((tileIsPortrait && regionIsLandscape) || (tileIsLandscape && regionIsPortrait)) {
+  if ((tileIsPortrait && regionIsLandscape) ||
+      (tileIsLandscape && regionIsPortrait)) {
     return 10;
   }
 
@@ -513,9 +544,11 @@ List<double>? computeCropWeights(
   // approximated a CENTRE crop and could express nothing else.
   for (var i = 0; i < 25; i++) {
     final c = i % 5;
-    final rw = math.max(0.0, math.min(x1, (c + 1) / 5) - math.max(x0, c / 5)) * 5;
+    final rw =
+        math.max(0.0, math.min(x1, (c + 1) / 5) - math.max(x0, c / 5)) * 5;
     final rr = i ~/ 5;
-    final rh = math.max(0.0, math.min(y1, (rr + 1) / 5) - math.max(y0, rr / 5)) * 5;
+    final rh =
+        math.max(0.0, math.min(y1, (rr + 1) / 5) - math.max(y0, rr / 5)) * 5;
     weights[i] *= rw * rh;
   }
 

@@ -7,12 +7,20 @@ import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
 import '../api/iap_api.dart';
 import '../state/auth_controller.dart';
 
-/// Apple In-App Purchase for consumable token packs (iOS). Apple requires
-/// digital content/credits consumed in-app to use IAP, not external payment —
-/// so on iOS tokens are bought here (prints still use Creem, as physical goods).
+/// Store billing for consumable token packs — App Store on iOS, Google Play on
+/// Android. Both stores require their own billing for digital credits consumed
+/// in-app, so tokens are bought here (prints still use Creem, as physical goods).
 ///
-/// Product ids MUST match App Store Connect and the server's
-/// `APPLE_TOKEN_PRODUCTS` map.
+/// Product ids are the SAME on both stores and MUST match App Store Connect, Play
+/// Console, and the server's `APPLE_TOKEN_PRODUCTS` / `GOOGLE_TOKEN_PRODUCTS` maps.
+///
+/// The two platforms differ in one important way — who consumes the purchase:
+///  * iOS: StoreKit consumables are consumed by finishing the transaction, which we
+///    already do only after the server has verified.
+///  * Android: the plugin's default `autoConsume` consumes ON THE DEVICE as soon as
+///    the purchase lands — before we have verified it. A verify that then failed
+///    would leave the customer charged with nothing to retry. So Android buys with
+///    `autoConsume: false` and the SERVER consumes after crediting.
 class IapService {
   IapService(this._api);
   final IapApi _api;
@@ -34,22 +42,43 @@ class IapService {
   Future<List<ProductDetails>> loadProducts() async {
     final resp = await _iap.queryProductDetails(productIds);
     final list = resp.productDetails
-      ..sort((a, b) =>
-          (productTokens[a.id] ?? 0).compareTo(productTokens[b.id] ?? 0));
+      ..sort((a, b) => (productTokens[a.id] ?? 0).compareTo(productTokens[b.id] ?? 0));
     return list;
   }
 
-  /// Starts a consumable purchase (Apple shows its payment sheet).
+  /// Starts a consumable purchase (the store shows its payment sheet).
   Future<void> buy(ProductDetails product) {
     return _iap.buyConsumable(
       purchaseParam: PurchaseParam(productDetails: product),
+      // iOS: must stay true (the StoreKit implementation asserts it). Android: false,
+      // so the purchase survives until the server has credited it — see class docs.
+      autoConsume: !Platform.isAndroid,
     );
+  }
+
+  /// Re-delivers purchases the store still considers owned (Android).
+  ///
+  /// Play does not push an unfinished purchase back by itself. If a verify failed
+  /// mid-flight the purchase stays owned and unconsumed — this hands it back through
+  /// [purchaseStream] as `restored`, where it is verified and credited like a new one
+  /// (the server is idempotent per purchase token). iOS is deliberately excluded: there
+  /// it can prompt for an Apple ID, and StoreKit re-queues unfinished transactions on
+  /// its own.
+  Future<void> recoverUnfinished() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _iap.restorePurchases();
+    } catch (_) {
+      // Best-effort: nothing is lost by failing here; the next launch tries again.
+    }
   }
 
   /// Verifies a purchased/restored transaction server-side, then finishes it.
   /// Returns the new token balance. Throws if verification fails — we must NOT
   /// finish an unverified transaction (so it can be retried).
   Future<int> verifyAndComplete(PurchaseDetails purchase) async {
+    if (Platform.isAndroid) return _verifyAndCompleteGoogle(purchase);
+
     var receipt = purchase.verificationData.serverVerificationData;
 
     // On StoreKit 1 that string IS the app receipt — and a build installed outside
@@ -66,9 +95,7 @@ class IapService {
     // Same failure, found the expensive way: retry ONCE against a freshly written
     // receipt. Bounded deliberately — a receipt that is still malformed after a
     // refresh is a real problem, and looping would only hide it.
-    if (!res.isOk &&
-        Platform.isIOS &&
-        (res.error?.contains('21002') ?? false)) {
+    if (!res.isOk && Platform.isIOS && (res.error?.contains('21002') ?? false)) {
       final refreshed = await _refreshedReceipt();
       if (refreshed != null && refreshed.isNotEmpty && refreshed != receipt) {
         res = await _api.verifyApple(refreshed);
@@ -80,6 +107,27 @@ class IapService {
     }
     if (purchase.pendingCompletePurchase) {
       await _iap.completePurchase(purchase);
+    }
+    return res.data!.balance;
+  }
+
+  /// Android: `serverVerificationData` is the Play purchase token. The server
+  /// verifies, credits once per token, and consumes — so all that is left here is to
+  /// finish the purchase locally, and only after the server said yes.
+  Future<int> _verifyAndCompleteGoogle(PurchaseDetails purchase) async {
+    final res = await _api.verifyGoogle(
+      purchase.productID,
+      purchase.verificationData.serverVerificationData,
+    );
+    if (!res.isOk || res.data == null) {
+      throw res.error ?? 'Could not verify purchase.';
+    }
+    if (purchase.pendingCompletePurchase) {
+      // Acknowledges. The server already consumed it (which implies acknowledgement),
+      // so Play may answer that it is no longer owned — harmless, the tokens are in.
+      try {
+        await _iap.completePurchase(purchase);
+      } catch (_) {}
     }
     return res.data!.balance;
   }
@@ -110,5 +158,6 @@ class IapService {
 }
 
 final iapApiProvider = Provider<IapApi>((ref) => IapApi(ref.watch(apiClientProvider)));
-final iapServiceProvider =
-    Provider<IapService>((ref) => IapService(ref.watch(iapApiProvider)));
+final iapServiceProvider = Provider<IapService>(
+  (ref) => IapService(ref.watch(iapApiProvider)),
+);

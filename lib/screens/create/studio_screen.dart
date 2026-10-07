@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -8,7 +9,13 @@ import 'package:go_router/go_router.dart';
 import '../../core/config.dart';
 import '../../mosaic/preview_painter.dart';
 import '../../mosaic/shared.dart'
-    show evenTileUses, maxOutputSaturation, minOutputSaturation;
+    show
+        evenTileUses,
+        limitedRepeatsMax,
+        maxOutputSaturation,
+        minFeasibleTileUses,
+        minOutputSaturation,
+        uniqueTileUses;
 import '../../mosaic/types.dart';
 import '../../print/print_catalog.dart' show isPrintRegionAllowed;
 import '../../services/haptics.dart';
@@ -111,7 +118,10 @@ class _ExpandPreviewButton extends StatelessWidget {
           children: [
             const Icon(Icons.open_in_full, size: 13, color: Colors.white),
             const SizedBox(width: 6),
-            Text('Expand', style: AppTypography.caption.copyWith(color: Colors.white)),
+            Text(
+              'Expand',
+              style: AppTypography.caption.copyWith(color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -145,7 +155,10 @@ class _ShowSettingsButton extends StatelessWidget {
           children: [
             const Icon(Icons.tune, size: 13, color: Colors.white),
             const SizedBox(width: 6),
-            Text('Settings', style: AppTypography.caption.copyWith(color: Colors.white)),
+            Text(
+              'Settings',
+              style: AppTypography.caption.copyWith(color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -183,7 +196,8 @@ double previewFlexFor(double v) {
     return flexFull + (flexDefault - flexFull) * (v / stopDefault);
   }
   return flexDefault +
-      (flexSettings - flexDefault) * ((v - stopDefault) / (stopSettings - stopDefault));
+      (flexSettings - flexDefault) *
+          ((v - stopDefault) / (stopSettings - stopDefault));
 }
 
 /// Nearest stop to [v], with a nudge from the fling [velocity] (px/s, down positive).
@@ -245,7 +259,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// Held in an AnimationController only so the Column can rebuild off it; the value
   /// is now SET from the scroll position rather than animated, so the durations that
   /// used to be here are gone — the scroll supplies the motion.
-  late final AnimationController _previewCollapse = AnimationController(vsync: this);
+  late final AnimationController _previewCollapse = AnimationController(
+    vsync: this,
+  );
 
   /// True while [_settleAt] is driving both the height and the scroll offset.
   bool _settling = false;
@@ -314,7 +330,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     if (!_settingsScroll.hasClients) return;
     final want = stop <= stopDefault
         ? 0.0
-        : _collapseDistance * ((stop - stopDefault) / (stopSettings - stopDefault));
+        : _collapseDistance *
+              ((stop - stopDefault) / (stopSettings - stopDefault));
     final target = want.clamp(0.0, _settingsScroll.position.maxScrollExtent);
     if ((target - _settingsScroll.position.pixels).abs() > 1) {
       _settingsScroll.animateTo(
@@ -370,8 +387,12 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// instead — clamping would otherwise fight the user at the edges.
   Offset _clampFocus(Offset f, double winW, double winH, SlimMosaicPlan plan) {
     final bw = plan.baseWidth, bh = plan.baseHeight;
-    final x = winW >= bw ? bw / 2 : f.dx.clamp(winW / 2, bw - winW / 2).toDouble();
-    final y = winH >= bh ? bh / 2 : f.dy.clamp(winH / 2, bh - winH / 2).toDouble();
+    final x = winW >= bw
+        ? bw / 2
+        : f.dx.clamp(winW / 2, bw - winW / 2).toDouble();
+    final y = winH >= bh
+        ? bh / 2
+        : f.dy.clamp(winH / 2, bh - winH / 2).toDouble();
     return Offset(x, y);
   }
 
@@ -479,8 +500,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   }
 
   /// Number of non-empty phrases in the shared word-art text state.
-  int _wordPhraseCount(String textInput) =>
-      textInput.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).length;
+  int _wordPhraseCount(String textInput) => textInput
+      .split('\n')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .length;
 
   /// Word-art controls: phrases + type-look sliders. The word colours come from
   /// the photo (no picker) — the picture is composed entirely of the words; only
@@ -533,7 +557,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
         Row(
           children: [
             Expanded(child: Text('UPPERCASE', style: AppTypography.caption)),
-            Switch(value: studio.textUppercase, onChanged: _controller.setTextUppercase),
+            Switch(
+              value: studio.textUppercase,
+              onChanged: _controller.setTextUppercase,
+            ),
           ],
         ),
         const SizedBox(height: AppSpacing.x3),
@@ -542,7 +569,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
           caption: settings.wordartCaption,
           captionColor: settings.wordartTitleColor,
           onCaptionChanged: (v) => update(settings.copyWith(wordartCaption: v)),
-          onColorChanged: (v) => update(settings.copyWith(wordartTitleColor: v)),
+          onColorChanged: (v) =>
+              update(settings.copyWith(wordartTitleColor: v)),
         ),
         const SizedBox(height: AppSpacing.x2),
         LabeledSlider(
@@ -636,7 +664,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// sub-choice — a photo layout, a shape style, or nothing for words. Mirrors
   /// the web mode grouping. The shape row flattens the curved flag + motif into
   /// one choice (Cut stone = ancient; Cobblestone / ♥ / 🏀 / 🌸 = ancient-curved).
-  Widget _buildModeGroups(MosaicSettings settings, void Function(MosaicSettings) update) {
+  Widget _buildModeGroups(
+    MosaicSettings settings,
+    void Function(MosaicSettings) update,
+  ) {
     final mode = settings.mosaicMode;
     final isAncient = mode == 'ancient' || mode == 'ancient-curved';
     final isWordart = mode == 'wordart';
@@ -659,17 +690,37 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     void selectShape(String key) {
       switch (key) {
         case 'cut':
-          update(settings.copyWith(mosaicMode: 'ancient', ancientShape: 'none'));
+          update(
+            settings.copyWith(mosaicMode: 'ancient', ancientShape: 'none'),
+          );
         case 'cobble':
-          update(settings.copyWith(mosaicMode: 'ancient-curved', ancientShape: 'none'));
+          update(
+            settings.copyWith(
+              mosaicMode: 'ancient-curved',
+              ancientShape: 'none',
+            ),
+          );
         case 'heart':
-          update(settings.copyWith(mosaicMode: 'ancient-curved', ancientShape: 'heart'));
+          update(
+            settings.copyWith(
+              mosaicMode: 'ancient-curved',
+              ancientShape: 'heart',
+            ),
+          );
         case 'ball':
           update(
-            settings.copyWith(mosaicMode: 'ancient-curved', ancientShape: 'basketball'),
+            settings.copyWith(
+              mosaicMode: 'ancient-curved',
+              ancientShape: 'basketball',
+            ),
           );
         case 'flower':
-          update(settings.copyWith(mosaicMode: 'ancient-curved', ancientShape: 'flower'));
+          update(
+            settings.copyWith(
+              mosaicMode: 'ancient-curved',
+              ancientShape: 'flower',
+            ),
+          );
       }
     }
 
@@ -679,7 +730,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
         case 'photo':
           update(settings.copyWith(mosaicMode: 'square'));
         case 'shape':
-          update(settings.copyWith(mosaicMode: 'ancient', ancientShape: 'none'));
+          update(
+            settings.copyWith(mosaicMode: 'ancient', ancientShape: 'none'),
+          );
         case 'word':
           update(settings.copyWith(mosaicMode: 'wordart'));
       }
@@ -864,7 +917,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     final ok = await confirmDestructive(
       context,
       title: 'Remove this photo?',
-      message: 'It will no longer be used in your mosaic. You can add it again later.',
+      message:
+          'It will no longer be used in your mosaic. You can add it again later.',
     );
     if (!ok) return;
     _controller.removeTile(id);
@@ -921,7 +975,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
           style: AppTypography.body,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Not now')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Not now'),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -951,7 +1008,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
           style: AppTypography.body,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Got it')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
         ],
       ),
     );
@@ -1002,7 +1062,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
         title: const Text('Studio'),
         actions: [
           IconButton(
-            tooltip: AppConfig.freeRenders ? 'About export' : 'About export & tokens',
+            tooltip: AppConfig.freeRenders
+                ? 'About export'
+                : 'About export & tokens',
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showTokenInfo(context),
           ),
@@ -1014,7 +1076,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
             // ── Busy banner (restore / tile upload) — visible immediately ──
             if (studio.isRestoring || studio.isUploadingTiles)
               _BusyBanner(
-                label: studio.isRestoring ? 'Restoring project…' : 'Adding photos…',
+                label: studio.isRestoring
+                    ? 'Restoring project…'
+                    : 'Adding photos…',
                 done: studio.uploadDone,
                 total: studio.uploadTotal,
               ),
@@ -1060,11 +1124,19 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                         plan.baseWidth,
                                         plan.baseHeight,
                                       );
-                                final zoomScale = fit == null ? 1.0 : fit.scale * _zoom;
+                                final zoomScale = fit == null
+                                    ? 1.0
+                                    : fit.scale * _zoom;
                                 final zoomed =
-                                    plan != null && !isTileless && _zoom > 1.001;
-                                final winW = fit == null ? 0.0 : box.width / zoomScale;
-                                final winH = fit == null ? 0.0 : box.height / zoomScale;
+                                    plan != null &&
+                                    !isTileless &&
+                                    _zoom > 1.001;
+                                final winW = fit == null
+                                    ? 0.0
+                                    : box.width / zoomScale;
+                                final winH = fit == null
+                                    ? 0.0
+                                    : box.height / zoomScale;
                                 final focus = (plan == null)
                                     ? Offset.zero
                                     : _clampFocus(
@@ -1101,18 +1173,29 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             return;
                                           }
                                           final sc = fit!.scale * _zoom;
-                                          final ox = box.width / 2 - focus.dx * sc;
-                                          final oy = box.height / 2 - focus.dy * sc;
-                                          final bx = (details.localPosition.dx - ox) / sc;
-                                          final by = (details.localPosition.dy - oy) / sc;
+                                          final ox =
+                                              box.width / 2 - focus.dx * sc;
+                                          final oy =
+                                              box.height / 2 - focus.dy * sc;
+                                          final bx =
+                                              (details.localPosition.dx - ox) /
+                                              sc;
+                                          final by =
+                                              (details.localPosition.dy - oy) /
+                                              sc;
                                           if (bx < 0 ||
                                               by < 0 ||
                                               bx > plan.baseWidth ||
                                               by > plan.baseHeight) {
                                             return;
                                           }
-                                          final hit = _placementAt(plan, bx, by);
-                                          if (hit != null) _revealTile(hit.tileId);
+                                          final hit = _placementAt(
+                                            plan,
+                                            bx,
+                                            by,
+                                          );
+                                          if (hit != null)
+                                            _revealTile(hit.tileId);
                                         },
                                   // Double-tap back to the whole picture — the way out of a zoom
                                   // that a pinch alone makes fiddly to reverse.
@@ -1127,13 +1210,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                       : (d) {
                                           setState(() {
                                             if (d.scale != 1.0) {
-                                              _zoom = (_zoomAtGestureStart * d.scale)
-                                                  .clamp(1.0, _maxZoom);
+                                              _zoom =
+                                                  (_zoomAtGestureStart *
+                                                          d.scale)
+                                                      .clamp(1.0, _maxZoom);
                                             }
                                             // Pan in BASE pixels so a drag tracks the finger at
                                             // every zoom level.
                                             final sc = fit!.scale * _zoom;
-                                            final w = box.width / sc, h = box.height / sc;
+                                            final w = box.width / sc,
+                                                h = box.height / sc;
                                             _focusBase = _clampFocus(
                                               (_focusBase ??
                                                       Offset(
@@ -1157,31 +1243,39 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                           (studio.base != null
                                               ? AncientPreview(
                                                   base: studio.base!,
-                                                  params: ancientParamsFromState(
-                                                    studio,
-                                                    curved: isAncientCurved,
-                                                  ),
+                                                  params:
+                                                      ancientParamsFromState(
+                                                        studio,
+                                                        curved: isAncientCurved,
+                                                      ),
                                                 )
                                               : Center(
                                                   child: Text(
                                                     'Add a base photo',
-                                                    style: AppTypography.body.copyWith(
-                                                      color: AppColors.textSecondary,
-                                                    ),
+                                                    style: AppTypography.body
+                                                        .copyWith(
+                                                          color: AppColors
+                                                              .textSecondary,
+                                                        ),
                                                   ),
                                                 ))
                                         else if (isWordart)
                                           (studio.base != null
                                               ? WordArtPreview(
                                                   base: studio.base!,
-                                                  params: wordartParamsFromState(studio),
+                                                  params:
+                                                      wordartParamsFromState(
+                                                        studio,
+                                                      ),
                                                 )
                                               : Center(
                                                   child: Text(
                                                     'Add a base photo',
-                                                    style: AppTypography.body.copyWith(
-                                                      color: AppColors.textSecondary,
-                                                    ),
+                                                    style: AppTypography.body
+                                                        .copyWith(
+                                                          color: AppColors
+                                                              .textSecondary,
+                                                        ),
                                                   ),
                                                 ))
                                         else if (plan != null && zoomed)
@@ -1192,8 +1286,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                               plan: plan,
                                               tileImages: studio.tileImages,
                                               baseImage: studio.base?.overlay,
-                                              tintStrength: settings.tintStrength,
-                                              outputSaturation: settings.outputSaturation,
+                                              tintStrength:
+                                                  settings.tintStrength,
+                                              outputSaturation:
+                                                  settings.outputSaturation,
                                               focusX: focus.dx,
                                               focusY: focus.dy,
                                               windowSize: winW,
@@ -1205,22 +1301,27 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             tileImages: studio.tileImages,
                                             baseImage: studio.base?.overlay,
                                             tintStrength: settings.tintStrength,
-                                            outputSaturation: settings.outputSaturation,
+                                            outputSaturation:
+                                                settings.outputSaturation,
                                           )
                                         else
                                           Center(
                                             child: Text(
                                               studio.isRestoring
                                                   ? 'Restoring project… ${studio.uploadDone}/${studio.uploadTotal}'
-                                                  : studio.canPlan || studio.isPlanning
+                                                  : studio.canPlan ||
+                                                        studio.isPlanning
                                                   ? 'Building preview…'
                                                   : 'Add a base photo and tiles',
-                                              style: AppTypography.body.copyWith(
-                                                color: AppColors.textSecondary,
-                                              ),
+                                              style: AppTypography.body
+                                                  .copyWith(
+                                                    color:
+                                                        AppColors.textSecondary,
+                                                  ),
                                             ),
                                           ),
-                                        if ((isTileless && studio.base != null) ||
+                                        if ((isTileless &&
+                                                studio.base != null) ||
                                             (!isTileless && plan != null))
                                           Positioned(
                                             bottom: AppSpacing.x2,
@@ -1242,9 +1343,12 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                                   )
                                                 : t < stopDefault - 0.12
                                                 ? _ShowSettingsButton(
-                                                    onTap: () => _settleAt(stopDefault),
+                                                    onTap: () =>
+                                                        _settleAt(stopDefault),
                                                   )
-                                                : const _Hint(text: 'Pinch to zoom'),
+                                                : const _Hint(
+                                                    text: 'Pinch to zoom',
+                                                  ),
                                           ),
                                         if (studio.isPlanning)
                                           const Positioned(
@@ -1293,7 +1397,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                     // guess about which state comes next, and the one state
                                     // you want is never the one you get.
                                     onTap: () => _settleAt(
-                                      _previewCollapse.value > stopDefault - 0.01
+                                      _previewCollapse.value >
+                                              stopDefault - 0.01
                                           ? stopDefault
                                           : stopSettings,
                                     ),
@@ -1328,10 +1433,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             // Soft grey rather than the hairline border colour:
                                             // against this surface a border-toned pill reads as
                                             // a scratch on the screen rather than a handle.
-                                            color: AppColors.textSecondary.withValues(
-                                              alpha: 0.28,
+                                            color: AppColors.textSecondary
+                                                .withValues(alpha: 0.28),
+                                            borderRadius: BorderRadius.circular(
+                                              2,
                                             ),
-                                            borderRadius: BorderRadius.circular(2),
                                           ),
                                         ),
                                       ),
@@ -1355,7 +1461,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                           onLoadSamples: _loadSamples,
                                           onRemoveTile: _removeTile,
                                           onCropTile:
-                                              modeSupportsTileCrops(settings.mosaicMode)
+                                              modeSupportsTileCrops(
+                                                settings.mosaicMode,
+                                              )
                                               ? (t) => _onCropTile(context, t)
                                               : null,
                                           tilesScroll: _tilesScroll,
@@ -1366,7 +1474,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                           color: AppColors.border,
                                           height: AppSpacing.x6,
                                         ),
-                                        Text('Mode', style: AppTypography.label),
+                                        Text(
+                                          'Mode',
+                                          style: AppTypography.label,
+                                        ),
                                         const SizedBox(height: AppSpacing.x2),
                                         _buildModeGroups(settings, update),
                                         if (isAncient)
@@ -1377,48 +1488,114 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             curved: isAncientCurved,
                                           ),
                                         if (isWordart)
-                                          _buildWordartPanel(studio, settings, update),
+                                          _buildWordartPanel(
+                                            studio,
+                                            settings,
+                                            update,
+                                          ),
                                         if (!isTileless) ...[
                                           const SizedBox(height: AppSpacing.x4),
-                                          // One switch, not a dial. The useful range of a
-                                          // reuse cap is a single value — the arithmetic
-                                          // floor, cells / photos — and every number above it
-                                          // is a slower walk back to unlimited. Stored as a
-                                          // sentinel rather than that number so it stays "as
-                                          // even as possible" when the density changes.
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(
-                                                      'Limit photo repeats',
-                                                      style: AppTypography.caption,
-                                                    ),
-                                                    Text(
-                                                      'Brings more of your library into '
-                                                      'the picture. Matches get less '
-                                                      'accurate.',
-                                                      style: AppTypography.caption
-                                                          .copyWith(
-                                                            color: AppColors.textMuted,
-                                                          ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                              Switch(
-                                                value:
-                                                    settings.maxTileUses == evenTileUses,
-                                                onChanged: (on) => update(
-                                                  settings.copyWith(
-                                                    maxTileUses: on ? evenTileUses : 0,
+                                          // Three choices, not a dial: Off (unlimited) ·
+                                          // Max 3 · Unique — web parity (settings-panel).
+                                          // Stored as sentinels so they keep their meaning
+                                          // when the density changes (resolveMaxTileUses).
+                                          // Unique needs at least as many photos as cells;
+                                          // with fewer it is shown disabled.
+                                          Builder(
+                                            builder: (context) {
+                                              final cells =
+                                                  studio
+                                                      .plan
+                                                      ?.placements
+                                                      .length ??
+                                                  0;
+                                              final photos =
+                                                  studio.tiles.length;
+                                              final uniqueImpossible =
+                                                  cells > 0 && cells > photos;
+                                              // The "Max N" label from the real numbers —
+                                              // the cap resolveMaxTileUses will apply for
+                                              // this library and plan. Display only.
+                                              final maxRepeats =
+                                                  cells > 0 && photos > 0
+                                                  ? math.max(
+                                                      limitedRepeatsMax,
+                                                      minFeasibleTileUses(
+                                                        photos,
+                                                        cells,
+                                                      ),
+                                                    )
+                                                  : limitedRepeatsMax;
+                                              final current =
+                                                  settings.maxTileUses ==
+                                                          evenTileUses ||
+                                                      settings.maxTileUses ==
+                                                          uniqueTileUses
+                                                  ? settings.maxTileUses
+                                                  : 0;
+                                              final hint =
+                                                  current == uniqueTileUses
+                                                  ? (uniqueImpossible
+                                                        ? 'Unique needs at least as many photos as cells — '
+                                                              'about $cells cells, $photos photos. Lower the '
+                                                              'density or add photos.'
+                                                        : 'Every photo at most once. Uses more of your '
+                                                              'library; the picture can look less precise.')
+                                                  : current == evenTileUses
+                                                  ? 'No photo appears more than $maxRepeats times.'
+                                                  : 'Photos repeat freely wherever they match best — '
+                                                        'the most accurate picture.';
+                                              return Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    'Limit photo repeats',
+                                                    style:
+                                                        AppTypography.caption,
                                                   ),
-                                                ),
-                                              ),
-                                            ],
+                                                  const SizedBox(
+                                                    height: AppSpacing.x2,
+                                                  ),
+                                                  SegmentedSelector<int>(
+                                                    options: [
+                                                      const SegmentOption(
+                                                        0,
+                                                        'Off',
+                                                      ),
+                                                      SegmentOption(
+                                                        evenTileUses,
+                                                        'Max $maxRepeats',
+                                                      ),
+                                                      const SegmentOption(
+                                                        uniqueTileUses,
+                                                        'Unique',
+                                                      ),
+                                                    ],
+                                                    selected: current,
+                                                    disabled: uniqueImpossible
+                                                        ? const {uniqueTileUses}
+                                                        : const {},
+                                                    onSelected: (v) => update(
+                                                      settings.copyWith(
+                                                        maxTileUses: v,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(
+                                                    height: AppSpacing.x2,
+                                                  ),
+                                                  Text(
+                                                    hint,
+                                                    style: AppTypography.caption
+                                                        .copyWith(
+                                                          color: AppColors
+                                                              .textMuted,
+                                                        ),
+                                                  ),
+                                                ],
+                                              );
+                                            },
                                           ),
                                           // Breathing room before the sliders start —
                                           // a switch butted straight against a slider
@@ -1429,8 +1606,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             value: settings.density,
                                             min: 40,
                                             max: 500,
-                                            onChanged: (v) =>
-                                                update(settings.copyWith(density: v)),
+                                            onChanged: (v) => update(
+                                              settings.copyWith(density: v),
+                                            ),
                                           ),
                                           // Variety dial retired — pinned to
                                           // fixedReusePenalty. Measured better than every
@@ -1442,18 +1620,23 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             max: 0.5,
                                             valueLabel: settings.tintStrength
                                                 .toStringAsFixed(2),
-                                            onChanged: (v) => _controller
-                                                .updateRenderParam(tintStrength: v),
+                                            onChanged: (v) =>
+                                                _controller.updateRenderParam(
+                                                  tintStrength: v,
+                                                ),
                                           ),
                                           LabeledSlider(
                                             label: 'Saturation',
                                             value: settings.outputSaturation,
                                             min: minOutputSaturation,
                                             max: maxOutputSaturation,
-                                            valueLabel: settings.outputSaturation
+                                            valueLabel: settings
+                                                .outputSaturation
                                                 .toStringAsFixed(2),
-                                            onChanged: (v) => _controller
-                                                .updateRenderParam(outputSaturation: v),
+                                            onChanged: (v) =>
+                                                _controller.updateRenderParam(
+                                                  outputSaturation: v,
+                                                ),
                                           ),
                                           const Divider(
                                             color: AppColors.border,
@@ -1466,8 +1649,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             max: 2,
                                             valueLabel: settings.colorBoost
                                                 .toStringAsFixed(2),
-                                            onChanged: (v) =>
-                                                update(settings.copyWith(colorBoost: v)),
+                                            onChanged: (v) => update(
+                                              settings.copyWith(colorBoost: v),
+                                            ),
                                           ),
                                           LabeledSlider(
                                             label: 'Auto contrast',
@@ -1477,7 +1661,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                             valueLabel: settings.autoContrast
                                                 .toStringAsFixed(2),
                                             onChanged: (v) => update(
-                                              settings.copyWith(autoContrast: v),
+                                              settings.copyWith(
+                                                autoContrast: v,
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -1530,7 +1716,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                 : _StudioActionBar(
                     rendering: rendering,
                     printAllowed: isPrintRegionAllowed(),
-                    onExport: rendering ? null : () => _onExport(context, canRender),
+                    onExport: rendering
+                        ? null
+                        : () => _onExport(context, canRender),
                     // The reel generator draws every cell as a RECTANGLE. That is right
                     // for the grid modes and wrong for the two shaped ones: a honeycomb
                     // or a cube wall would come out as floating rectangles with gaps
@@ -1643,7 +1831,9 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
                 // Enter adds AND lets the keyboard close (single line, no re-focus).
                 onSubmitted: _add,
                 decoration: InputDecoration(
-                  hintText: phrases.isEmpty ? 'Type a word or phrase…' : 'Add another…',
+                  hintText: phrases.isEmpty
+                      ? 'Type a word or phrase…'
+                      : 'Add another…',
                   isDense: true,
                   filled: true,
                   fillColor: AppColors.background,
@@ -1765,7 +1955,10 @@ class _SourceAndTiles extends StatelessWidget {
           const SizedBox(height: AppSpacing.x2),
           Row(
             children: [
-              Text('Tiles (${studio.tiles.length})', style: AppTypography.label),
+              Text(
+                'Tiles (${studio.tiles.length})',
+                style: AppTypography.label,
+              ),
               const Spacer(),
               TextButton.icon(
                 onPressed: studio.isUploadingTiles ? null : onLoadSamples,
@@ -1780,7 +1973,10 @@ class _SourceAndTiles extends StatelessWidget {
             ],
           ),
           if (onCropTile != null && studio.tiles.isNotEmpty) ...[
-            Text('Tap a photo to crop or remove it', style: AppTypography.caption),
+            Text(
+              'Tap a photo to crop or remove it',
+              style: AppTypography.caption,
+            ),
             const SizedBox(height: AppSpacing.x1),
           ],
           SizedBox(
@@ -1799,28 +1995,35 @@ class _SourceAndTiles extends StatelessWidget {
                     controller: tilesScroll,
                     scrollDirection: Axis.horizontal,
                     itemCount: studio.tiles.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.x2),
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(width: AppSpacing.x2),
                     itemBuilder: (context, i) {
                       final tile = studio.tiles[i];
                       final highlighted = tile.id == highlightedTileId;
                       // Slot-keyed, not id-keyed: in a non-square mode the bare id
                       // holds the SQUARE crop, so the strip would contradict the mosaic.
-                      final crop = studio.tileCrops[studio.cropSlotFor(tile.id)];
+                      final crop =
+                          studio.tileCrops[studio.cropSlotFor(tile.id)];
                       return Stack(
                         children: [
                           // The thumbnail is framed exactly as the mosaic will use
                           // it, so the strip answers "what did I set for this tile?"
                           // at a glance — automatic crop included.
                           GestureDetector(
-                            onTap: onCropTile == null ? null : () => onCropTile!(tile),
+                            onTap: onCropTile == null
+                                ? null
+                                : () => onCropTile!(tile),
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(AppRadius.chip),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.chip,
+                              ),
                               child: CustomPaint(
                                 size: const Size(56, 56),
                                 painter: _TileThumbPainter(
                                   image: tile.thumbnail,
                                   crop: crop,
-                                  topCrop: studio.settings.mosaicMode == 'square',
+                                  topCrop:
+                                      studio.settings.mosaicMode == 'square',
                                 ),
                               ),
                             ),
@@ -1832,9 +2035,13 @@ class _SourceAndTiles extends StatelessWidget {
                               child: IgnorePointer(
                                 child: DecoratedBox(
                                   decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(AppRadius.chip),
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadius.chip,
+                                    ),
                                     border: Border.all(
-                                      color: AppColors.accent.withValues(alpha: 0.45),
+                                      color: AppColors.accent.withValues(
+                                        alpha: 0.45,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1848,8 +2055,13 @@ class _SourceAndTiles extends StatelessWidget {
                                 duration: const Duration(milliseconds: 200),
                                 child: DecoratedBox(
                                   decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(AppRadius.chip),
-                                    border: Border.all(color: AppColors.accent, width: 2),
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadius.chip,
+                                    ),
+                                    border: Border.all(
+                                      color: AppColors.accent,
+                                      width: 2,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1991,7 +2203,8 @@ class _PlanLayer extends StatefulWidget {
   State<_PlanLayer> createState() => _PlanLayerState();
 }
 
-class _PlanLayerState extends State<_PlanLayer> with SingleTickerProviderStateMixin {
+class _PlanLayerState extends State<_PlanLayer>
+    with SingleTickerProviderStateMixin {
   AnimationController? _drift;
 
   @override
@@ -2027,14 +2240,21 @@ class _PlanLayerState extends State<_PlanLayer> with SingleTickerProviderStateMi
   Widget build(BuildContext context) {
     final drift = _drift;
     if (drift == null) return _paint(1);
-    return AnimatedBuilder(animation: drift, builder: (_, _) => _paint(drift.value));
+    return AnimatedBuilder(
+      animation: drift,
+      builder: (_, _) => _paint(drift.value),
+    );
   }
 }
 
 /// Thin progress banner under the app bar while restoring a project or adding
 /// tiles. Shows an indeterminate bar until [total] is known, then a count.
 class _BusyBanner extends StatelessWidget {
-  const _BusyBanner({required this.label, required this.done, required this.total});
+  const _BusyBanner({
+    required this.label,
+    required this.done,
+    required this.total,
+  });
 
   final String label;
   final int done;
@@ -2054,7 +2274,10 @@ class _BusyBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(hasProgress ? '$label $done/$total' : label, style: AppTypography.caption),
+          Text(
+            hasProgress ? '$label $done/$total' : label,
+            style: AppTypography.caption,
+          ),
           const SizedBox(height: AppSpacing.x2),
           hasProgress
               ? AppProgressBar(percent: done / total * 100)
@@ -2072,7 +2295,10 @@ class _Hint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.x2, vertical: 2),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.x2,
+        vertical: 2,
+      ),
       decoration: BoxDecoration(
         color: Colors.black45,
         borderRadius: BorderRadius.circular(AppRadius.chip),
@@ -2082,7 +2308,10 @@ class _Hint extends StatelessWidget {
         children: [
           const Icon(Icons.zoom_in, size: 14, color: Colors.white70),
           const SizedBox(width: 4),
-          Text(text, style: AppTypography.caption.copyWith(color: Colors.white70)),
+          Text(
+            text,
+            style: AppTypography.caption.copyWith(color: Colors.white70),
+          ),
         ],
       ),
     );
@@ -2239,7 +2468,9 @@ class _CaptionField extends StatefulWidget {
 }
 
 class _CaptionFieldState extends State<_CaptionField> {
-  late final TextEditingController _text = TextEditingController(text: widget.caption);
+  late final TextEditingController _text = TextEditingController(
+    text: widget.caption,
+  );
   List<String> _swatches = const [];
   // The title is baked into the whole word field, so committing it re-packs the
   // (expensive) layout. Debounce keystrokes and commit on a pause / submit —
@@ -2313,7 +2544,10 @@ class _CaptionFieldState extends State<_CaptionField> {
           style: AppTypography.body,
           onChanged: (v) {
             _debounce?.cancel();
-            _debounce = Timer(const Duration(milliseconds: 450), () => _commit(v));
+            _debounce = Timer(
+              const Duration(milliseconds: 450),
+              () => _commit(v),
+            );
           },
           onSubmitted: _commit,
           decoration: InputDecoration(
@@ -2388,7 +2622,11 @@ class _AutoColorChip extends StatelessWidget {
 
 /// A single photo-derived colour swatch for the title colour.
 class _SwatchDot extends StatelessWidget {
-  const _SwatchDot({required this.color, required this.selected, required this.onTap});
+  const _SwatchDot({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
   final Color color;
   final bool selected;
   final VoidCallback onTap;

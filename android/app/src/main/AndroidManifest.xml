@@ -2,11 +2,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- gal: save mosaics/videos to the gallery. WRITE_EXTERNAL_STORAGE only on
-         API ≤ 29 (scoped storage handles 30+); READ_MEDIA_IMAGES for access on
-         Android 13+. -->
+         API ≤ 29; from Android 10 saving needs no permission (gal hasAccess → true).
+         No READ_MEDIA_IMAGES / READ_MEDIA_VIDEO: photos are chosen with the system
+         Photo Picker (image_picker), which needs none — and Google Play rejects
+         broad media access when the picker would do. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <application
         android:label="Imagia"
         android:name="${applicationName}"

@@ -18,11 +18,15 @@ class SegmentedSelector<T> extends StatelessWidget {
     required this.options,
     required this.selected,
     required this.onSelected,
+    this.disabled = const {},
   });
 
   final List<SegmentOption<T>> options;
   final T selected;
   final ValueChanged<T> onSelected;
+
+  /// Options shown but not selectable (dimmed).
+  final Set<T> disabled;
 
   @override
   Widget build(BuildContext context) {
@@ -34,26 +38,35 @@ class SegmentedSelector<T> extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(right: AppSpacing.x2),
               child: GestureDetector(
-                onTap: () => onSelected(opt.value),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.x4, vertical: AppSpacing.x2),
-                  decoration: BoxDecoration(
-                    color: opt.value == selected
-                        ? AppColors.primary
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(AppRadius.control),
-                    border: Border.all(
+                onTap: disabled.contains(opt.value)
+                    ? null
+                    : () => onSelected(opt.value),
+                child: Opacity(
+                  opacity: disabled.contains(opt.value) ? 0.35 : 1,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.x4,
+                      vertical: AppSpacing.x2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: opt.value == selected
+                          ? AppColors.primary
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(AppRadius.control),
+                      border: Border.all(
                         color: opt.value == selected
                             ? AppColors.primaryBright
-                            : AppColors.border),
-                  ),
-                  child: Text(
-                    opt.label,
-                    style: AppTypography.label.copyWith(
+                            : AppColors.border,
+                      ),
+                    ),
+                    child: Text(
+                      opt.label,
+                      style: AppTypography.label.copyWith(
                         color: opt.value == selected
                             ? AppColors.textPrimary
-                            : AppColors.textSecondary),
+                            : AppColors.textSecondary,
+                      ),
+                    ),
                   ),
                 ),
               ),

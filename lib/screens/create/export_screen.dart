@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/config.dart';
+import '../../state/auth_controller.dart';
 import '../../state/render_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -65,7 +66,19 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(minutes: 2),
     ));
-    await dio.download(_resolveUrl(url), path);
+    final full = _resolveUrl(url);
+    // New mosaics download for their OWNER only (the server's restricted access),
+    // so send the sign-in — as the preview and downloads screens do. Only to our
+    // own server, never to another host the URL might point at.
+    final token = full.startsWith(AppConfig.apiBaseUrl)
+        ? await ref.read(tokenStorageProvider).read()
+        : null;
+    await dio.download(
+      full,
+      path,
+      options: Options(
+          headers: token != null ? {'Authorization': 'Bearer $token'} : null),
+    );
     return File(path);
   }
 

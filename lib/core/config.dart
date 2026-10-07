@@ -1,4 +1,3 @@
-import 'dart:io';
 
 /// App-wide configuration. The API base URL can be overridden at build time
 /// with `--dart-define=API_BASE_URL=...`; defaults to production (the same host
@@ -18,16 +17,13 @@ abstract final class AppConfig {
   /// Launch bridge: mosaic generation is FREE and the in-app token-purchase UI is
   /// hidden. Web is unaffected.
   ///
-  /// PER PLATFORM, deliberately:
-  ///  - iOS is OFF the bridge — StoreKit IAP is live, so exports cost a token
-  ///    exactly as they do on web, and the purchase tiles appear in Account.
-  ///  - Android STAYS on it until Play Billing is set up. Turning it off there
-  ///    would expose the Creem webview for a digital purchase, which breaches
-  ///    Play's payments policy exactly as it would Apple's. Selling nothing in
-  ///    the app is the compliant interim.
+  /// Both phones are now OFF the bridge: in-app purchase is live on each (StoreKit on
+  /// iOS, Google Play Billing on Android), so an export costs a token exactly as on
+  /// web, and the purchase tiles appear in Account. With this false the app stops
+  /// sending the free-render key, so the server charges every render.
   ///
-  /// NB `final`, not `const`: it reads [Platform] at startup.
-  static final bool freeRenders = !Platform.isIOS;
+  /// NB `final`, not `const` (kept so a platform can be put back on the bridge).
+  static final bool freeRenders = false;
 
   /// Shared secret identifying the mobile app to the server's free-render path
   /// (must equal the server env `MOBILE_FREE_RENDER_SECRET`). Soft gate — set

@@ -28,22 +28,44 @@ class DownloadsScreen extends ConsumerStatefulWidget {
 class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
   String? _busyId;
 
+  /// 0..1 while the busy row's file is downloading (null = size not known yet).
+  /// Full-resolution mosaics are 60–100 MB, so a bare spinner looked stuck.
+  double? _progress;
+
   Future<File> _download(DownloadRecord d) async {
     final token = await ref.read(tokenStorageProvider).read();
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/${d.fileName}';
-    await Dio().download(
+    // Fail fast on a dead connection (otherwise the spinner never ends); the
+    // receive timeout is per chunk, so a slow but moving download is fine.
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 1),
+    ));
+    await dio.download(
       '${AppConfig.apiBaseUrl}${d.downloadPath}',
       path,
       options: Options(
         headers: token != null ? {'Authorization': 'Bearer $token'} : null,
       ),
+      onReceiveProgress: (got, total) {
+        final known = total > 0 ? total : (d.fileSizeBytes ?? 0);
+        if (known <= 0 || !mounted) return;
+        final p = (got / known).clamp(0.0, 1.0);
+        // Repaint only on whole-percent steps.
+        if (_progress == null || (p * 100).floor() != (_progress! * 100).floor()) {
+          setState(() => _progress = p);
+        }
+      },
     );
     return File(path);
   }
 
   Future<void> _run(DownloadRecord d, Future<void> Function(File) action) async {
-    setState(() => _busyId = d.id);
+    setState(() {
+      _busyId = d.id;
+      _progress = null;
+    });
     try {
       final file = await _download(d);
       await action(file);
@@ -53,7 +75,12 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
             .showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     } finally {
-      if (mounted) setState(() => _busyId = null);
+      if (mounted) {
+        setState(() {
+          _busyId = null;
+          _progress = null;
+        });
+      }
     }
   }
 
@@ -108,11 +135,26 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                                 style: AppTypography.label),
                           ),
                           if (busy)
-                            const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: AppColors.accent),
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        value: _progress,
+                                        strokeWidth: 2,
+                                        color: AppColors.accent),
+                                  ),
+                                  if (_progress != null) ...[
+                                    const SizedBox(width: 8),
+                                    Text('${(_progress! * 100).round()}%',
+                                        style: AppTypography.caption),
+                                  ],
+                                ],
+                              ),
                             )
                           else ...[
                             IconButton(

@@ -84,16 +84,29 @@ Future<({TileDescriptor descriptor, ui.Image thumbnail})>
         {int thumbSize = 200}) async {
   final probe = await _decode(bytes);
   final srcW = probe.width, srcH = probe.height;
-  final descriptor = await _analyzeFromProbe(id, name, bytes, srcW, srcH);
 
   final longSide = srcW > srcH ? srcW : srcH;
   final scale = thumbSize / longSide;
+  // The thumbnail is DECODED at its size, not drawn from the probe on the GPU: a
+  // Picture.toImage per tile kept the probe (and an offscreen render target) alive
+  // in graphics memory until GC — ~0.5 GB on a 500-tile restore, enough to get the
+  // app killed on 2–3 GB phones. So: the probe goes as soon as its size is known.
+  final ui.Image thumbnail;
   if (scale >= 1) {
-    return (descriptor: descriptor, thumbnail: probe);
+    thumbnail = probe;
+  } else {
+    probe.dispose();
+    thumbnail = await _decode(bytes,
+        targetWidth: math.max(1, (srcW * scale).round()),
+        targetHeight: math.max(1, (srcH * scale).round()));
   }
-  final thumb = await _resize(probe, (srcW * scale).round(), (srcH * scale).round());
-  probe.dispose();
-  return (descriptor: descriptor, thumbnail: thumb);
+  try {
+    final descriptor = await _analyzeFromProbe(id, name, bytes, srcW, srcH);
+    return (descriptor: descriptor, thumbnail: thumbnail);
+  } catch (e) {
+    thumbnail.dispose();
+    rethrow;
+  }
 }
 
 Future<TileDescriptor> _analyzeFromProbe(
@@ -129,17 +142,6 @@ Future<TileDescriptor> _analyzeFromProbe(
 }
 
 /// GPU-resizes an already-decoded image (no re-decode).
-Future<ui.Image> _resize(ui.Image src, int w, int h) async {
-  final recorder = ui.PictureRecorder();
-  final canvas = ui.Canvas(recorder);
-  canvas.drawImageRect(
-    src,
-    ui.Rect.fromLTWH(0, 0, src.width.toDouble(), src.height.toDouble()),
-    ui.Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
-    ui.Paint()..filterQuality = ui.FilterQuality.medium,
-  );
-  return recorder.endRecording().toImage(w, h);
-}
 
 class _PlanArgs {
   _PlanArgs(this.rgba, this.sampleW, this.sampleH, this.sourceW, this.sourceH,

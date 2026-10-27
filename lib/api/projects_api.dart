@@ -13,7 +13,11 @@ class ProjectSummary {
     required this.updatedAt,
     this.baseImageUrl,
     this.baseImageName,
+    this.hasTips = false,
   });
+
+  /// The Imagia team left tips on this project (shown in full in the studio).
+  final bool hasTips;
 
   final String id;
   final String name;
@@ -36,6 +40,7 @@ class ProjectSummary {
         updatedAt: j['updatedAt']?.toString() ?? '',
         baseImageUrl: j['baseImageUrl'] as String?,
         baseImageName: j['baseImageName'] as String?,
+        hasTips: ((j['tips'] as String?) ?? '').trim().isNotEmpty,
       );
 }
 

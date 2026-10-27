@@ -48,8 +48,16 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
   /// Centre of the visible window in IMAGE pixels; null = centred.
   Offset? _focus;
 
-  /// Sharp re-render for the current window, or null when none is ready.
+  /// Sharp re-render of [_sharpWindow], or null when none is ready.
   ui.Image? _sharp;
+
+  /// The part of the picture (image px) [_sharp] was rendered for. Kept because the
+  /// pane keeps resizing while the settings are dragged, and the window moves with
+  /// it: drawn into the WHOLE box, a sharp crop made for the previous size came out
+  /// stretched and squashed until the next render landed — the "preview shrinks and
+  /// behaves weird" bug in word art and stone art. Drawn where this window sits in
+  /// the current one, it stays exactly right at any size.
+  ui.Rect? _sharpWindow;
   int _token = 0;
 
   /// Last laid-out size, captured in [build] from the LayoutBuilder.
@@ -139,6 +147,7 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
       setState(() {
         _sharp?.dispose();
         _sharp = img;
+        _sharpWindow = crop;
       });
     } catch (_) {
       // Fall back to magnifying the bitmap — a soft view beats a blank one.
@@ -199,6 +208,7 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
             painter: _ImageWindowPainter(
               image: widget.image,
               sharp: _sharp,
+              sharpWindow: _sharpWindow,
               window: win,
             ),
           ),
@@ -212,30 +222,23 @@ class _ImageWindowPainter extends CustomPainter {
   _ImageWindowPainter({
     required this.image,
     required this.sharp,
+    required this.sharpWindow,
     required this.window,
   });
 
   final ui.Image image;
 
-  /// Natively-rendered pixels for exactly [window], when available.
+  /// Natively-rendered pixels for [sharpWindow], when available.
   final ui.Image? sharp;
+  final ui.Rect? sharpWindow;
   final ui.Rect window;
 
   @override
   void paint(Canvas canvas, Size size) {
     final dst = Offset.zero & size;
     canvas.drawRect(dst, Paint()..color = AppColors.background);
-    final s = sharp;
-    if (s != null) {
-      // Already rendered at this window and resolution — draw it 1:1.
-      canvas.drawImageRect(
-        s,
-        Rect.fromLTWH(0, 0, s.width.toDouble(), s.height.toDouble()),
-        dst,
-        Paint()..filterQuality = FilterQuality.medium,
-      );
-      return;
-    }
+    // The fitted bitmap first: it fills any part of the window the sharp crop does
+    // not cover (the window grew since the crop was rendered).
     canvas.drawImageRect(
       image,
       window,
@@ -244,9 +247,32 @@ class _ImageWindowPainter extends CustomPainter {
         ..filterQuality = FilterQuality.high
         ..isAntiAlias = true,
     );
+    final s = sharp, sw = sharpWindow;
+    if (s == null || sw == null || window.width <= 0) return;
+    // Where the sharp crop's part of the picture sits on screen NOW. Window and box
+    // share an aspect, so one scale maps image px to screen px on both axes.
+    final k = size.width / window.width;
+    final at = Rect.fromLTWH(
+      (sw.left - window.left) * k,
+      (sw.top - window.top) * k,
+      sw.width * k,
+      sw.height * k,
+    );
+    canvas.save();
+    canvas.clipRect(dst);
+    canvas.drawImageRect(
+      s,
+      Rect.fromLTWH(0, 0, s.width.toDouble(), s.height.toDouble()),
+      at,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(_ImageWindowPainter old) =>
-      old.image != image || old.sharp != sharp || old.window != window;
+      old.image != image ||
+      old.sharp != sharp ||
+      old.sharpWindow != sharpWindow ||
+      old.window != window;
 }

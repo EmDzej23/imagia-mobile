@@ -20,6 +20,8 @@ import '../../mosaic/types.dart';
 import '../../print/print_catalog.dart' show isPrintRegionAllowed;
 import '../../services/haptics.dart';
 import '../../state/render_controller.dart';
+import '../../api/notifications_api.dart' show ProjectTip;
+import '../../state/project_tips.dart';
 import '../../state/studio_controller.dart';
 import '../../state/video_controller.dart';
 import '../../theme/app_colors.dart';
@@ -30,6 +32,8 @@ import '../../widgets/confirm_dialog.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
+import '../../widgets/export_format_sheet.dart';
+import '../../widgets/project_tips.dart';
 import '../../wordart/parse_texts.dart';
 import '../../wordart/wordart_renderer.dart' show suggestColorsFromRgba;
 import 'ancient_preview.dart';
@@ -967,9 +971,27 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     _controller.setTileCrop(tile.id, result.cleared ? null : result.crop);
   }
 
-  void _onExport(BuildContext context, bool canRender) {
+  /// Word art, and the stone mosaic without shape motifs, are drawn as vector
+  /// shapes, so they can export as PDF or SVG too (same rule as the web; shape
+  /// motifs mix in a raster backdrop and emoji sprites, so they stay JPG).
+  bool get _canExportVector {
+    final s = ref.read(studioControllerProvider).settings;
+    return s.mosaicMode == 'wordart' ||
+        s.mosaicMode == 'ancient' ||
+        (s.mosaicMode == 'ancient-curved' && s.ancientShape == 'none');
+  }
+
+  Future<void> _onExport(BuildContext context, bool canRender) async {
     if (canRender) {
-      ref.read(renderControllerProvider.notifier).reset();
+      var format = 'jpg';
+      if (_canExportVector) {
+        final picked = await showExportFormatSheet(context);
+        if (picked == null || !context.mounted) return;
+        format = picked;
+      }
+      final render = ref.read(renderControllerProvider.notifier);
+      render.reset();
+      render.setFormat(format);
       context.push('/create/export');
       return;
     }
@@ -1037,8 +1059,43 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     return null;
   }
 
+  /// Tips already popped up this session, so each pops once (like the web's bell).
+  final Set<String> _tipsShown = {};
+
+  /// Shows the tips and marks them read, so the web bell agrees.
+  Future<void> _openTips(ProjectTip tip) async {
+    _tipsShown.add(tip.id);
+    final shown = showProjectTipsSheet(context, tip);
+    if (!tip.read) {
+      await ref.read(notificationsApiProvider).markRead(tip.id).catchError((_) {});
+      ref.invalidate(currentProjectTipProvider);
+    }
+    await shown;
+  }
+
+  /// Hide these tips (until the team writes new ones) and count them as read.
+  Future<void> _dismissTips(ProjectTip tip) async {
+    _tipsShown.add(tip.id);
+    await ref.read(dismissedTipsProvider).add(tip.id);
+    if (!tip.read) {
+      await ref.read(notificationsApiProvider).markRead(tip.id).catchError((_) {});
+    }
+    ref.invalidate(currentProjectTipProvider);
+    ref.invalidate(visibleTipProjectsProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Unread tips from the Imagia team on the project just opened pop up once.
+    ref.listen(currentProjectTipProvider, (_, next) {
+      final tip = next.value;
+      if (tip == null || tip.read || _tipsShown.contains(tip.id)) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openTips(tip);
+      });
+    });
+    final projectTip = ref.watch(currentProjectTipProvider).value;
+
     // Surface upload/picker/restore failures instead of swallowing them.
     ref.listen(studioControllerProvider.select((s) => s.error), (_, err) {
       if (err != null) {
@@ -1465,6 +1522,15 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                         AppSpacing.x4,
                                       ),
                                       children: [
+                                        if (projectTip != null) ...[
+                                          ProjectTipsCard(
+                                            tip: projectTip,
+                                            onOpen: () => _openTips(projectTip),
+                                            onDismiss: () =>
+                                                _dismissTips(projectTip),
+                                          ),
+                                          const SizedBox(height: AppSpacing.x3),
+                                        ],
                                         _SourceAndTiles(
                                           studio: studio,
                                           onChangeBase: _changeBase,

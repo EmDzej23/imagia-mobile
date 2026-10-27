@@ -156,6 +156,18 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                                 ],
                               ),
                             )
+                          // PDF / SVG: no image preview and Photos can't hold
+                          // them — Share offers Save to Files, print, mail…
+                          else if (_isVector(d.fileName))
+                            IconButton(
+                              tooltip: 'Save to Files or share',
+                              icon: const Icon(Icons.ios_share,
+                                  color: AppColors.textSecondary),
+                              onPressed: () => _run(
+                                  d,
+                                  (f) => SharePlus.instance.share(
+                                      ShareParams(files: [XFile(f.path)]))),
+                            )
                           else ...[
                             IconButton(
                               tooltip: 'Preview',
@@ -196,4 +208,9 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
       ),
     );
   }
+}
+
+bool _isVector(String fileName) {
+  final n = fileName.toLowerCase();
+  return n.endsWith('.pdf') || n.endsWith('.svg');
 }

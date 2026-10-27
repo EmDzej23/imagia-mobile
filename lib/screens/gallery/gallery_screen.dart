@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../api/projects_api.dart';
 import '../../state/library_providers.dart';
+import '../../state/project_tips.dart';
 import '../../state/render_controller.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
@@ -114,6 +115,10 @@ class _ProjectCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Hidden once the user dismisses these tips; back when the team writes new ones.
+    final showTips = project.hasTips &&
+        (ref.watch(visibleTipProjectsProvider).value?.contains(project.id) ??
+            false);
     return AppCard(
       clip: true,
       onTap: () {
@@ -143,8 +148,21 @@ class _ProjectCard extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.label),
                 const SizedBox(height: AppSpacing.x1),
-                Text('${project.tileCount} tiles',
-                    style: AppTypography.caption),
+                Row(
+                  children: [
+                    Text('${project.tileCount} tiles',
+                        style: AppTypography.caption),
+                    if (showTips) ...[
+                      const SizedBox(width: AppSpacing.x2),
+                      const Icon(Icons.lightbulb_outline,
+                          size: 13, color: AppColors.accent),
+                      const SizedBox(width: 2),
+                      Text('Tips',
+                          style: AppTypography.caption
+                              .copyWith(color: AppColors.accent)),
+                    ],
+                  ],
+                ),
               ],
             ),
           ),

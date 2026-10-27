@@ -139,30 +139,59 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     switch (render.phase) {
       case RenderPhase.completed:
         final result = render.result!;
+        // PDF / SVG can't go into Photos — they go through the share sheet, which
+        // offers "Save to Files" (iOS) / Drive / Files (Android), print, mail…
+        final name = result.fileName.toLowerCase();
+        final vector = name.endsWith('.pdf') || name.endsWith('.svg');
+        final kind = name.endsWith('.pdf')
+            ? 'PDF'
+            : name.endsWith('.svg')
+                ? 'SVG'
+                : null;
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.check_circle,
                 color: AppColors.success, size: 64),
             const SizedBox(height: AppSpacing.x4),
-            Text('Your mosaic is ready', style: AppTypography.title),
+            Text(kind == null ? 'Your mosaic is ready' : 'Your $kind is ready',
+                style: AppTypography.title),
+            if (vector) ...[
+              const SizedBox(height: AppSpacing.x2),
+              Text(
+                'Vector file — sharp at any print size. Save it to Files or send it to your print shop.',
+                textAlign: TextAlign.center,
+                style: AppTypography.caption,
+              ),
+            ],
             const SizedBox(height: AppSpacing.x6),
-            PrimaryButton(
-              label: 'Save to Photos',
-              icon: Icons.download,
-              loading: _saving,
-              onPressed: _saving
-                  ? null
-                  : () => _save(result.downloadUrl, result.fileName),
-            ),
-            const SizedBox(height: AppSpacing.x3),
-            SecondaryButton(
-              label: 'Share',
-              icon: Icons.ios_share,
-              onPressed: _saving
-                  ? null
-                  : () => _share(result.downloadUrl, result.fileName),
-            ),
+            if (vector)
+              PrimaryButton(
+                label: 'Save to Files or share',
+                icon: Icons.ios_share,
+                loading: _saving,
+                onPressed: _saving
+                    ? null
+                    : () => _share(result.downloadUrl, result.fileName),
+              )
+            else ...[
+              PrimaryButton(
+                label: 'Save to Photos',
+                icon: Icons.download,
+                loading: _saving,
+                onPressed: _saving
+                    ? null
+                    : () => _save(result.downloadUrl, result.fileName),
+              ),
+              const SizedBox(height: AppSpacing.x3),
+              SecondaryButton(
+                label: 'Share',
+                icon: Icons.ios_share,
+                onPressed: _saving
+                    ? null
+                    : () => _share(result.downloadUrl, result.fileName),
+              ),
+            ],
             const SizedBox(height: AppSpacing.x3),
             TextButton(
               onPressed: () => context.go('/'),

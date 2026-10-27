@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -50,11 +51,19 @@ class TileCropScreen extends StatefulWidget {
     this.cropPortraitTop = true,
     this.cellAspect = 1.0,
     this.cellShape,
+    this.loadFullImage,
   });
 
   /// The tile's thumbnail. Crops are fractions, so editing the thumbnail and
   /// applying the result to the full-resolution file is exact.
   final ui.Image image;
+
+  /// Loads the uploaded photo. The thumbnail is only ~200 px — fine for the strip,
+  /// blurry across a whole screen — so the editor shows it at once and swaps to this
+  /// sharp copy when it has loaded. Same photo, same aspect, so the crop does not
+  /// move. (A loader, not a URL: tiles are private blobs, readable only through the
+  /// authenticated proxy — a plain GET of the blob URL is 403.)
+  final Future<Uint8List?> Function()? loadFullImage;
   final String title;
 
   /// The tile's current crop, if it has one — the editor opens ON it rather than
@@ -97,9 +106,47 @@ class _TileCropScreenState extends State<TileCropScreen> {
 
   double _zoomAtGestureStart = 1;
 
+  /// The sharp copy once loaded (see [TileCropScreen.loadFullImage]); owned here.
+  ui.Image? _full;
+  ui.Image get _image => _full ?? widget.image;
+
+  /// Longest side to decode the sharp copy at — more than any phone shows here,
+  /// without holding a huge bitmap in memory.
+  static const int _maxDecode = 2048;
+
+  Future<void> _loadFull() async {
+    final load = widget.loadFullImage;
+    if (load == null) return;
+    try {
+      final bytes = await load();
+      if (bytes == null || bytes.isEmpty) return;
+      final landscape = widget.image.width >= widget.image.height;
+      final codec = await ui.instantiateImageCodec(bytes,
+          targetWidth: landscape ? _maxDecode : null,
+          targetHeight: landscape ? null : _maxDecode,
+          allowUpscaling: false);
+      final img = (await codec.getNextFrame()).image;
+      codec.dispose();
+      if (!mounted) {
+        img.dispose();
+        return;
+      }
+      setState(() => _full = img);
+    } catch (_) {
+      // Offline or the blob is gone: keep editing on the thumbnail.
+    }
+  }
+
+  @override
+  void dispose() {
+    _full?.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadFull();
     final c = widget.initial;
     if (c != null) {
       _zoom = _zoomForCrop(c);
@@ -109,7 +156,7 @@ class _TileCropScreenState extends State<TileCropScreen> {
       // The automatic crop: centred, or anchored to the top for a portrait tile
       // in square layout — the same rule `centerCropSrc` applies when there is no
       // manual crop, so opening the editor does not move the picture.
-      final portrait = widget.image.height > widget.image.width;
+      final portrait = _image.height > _image.width;
       _zoom = 1;
       _cx = 0.5;
       _cy = portrait && widget.cropPortraitTop ? _side().h / 2 : 0.5;
@@ -117,8 +164,8 @@ class _TileCropScreenState extends State<TileCropScreen> {
     _clamp();
   }
 
-  double get _imgW => widget.image.width.toDouble();
-  double get _imgH => widget.image.height.toDouble();
+  double get _imgW => _image.width.toDouble();
+  double get _imgH => _image.height.toDouble();
 
   /// The largest box of the CELL'S aspect that fits the image, in pixels.
   ({double w, double h}) _maxBoxPx() {
@@ -230,7 +277,7 @@ class _TileCropScreenState extends State<TileCropScreen> {
                         height: boxH,
                         child: CustomPaint(
                           painter: _CropPainter(
-                              widget.image, _crop, widget.cellShape),
+                              _image, _crop, widget.cellShape),
                         ),
                       ),
                     ),

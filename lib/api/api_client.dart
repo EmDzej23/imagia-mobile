@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -22,6 +23,12 @@ class ApiResult<T> {
 /// Thin Dio wrapper that attaches the better-auth bearer token + Origin header
 /// (the server checks Origin), normalizes errors, and surfaces 401s through an
 /// [onUnauthorized] callback so the app can drop to the sign-in screen.
+final String _platform = Platform.isIOS
+    ? 'ios'
+    : Platform.isAndroid
+        ? 'android'
+        : 'other';
+
 class ApiClient {
   ApiClient(this._tokens, {Dio? dio})
       : _dio = dio ??
@@ -39,6 +46,11 @@ class ApiClient {
         // (admin "Latest downloads" reads it) and it must not disappear when the
         // free-render bridge is switched off.
         options.headers['X-Imagia-Client'] = 'mobile';
+        // Which phone OS. The server keeps the User-Agent on every session, and the
+        // admin users list reads the FIRST one to show where someone signed up —
+        // Dart's default ("Dart/3.x (dart:io)") names no OS.
+        options.headers['X-Imagia-Platform'] = _platform;
+        options.headers['User-Agent'] = 'Imagia-App ($_platform) Dart';
         // The key is the free-render bridge alone — it buys a free render, and
         // only while this platform is still on the bridge.
         if (AppConfig.freeRenders) {

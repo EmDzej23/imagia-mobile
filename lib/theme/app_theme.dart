@@ -48,6 +48,19 @@ abstract final class AppTheme {
         contentTextStyle: TextStyle(color: AppColors.textPrimary),
         behavior: SnackBarBehavior.floating,
       ),
+      // Text and outlined buttons default to colorScheme.primary — a dark navy meant
+      // for FILLED surfaces, nearly invisible as label text on this near-black
+      // chrome ("Change", "Samples", "Add", "Select"…). Their labels use the warm
+      // accent instead; buttons that set their own colour keep it.
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppColors.accent,
+          side: const BorderSide(color: AppColors.border),
+        ),
+      ),
       sliderTheme: const SliderThemeData(
         activeTrackColor: AppColors.primaryBright,
         inactiveTrackColor: AppColors.border,

@@ -946,6 +946,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
       MaterialPageRoute(
         builder: (_) => TileCropScreen(
           image: tile.thumbnail,
+          loadFullImage: () => _controller.tilePhotoBytes(tile.blobUrl),
           title: tile.filename,
           initial: studio.tileCrops[studio.cropSlotFor(tile.id)],
           cropPortraitTop: studio.settings.mosaicMode == 'square',

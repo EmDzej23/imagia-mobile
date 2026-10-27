@@ -877,6 +877,10 @@ class StudioController extends Notifier<StudioState> {
   /// Streams a blob directly through the authenticated proxy. We omit `maxSize`
   /// so the server does NOT re-encode with Sharp — uploaded tiles are already
   /// ≤600px and base images ≤2000px, so streaming the stored blob is fastest.
+  /// A tile's uploaded photo (sharper than its thumbnail), for the crop editor.
+  /// Tiles are PRIVATE blobs, so they can only be read through the proxy.
+  Future<Uint8List?> tilePhotoBytes(String blobUrl) => _proxyBytes(blobUrl);
+
   Future<Uint8List?> _proxyBytes(String blobUrl) {
     return ref
         .read(apiClientProvider)

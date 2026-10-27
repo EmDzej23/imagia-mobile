@@ -30,10 +30,12 @@ import '../../widgets/confirm_dialog.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
+import '../../wordart/parse_texts.dart';
 import '../../wordart/wordart_renderer.dart' show suggestColorsFromRgba;
 import 'ancient_preview.dart';
 import 'wordart_preview.dart';
 import 'base_crop_screen.dart';
+import 'manage_tiles_screen.dart';
 import 'tile_crop_screen.dart';
 import '../../widgets/segmented_selector.dart';
 
@@ -893,11 +895,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// Tile-less export (ancient / word art): the high-res 10k render runs on the
   /// server (free, saved to the profile Downloads). Routes to the shared export
   /// screen, which triggers the generative render + download/save flow.
-  void _onTilelessExport() {
-    ref.read(renderControllerProvider.notifier).reset();
-    context.push('/create/export');
-  }
-
   Future<void> _addTiles() async {
     await _controller.pickTileImages();
     _controller.buildPlan();
@@ -923,6 +920,18 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     if (!ok) return;
     _controller.removeTile(id);
     _controller.buildPlan();
+  }
+
+  /// Full-screen tile library. Tapping a photo there opens the same crop editor as
+  /// the strip (when the mode has crops); bulk delete re-plans once.
+  void _openManageTiles(bool withCrops) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ManageTilesScreen(
+          onOpenTile: withCrops ? _onCropTile : null,
+        ),
+      ),
+    );
   }
 
   /// Open the crop editor for one tile, seeded with its CURRENT crop, and apply
@@ -1044,6 +1053,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
 
     final studio = ref.watch(studioControllerProvider);
     final canRender = ref.watch(canRenderProvider);
+    final canRenderTileless = ref.watch(canRenderTilelessProvider);
     final rendering = ref.watch(
       renderControllerProvider.select((s) => s.phase == RenderPhase.rendering),
     );
@@ -1460,6 +1470,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                           onAddTiles: _addTiles,
                                           onLoadSamples: _loadSamples,
                                           onRemoveTile: _removeTile,
+                                          onManageTiles: () => _openManageTiles(
+                                            modeSupportsTileCrops(
+                                              settings.mosaicMode,
+                                            ),
+                                          ),
                                           onCropTile:
                                               modeSupportsTileCrops(
                                                 settings.mosaicMode,
@@ -1704,10 +1719,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                     child: SafeArea(
                       top: false,
                       child: PrimaryButton(
-                        label: rendering ? 'Rendering…' : 'Export full quality',
+                        label: rendering
+                            ? 'Rendering…'
+                            : (AppConfig.freeRenders
+                                  ? 'Export full quality'
+                                  : 'Export full quality (1)'),
                         loading: rendering,
                         icon: Icons.download,
-                        onPressed: rendering ? null : _onTilelessExport,
+                        onPressed: rendering
+                            ? null
+                            : () => _onExport(context, canRenderTileless),
                       ),
                     ),
                   ))
@@ -1758,19 +1779,16 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
   final TextEditingController _draft = TextEditingController();
   final FocusNode _focus = FocusNode();
 
-  List<String> get _phrases => widget.textInput
-      .split('\n')
-      .map((p) => p.trim())
-      .where((p) => p.isNotEmpty)
-      .toList();
+  // Same splitting as the renderer, so a project saved with a whole pasted list
+  // in one phrase shows as separate chips.
+  List<String> get _phrases => parseTextPhrases(widget.textInput);
 
   void _add(String raw) {
     final phrases = _phrases;
     var added = false;
-    // A paste may hold several lines — add each new, non-duplicate phrase.
-    for (final line in raw.split('\n')) {
-      final s = line.trim();
-      if (s.isEmpty) continue;
+    // A paste may hold a whole list ("a • b • c", one per line, …) — add each
+    // new, non-duplicate phrase.
+    for (final s in splitPhrases(raw)) {
       if (phrases.any((p) => p.toLowerCase() == s.toLowerCase())) continue;
       phrases.add(s);
       added = true;
@@ -1899,6 +1917,7 @@ class _SourceAndTiles extends StatelessWidget {
     required this.onAddTiles,
     required this.onLoadSamples,
     required this.onRemoveTile,
+    required this.onManageTiles,
     required this.tilesScroll,
     required this.highlightedTileId,
     this.onCropTile,
@@ -1910,6 +1929,9 @@ class _SourceAndTiles extends StatelessWidget {
   final VoidCallback onAddTiles;
   final VoidCallback onLoadSamples;
   final void Function(String id) onRemoveTile;
+
+  /// Opens the full-screen Manage tiles view (browse, crop, multi-select delete).
+  final VoidCallback onManageTiles;
   final ScrollController tilesScroll;
   final String? highlightedTileId;
 
@@ -2114,6 +2136,21 @@ class _SourceAndTiles extends StatelessWidget {
                     },
                   ),
           ),
+          if (studio.tiles.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.x2),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onManageTiles,
+                icon: const Icon(Icons.grid_view_rounded, size: 18),
+                label: Text('Manage tiles (${studio.tiles.length})'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.textPrimary,
+                  side: const BorderSide(color: AppColors.border),
+                ),
+              ),
+            ),
+          ],
         ],
       ],
     );

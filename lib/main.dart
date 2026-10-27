@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'router.dart';
+import 'services/install_ping.dart';
 import 'services/notifications.dart';
 import 'services/push_service.dart';
 import 'services/thumb_cache.dart';
@@ -19,6 +20,8 @@ Future<void> main() async {
   // Not awaited: housekeeping must never delay first paint, and a failure here is
   // harmless — a stale cover is still a cover.
   unawaited(ThumbCache.evictStale());
+  // Not awaited: one-time anonymous install count; retries next launch on failure.
+  unawaited(InstallPing.run());
   runApp(const ProviderScope(child: ImagiaApp()));
 }
 

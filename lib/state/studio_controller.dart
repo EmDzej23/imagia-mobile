@@ -476,12 +476,19 @@ class StudioController extends Notifier<StudioState> {
     }
   }
 
-  void removeTile(String id) {
-    // Drop the tile's crop with it — leaving it behind would silently re-apply to a
-    // re-added photo, since ids are derived from the (unchanged) blob URL.
-    final crops = Map<String, TileCrop>.from(state.tileCrops)..remove(id);
+  void removeTile(String id) => removeTiles({id});
+
+  /// Remove several tiles in one state change (Manage tiles → Delete), so the
+  /// caller re-plans once instead of once per photo.
+  void removeTiles(Set<String> ids) {
+    if (ids.isEmpty) return;
+    // Drop every crop slot the tiles own — square (bare id), |L, |P and |H. Leaving
+    // one behind would silently re-apply to a re-added photo, since ids are derived
+    // from the (unchanged) blob URL.
+    final crops = Map<String, TileCrop>.from(state.tileCrops)
+      ..removeWhere((slot, _) => ids.contains(slot.split('|').first));
     state = state.copyWith(
-      tiles: state.tiles.where((t) => t.id != id).toList(),
+      tiles: state.tiles.where((t) => !ids.contains(t.id)).toList(),
       tileCrops: crops,
     );
     _applyCropsToPlan(crops);
@@ -891,4 +898,12 @@ final canRenderProvider = Provider<bool>((ref) {
   final tokens = ref.watch(authControllerProvider).user?.tokenBalance ?? 0;
   final plan = ref.watch(studioControllerProvider).plan;
   return plan != null && (AppConfig.freeRenders || tokens > 0);
+});
+
+/// The tile-less modes (word art / stone art) have no plan, only a base photo —
+/// but their export costs a token just the same (/api/render-generative).
+final canRenderTilelessProvider = Provider<bool>((ref) {
+  final tokens = ref.watch(authControllerProvider).user?.tokenBalance ?? 0;
+  final base = ref.watch(studioControllerProvider).base;
+  return base != null && (AppConfig.freeRenders || tokens > 0);
 });

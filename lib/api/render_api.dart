@@ -86,8 +86,9 @@ class RenderApi {
   }
 
   /// Tile-less high-res render via `POST /api/render-generative` (word-art /
-  /// ancient shapes). Rendered in-Node with @napi-rs/canvas — no tiles, no plan,
-  /// and FREE (no tokens). Same response shape as [render], so it reuses
+  /// ancient shapes). Rendered in-Node with @napi-rs/canvas — no tiles, no plan.
+  /// Costs 1 token like [render] (free only while `AppConfig.freeRenders` sends
+  /// the bridge key). Same response shape as [render], so it reuses
   /// [RenderResult] and the export screen's download flow.
   Future<ApiResult<RenderResult>> renderGenerative({
     required String mode, // 'wordart' | 'ancient' | 'ancient-curved'

@@ -83,7 +83,7 @@ class RenderController extends Notifier<RenderUiState> {
     NotificationService.instance.requestPermission();
 
     // Tile-less modes (ancient / word art) have no tile plan — they render
-    // server-side from the base + look params via /api/render-generative (free).
+    // server-side from the base + look params via /api/render-generative (1 token).
     final mode = studio.settings.mosaicMode;
     if (mode == 'ancient' || mode == 'ancient-curved' || mode == 'wordart') {
       await _startGenerative(studio, mode);

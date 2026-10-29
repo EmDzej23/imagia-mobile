@@ -32,7 +32,6 @@ import '../../widgets/confirm_dialog.dart';
 import '../../widgets/labeled_slider.dart';
 import '../../widgets/sample_pack_sheet.dart';
 import '../../widgets/primary_button.dart';
-import '../../widgets/export_format_sheet.dart';
 import '../../widgets/project_tips.dart';
 import '../../wordart/parse_texts.dart';
 import '../../wordart/wordart_renderer.dart' show suggestColorsFromRgba;
@@ -971,27 +970,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     _controller.setTileCrop(tile.id, result.cleared ? null : result.crop);
   }
 
-  /// Word art, and the stone mosaic without shape motifs, are drawn as vector
-  /// shapes, so they can export as PDF or SVG too (same rule as the web; shape
-  /// motifs mix in a raster backdrop and emoji sprites, so they stay JPG).
-  bool get _canExportVector {
-    final s = ref.read(studioControllerProvider).settings;
-    return s.mosaicMode == 'wordart' ||
-        s.mosaicMode == 'ancient' ||
-        (s.mosaicMode == 'ancient-curved' && s.ancientShape == 'none');
-  }
-
-  Future<void> _onExport(BuildContext context, bool canRender) async {
+  void _onExport(BuildContext context, bool canRender) {
     if (canRender) {
-      var format = 'jpg';
-      if (_canExportVector) {
-        final picked = await showExportFormatSheet(context);
-        if (picked == null || !context.mounted) return;
-        format = picked;
-      }
-      final render = ref.read(renderControllerProvider.notifier);
-      render.reset();
-      render.setFormat(format);
+      ref.read(renderControllerProvider.notifier).reset();
       context.push('/create/export');
       return;
     }

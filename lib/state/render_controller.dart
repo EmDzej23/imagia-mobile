@@ -67,11 +67,6 @@ class RenderController extends Notifier<RenderUiState> {
 
   RenderApi get _api => ref.read(renderApiProvider);
 
-  /// File format for the next tile-less export ('jpg' | 'pdf' | 'svg'), chosen in
-  /// the studio's format sheet before the export screen starts the render.
-  String _format = 'jpg';
-  void setFormat(String format) => _format = format;
-
   /// Builds the slim plan + tileUrls from current studio state and runs the
   /// final server render synchronously (the route returns the result directly,
   /// proxying to the Cloud Run render service when enabled).
@@ -229,7 +224,6 @@ class RenderController extends Notifier<RenderUiState> {
       bakedLayout: bakedLayout,
       fileName: '${base.name}-$suffix',
       longSide: 10000,
-      format: _format,
     );
 
     if (!res.isOk || res.data == null) {
@@ -244,8 +238,5 @@ class RenderController extends Notifier<RenderUiState> {
     ref.read(authControllerProvider.notifier).refreshUser();
   }
 
-  void reset() {
-    _format = 'jpg';
-    state = const RenderUiState();
-  }
+  void reset() => state = const RenderUiState();
 }

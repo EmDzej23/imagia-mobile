@@ -97,9 +97,6 @@ class RenderApi {
     Map<String, dynamic>? bakedLayout,
     String? fileName,
     int longSide = 10000,
-    // 'jpg' | 'pdf' | 'svg'. Vector only where the server can draw it (word art;
-    // stone mosaic without shape motifs) — it falls back to JPG otherwise.
-    String format = 'jpg',
   }) async {
     final res = await _client.post<Map<String, dynamic>>(
       '/api/render-generative',
@@ -110,7 +107,6 @@ class RenderApi {
         'bakedLayout': ?bakedLayout,
         'longSide': longSide,
         'fileName': ?fileName,
-        'format': format,
       },
       receiveTimeout: _renderTimeout,
       sendTimeout: const Duration(minutes: 2),

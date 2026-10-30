@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -6,12 +7,14 @@ import 'package:go_router/go_router.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../services/app_prefs.dart';
+import '../../api/auth_api.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/primary_button.dart';
+import 'verify_email_screen.dart';
 import '../../widgets/secondary_button.dart';
 import '../onboarding/onboarding_screen.dart';
 
@@ -46,6 +49,16 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     await prefs.setOnboardingSeen();
   }
 
+  Future<void> _openVerify() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VerifyEmailScreen(
+        email: _email.text.trim(),
+        password: _password.text,
+      ),
+    ));
+  }
+
   @override
   void dispose() {
     _email.dispose();
@@ -68,9 +81,14 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   }
 
   Future<void> _signInEmail() => _run(() async {
-        await ref
-            .read(authControllerProvider.notifier)
-            .signInEmail(_email.text, _password.text);
+        try {
+          await ref
+              .read(authControllerProvider.notifier)
+              .signInEmail(_email.text, _password.text);
+        } on AuthException catch (e) {
+          if (!e.emailNotVerified) rethrow;
+          unawaited(_openVerify());
+        }
       });
 
   Future<void> _signInGoogle() => _run(() async {

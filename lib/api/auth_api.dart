@@ -38,6 +38,15 @@ class AuthApi {
     return signInEmail(email, password);
   }
 
+  /// Sends the "verify your email" link again. The server doesn't re-send it on a
+  /// blocked sign-in, so the check-your-inbox screen offers this.
+  Future<void> resendVerification(String email) async {
+    await _post('/api/auth/send-verification-email', {
+      'email': email,
+      'callbackURL': '${AppConfig.apiBaseUrl}/',
+    }, 'Could not send the email.');
+  }
+
   Future<void> forgotPassword(String email) async {
     await _post('/api/auth/forget-password', {
       'email': email,
@@ -87,7 +96,11 @@ class AuthApi {
     }
     final status = res.statusCode ?? 0;
     if (status < 200 || status >= 300) {
-      throw AuthException(_errorMessage(res.data, fallbackError));
+      final data = res.data;
+      throw AuthException(
+        _errorMessage(data, fallbackError),
+        code: data is Map && data['code'] is String ? data['code'] as String : null,
+      );
     }
     return res;
   }
@@ -110,8 +123,15 @@ class AuthApi {
 }
 
 class AuthException implements Exception {
-  const AuthException(this.message);
+  const AuthException(this.message, {this.code});
   final String message;
+
+  /// better-auth's error code, e.g. `EMAIL_NOT_VERIFIED`, `INVALID_EMAIL_OR_PASSWORD`.
+  final String? code;
+
+  /// Email sign-up worked, but the account can't sign in until the link in the
+  /// verification email is tapped.
+  bool get emailNotVerified => code == 'EMAIL_NOT_VERIFIED';
   @override
   String toString() => message;
 }

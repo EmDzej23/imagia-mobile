@@ -48,4 +48,19 @@ void main() {
       expect(profile.tokenBalance, 0);
     });
   });
+
+  group('AuthException codes', () {
+    test('flags an unverified email', () {
+      const e = AuthException('Email not verified', code: 'EMAIL_NOT_VERIFIED');
+      expect(e.emailNotVerified, isTrue);
+    });
+
+    test('other codes and no code are not "unverified"', () {
+      expect(
+          const AuthException('x', code: 'INVALID_EMAIL_OR_PASSWORD')
+              .emailNotVerified,
+          isFalse);
+      expect(const AuthException('x').emailNotVerified, isFalse);
+    });
+  });
 }

@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../api/auth_api.dart';
 import '../../state/auth_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/primary_button.dart';
+import 'verify_email_screen.dart';
 
 class SignUpScreen extends ConsumerStatefulWidget {
   const SignUpScreen({super.key});
@@ -22,6 +26,16 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
   bool _busy = false;
   String? _error;
 
+  Future<void> _openVerify() async {
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VerifyEmailScreen(
+        email: _email.text.trim(),
+        password: _password.text,
+      ),
+    ));
+  }
+
   @override
   void dispose() {
     _name.dispose();
@@ -35,11 +49,29 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
       _busy = true;
       _error = null;
     });
+    final auth = ref.read(authControllerProvider.notifier);
     try {
-      await ref
-          .read(authControllerProvider.notifier)
-          .signUpEmail(_name.text, _email.text, _password.text);
+      await auth.signUpEmail(_name.text, _email.text, _password.text);
       // On success the router redirect moves to the gallery.
+    } on AuthException catch (e) {
+      if (e.emailNotVerified) {
+        // The account was created; it just can't sign in until the email is verified.
+        unawaited(_openVerify());
+      } else if (e.code?.startsWith('USER_ALREADY_EXISTS') ?? false) {
+        // Often someone who signed up before and never verified, trying again:
+        // the same details sign them in, or lead to the verify screen.
+        try {
+          await auth.signInEmail(_email.text, _password.text);
+        } on AuthException catch (e2) {
+          if (e2.emailNotVerified) {
+            unawaited(_openVerify());
+          } else if (mounted) {
+            setState(() => _error = 'An account with this email already exists. Sign in instead.');
+          }
+        }
+      } else if (mounted) {
+        setState(() => _error = e.toString());
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {

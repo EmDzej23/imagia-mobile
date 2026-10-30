@@ -110,6 +110,9 @@ class AuthController extends Notifier<AuthState> {
     await _loadUser();
   }
 
+  Future<void> resendVerification(String email) =>
+      _auth.resendVerification(email.trim());
+
   Future<void> signUpEmail(String name, String email, String password) async {
     final token = await _auth.signUpEmail(name.trim(), email.trim(), password);
     await _tokens.write(token);

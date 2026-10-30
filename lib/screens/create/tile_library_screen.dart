@@ -171,7 +171,12 @@ class TileLibraryScreen extends ConsumerWidget {
                     label: 'Continue',
                     onPressed: tiles.isEmpty
                         ? null
-                        : () => context.push('/create/studio'),
+                        // Swap the whole create flow (photo → tiles) for the
+                        // studio, so back from the studio goes to the projects
+                        // list, same as opening an existing project there.
+                        : () => GoRouter.of(context)
+                          ..go('/')
+                          ..push('/create/studio'),
                   ),
                 ],
               ),

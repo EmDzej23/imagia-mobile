@@ -84,9 +84,20 @@ class _AncientPreviewState extends State<AncientPreview> {
     if (rgba == null || _w < 2 || _h < 2) return;
     final token = ++_token;
     final geo = buildAncientGeometry(
-        rgba, _sw, _sh, _w.toDouble(), _h.toDouble(), widget.params);
-    final img = await renderAncientImage(geo, _w, _h,
-        baseImage: widget.base.thumbnail, sprites: _sprites);
+      rgba,
+      _sw,
+      _sh,
+      _w.toDouble(),
+      _h.toDouble(),
+      widget.params,
+    );
+    final img = await renderAncientImage(
+      geo,
+      _w,
+      _h,
+      baseImage: widget.base.thumbnail,
+      sprites: _sprites,
+    );
     if (!mounted || token != _token) {
       img.dispose();
       return;
@@ -110,7 +121,8 @@ class _AncientPreviewState extends State<AncientPreview> {
     final img = _image;
     if (img == null) {
       return const Center(
-          child: CircularProgressIndicator(color: AppColors.accent));
+        child: CircularProgressIndicator(color: AppColors.accent),
+      );
     }
     // Contain + centred, with a tap-to-zoom loupe like the tile-mosaic preview.
     return RepaintBoundary(
@@ -119,17 +131,25 @@ class _AncientPreviewState extends State<AncientPreview> {
         cropRenderer: _geo == null
             ? null
             : (crop, outW, outH) => renderAncientCrop(
-                  _geo!, _w, _h, crop, outW, outH,
-                  baseImage: widget.base.thumbnail,
-                  sprites: _sprites,
-                ),
+                _geo!,
+                _w,
+                _h,
+                crop,
+                outW,
+                outH,
+                baseImage: widget.base.thumbnail,
+                sprites: _sprites,
+              ),
       ),
     );
   }
 }
 
 /// Build [AncientParams] from the studio state for the given mode.
-AncientParams ancientParamsFromState(StudioState studio, {required bool curved}) {
+AncientParams ancientParamsFromState(
+  StudioState studio, {
+  required bool curved,
+}) {
   final s = studio.settings;
   return AncientParams(
     stoneSize: s.ancientStoneSize,

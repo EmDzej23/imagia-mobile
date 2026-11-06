@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../mosaic/preview_painter.dart' show centerCropSrc;
 import '../../mosaic/types.dart';
 import '../../services/haptics.dart';
+import '../../state/collage_controller.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -69,12 +70,36 @@ class _ManageTilesScreenState extends ConsumerState<ManageTilesScreen> {
     _stopSelecting();
   }
 
+  /// Collage: cut the selection out of its background, or use it whole again.
+  void _setCut(bool cutOut) {
+    ref
+        .read(collageControllerProvider.notifier)
+        .setCut(Set.of(_selected), cutOut);
+    Haptics.success();
+    _stopSelecting();
+  }
+
+  void _setHero() {
+    final id = _selected.length == 1 ? _selected.first : null;
+    final collage = ref.read(collageControllerProvider.notifier);
+    final current = ref.read(studioControllerProvider).settings.collageHero;
+    collage.setHero(id == current ? null : id);
+    Haptics.success();
+    _stopSelecting();
+  }
+
   @override
   Widget build(BuildContext context) {
     final studio = ref.watch(studioControllerProvider);
     final tiles = studio.tiles;
+    final isCollage = studio.settings.mosaicMode == 'collage';
+    if (isCollage) ref.watch(collageControllerProvider);
+    final collage = ref.read(collageControllerProvider.notifier);
     // A tile removed elsewhere (e.g. from the crop editor) leaves the selection.
-    _selected.removeWhere((id) => !tiles.any((t) => t.id == id));
+    if (_selected.isNotEmpty) {
+      final ids = {for (final t in tiles) t.id};
+      _selected.removeWhere((id) => !ids.contains(id));
+    }
     final allSelected = tiles.isNotEmpty && _selected.length == tiles.length;
 
     return PopScope(
@@ -125,6 +150,49 @@ class _ManageTilesScreenState extends ConsumerState<ManageTilesScreen> {
               ),
           ],
         ),
+        bottomNavigationBar: isCollage && _selecting && _selected.isNotEmpty
+            ? SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.x3,
+                    AppSpacing.x2,
+                    AppSpacing.x3,
+                    AppSpacing.x3,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => _setCut(true),
+                          icon: const Icon(Icons.content_cut, size: 18),
+                          label: const Text('Cut out'),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.x2),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => _setCut(false),
+                          child: const Text('Use whole'),
+                        ),
+                      ),
+                      if (_selected.length == 1) ...[
+                        const SizedBox(width: AppSpacing.x2),
+                        IconButton(
+                          tooltip: 'Centre piece',
+                          onPressed: _setHero,
+                          icon: Icon(
+                            studio.settings.collageHero == _selected.first
+                                ? Icons.star
+                                : Icons.star_border,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              )
+            : null,
         body: tiles.isEmpty
             ? Center(child: Text('No tiles yet', style: AppTypography.caption))
             : Column(
@@ -138,7 +206,12 @@ class _ManageTilesScreenState extends ConsumerState<ManageTilesScreen> {
                       AppSpacing.x2,
                     ),
                     child: Text(
-                      _selecting
+                      isCollage
+                          ? (_selecting
+                                ? 'Select photos, then cut them out or use them whole.'
+                                : 'Tap photos to select them — then cut the subject out of '
+                                      'its background, or make one the centre piece.')
+                          : _selecting
                           ? 'Tap photos to select them.'
                           : widget.onOpenTile != null
                           ? 'Tap a photo to crop or remove it. Long-press to select several.'
@@ -148,11 +221,12 @@ class _ManageTilesScreenState extends ConsumerState<ManageTilesScreen> {
                   ),
                   Expanded(
                     child: GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(
+                      // Clears Android's gesture bar (edge-to-edge).
+                      padding: EdgeInsets.fromLTRB(
                         AppSpacing.x2,
                         0,
                         AppSpacing.x2,
-                        AppSpacing.x4,
+                        AppSpacing.x4 + MediaQuery.paddingOf(context).bottom,
                       ),
                       gridDelegate:
                           const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -185,6 +259,18 @@ class _ManageTilesScreenState extends ConsumerState<ManageTilesScreen> {
                             topCrop: studio.settings.mosaicMode == 'square',
                             selecting: _selecting,
                             selected: selected,
+                            cutState: isCollage
+                                ? collage.stateOf(tile.id)
+                                : null,
+                            cutImage: isCollage
+                                ? collage.cutThumb(tile.id)
+                                : null,
+                            failReason: isCollage
+                                ? collage.failReason(tile.id)
+                                : null,
+                            hero:
+                                isCollage &&
+                                studio.settings.collageHero == tile.id,
                           ),
                         );
                       },
@@ -204,7 +290,18 @@ class _ManageTile extends StatelessWidget {
     required this.topCrop,
     required this.selecting,
     required this.selected,
+    this.cutState,
+    this.cutImage,
+    this.failReason,
+    this.hero = false,
   });
+
+  /// Collage only: the photo's cut-out state, its cut-out image, the failure reason
+  /// and whether it is the centre piece.
+  final CutState? cutState;
+  final ui.Image? cutImage;
+  final String? failReason;
+  final bool hero;
 
   final ui.Image image;
   final TileCrop? crop;
@@ -223,13 +320,15 @@ class _ManageTile extends StatelessWidget {
             // The picked photo shrinks a little, as in the system gallery.
             scale: selected ? 0.88 : 1,
             duration: const Duration(milliseconds: 120),
-            child: CustomPaint(
-              painter: _ThumbPainter(
-                image: image,
-                crop: crop,
-                topCrop: topCrop,
-              ),
-            ),
+            child: cutImage != null && cutState == CutState.cutout
+                ? CustomPaint(painter: _CutPainter(image: cutImage!))
+                : CustomPaint(
+                    painter: _ThumbPainter(
+                      image: image,
+                      crop: crop,
+                      topCrop: topCrop,
+                    ),
+                  ),
           ),
         ),
         if (crop != null && !selecting)
@@ -243,6 +342,42 @@ class _ManageTile extends StatelessWidget {
                 ),
               ),
             ),
+          ),
+        if (cutState == CutState.cutting)
+          const Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        if (cutState == CutState.failed)
+          Positioned(
+            left: 4,
+            bottom: 4,
+            child: Tooltip(
+              message: failReason ?? 'Could not cut this photo out',
+              child: const Icon(
+                Icons.warning_amber_rounded,
+                size: 18,
+                color: Colors.amber,
+              ),
+            ),
+          ),
+        if (cutState == CutState.cutout)
+          const Positioned(
+            left: 4,
+            bottom: 4,
+            child: Icon(Icons.content_cut, size: 16, color: Colors.white),
+          ),
+        if (hero)
+          const Positioned(
+            left: 4,
+            top: 4,
+            child: Icon(Icons.star, size: 18, color: Colors.amber),
           ),
         if (selecting)
           Positioned(
@@ -292,4 +427,37 @@ class _ThumbPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ThumbPainter old) =>
       old.crop != crop || old.image != image || old.topCrop != topCrop;
+}
+
+/// A cut-out on a light checkerboard, fitted (it is transparent around the subject).
+class _CutPainter extends CustomPainter {
+  _CutPainter({required this.image});
+  final ui.Image image;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const sq = 8.0;
+    final a = Paint()..color = const Color(0xFF3A3F4B);
+    final b = Paint()..color = const Color(0xFF2A2E37);
+    for (var y = 0.0; y < size.height; y += sq) {
+      for (var x = 0.0; x < size.width; x += sq) {
+        final odd = ((x / sq).floor() + (y / sq).floor()).isOdd;
+        canvas.drawRect(Rect.fromLTWH(x, y, sq, sq), odd ? a : b);
+      }
+    }
+    final iw = image.width.toDouble(), ih = image.height.toDouble();
+    final k = (size.width / iw) < (size.height / ih)
+        ? size.width / iw
+        : size.height / ih;
+    final dw = iw * k, dh = ih * k;
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0, 0, iw, ih),
+      Rect.fromLTWH((size.width - dw) / 2, (size.height - dh) / 2, dw, dh),
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CutPainter old) => old.image != image;
 }

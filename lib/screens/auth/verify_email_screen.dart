@@ -123,16 +123,23 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: AppSpacing.x8),
-              const Icon(Icons.mark_email_unread_outlined,
-                  size: 56, color: AppColors.accent),
+              const Icon(
+                Icons.mark_email_unread_outlined,
+                size: 56,
+                color: AppColors.accent,
+              ),
               const SizedBox(height: AppSpacing.x6),
-              Text('Check your inbox',
-                  textAlign: TextAlign.center, style: AppTypography.title),
+              Text(
+                'Check your inbox',
+                textAlign: TextAlign.center,
+                style: AppTypography.title,
+              ),
               const SizedBox(height: AppSpacing.x3),
               Text.rich(
                 TextSpan(
-                  style: AppTypography.body
-                      .copyWith(color: AppColors.textSecondary),
+                  style: AppTypography.body.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
                   children: [
                     const TextSpan(text: 'We sent a link to '),
                     TextSpan(
@@ -140,8 +147,9 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
                       style: const TextStyle(color: AppColors.textPrimary),
                     ),
                     const TextSpan(
-                        text:
-                            '. Tap it to confirm your email, then come back here and continue.'),
+                      text:
+                          '. Tap it to confirm your email, then come back here and continue.',
+                    ),
                   ],
                 ),
                 textAlign: TextAlign.center,

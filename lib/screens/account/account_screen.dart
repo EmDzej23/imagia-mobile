@@ -58,7 +58,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     setState(() => _iapLoading = true);
     final iap = ref.read(iapServiceProvider);
     // Listen first so interrupted/pending transactions are delivered on launch.
-    _purchaseSub = iap.purchaseStream.listen(_onPurchaseUpdates, onError: (_) {});
+    _purchaseSub = iap.purchaseStream.listen(
+      _onPurchaseUpdates,
+      onError: (_) {},
+    );
     try {
       if (!await iap.available()) {
         if (mounted) setState(() => _iapUnavailable = true);
@@ -154,14 +157,18 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       return const [
         Padding(
           padding: EdgeInsets.all(AppSpacing.x4),
-          child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
+          child: Center(
+            child: CircularProgressIndicator(color: AppColors.accent),
+          ),
         ),
       ];
     }
     // Unavailable covers both "StoreKit said no" and "no products came back" —
     // which is every state before the products are Ready to Submit.
     final unavailable = _iapUnavailable || _iapProducts.isEmpty;
-    final products = unavailable && kDebugMode ? _placeholderProducts : _iapProducts;
+    final products = unavailable && kDebugMode
+        ? _placeholderProducts
+        : _iapProducts;
     if (products.isEmpty) {
       return [
         Text(
@@ -192,7 +199,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       }
       if (!mounted) return;
       final ok = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(builder: (_) => CheckoutWebviewScreen(checkoutUrl: res.data!)),
+        MaterialPageRoute(
+          builder: (_) => CheckoutWebviewScreen(checkoutUrl: res.data!),
+        ),
       );
       // Refresh balance regardless — the purchase may have completed even if we
       // didn't detect the redirect.
@@ -262,7 +271,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                   Text(user?.name ?? '—', style: AppTypography.title),
                   Text(
                     user?.email ?? '',
-                    style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+                    style: AppTypography.body.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
                   ),
                   const SizedBox(height: AppSpacing.x3),
                   if (AppConfig.freeRenders)
@@ -278,7 +289,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                       ),
                       child: Text(
                         'Mosaics are free to create',
-                        style: AppTypography.label.copyWith(color: AppColors.accent),
+                        style: AppTypography.label.copyWith(
+                          color: AppColors.accent,
+                        ),
                       ),
                     )
                   else
@@ -295,7 +308,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                             border: Border.all(color: AppColors.border),
                           ),
                           child: TweenAnimationBuilder<int>(
-                            tween: IntTween(begin: 0, end: user?.tokenBalance ?? 0),
+                            tween: IntTween(
+                              begin: 0,
+                              end: user?.tokenBalance ?? 0,
+                            ),
                             duration: const Duration(milliseconds: 600),
                             curve: Curves.easeOut,
                             builder: (_, value, _) => Text(
@@ -308,8 +324,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                         ),
                         const Spacer(),
                         TextButton(
-                          onPressed: () =>
-                              ref.read(authControllerProvider.notifier).refreshUser(),
+                          onPressed: () => ref
+                              .read(authControllerProvider.notifier)
+                              .refreshUser(),
                           child: const Text('Refresh'),
                         ),
                       ],
@@ -350,9 +367,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
               _LinkTile(
                 icon: Icons.local_shipping_outlined,
                 label: 'My print orders',
-                onTap: () => Navigator.of(
-                  context,
-                ).push(MaterialPageRoute(builder: (_) => const MyOrdersScreen())),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MyOrdersScreen()),
+                ),
               ),
             ],
             const SizedBox(height: AppSpacing.x6),
@@ -411,7 +428,11 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 }
 
 class _LinkTile extends StatelessWidget {
-  const _LinkTile({required this.icon, required this.label, required this.onTap});
+  const _LinkTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
   final IconData icon;
   final String label;
   final VoidCallback onTap;
@@ -478,7 +499,10 @@ class _PackageTile extends StatelessWidget {
               const SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.accent,
+                ),
               )
             else
               DecoratedBox(
@@ -493,7 +517,9 @@ class _PackageTile extends StatelessWidget {
                   ),
                   child: Text(
                     '€${pkg.price.toStringAsFixed(2)}',
-                    style: AppTypography.label.copyWith(color: AppColors.textPrimary),
+                    style: AppTypography.label.copyWith(
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
               ),
@@ -547,7 +573,10 @@ class _IapTile extends StatelessWidget {
               const SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.accent,
+                ),
               )
             else
               DecoratedBox(
@@ -562,7 +591,9 @@ class _IapTile extends StatelessWidget {
                   ),
                   child: Text(
                     product.price,
-                    style: AppTypography.label.copyWith(color: AppColors.textPrimary),
+                    style: AppTypography.label.copyWith(
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
               ),

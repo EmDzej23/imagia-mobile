@@ -85,6 +85,36 @@ class RenderApi {
     return ApiResult.ok(RenderResult.fromJson(data), res.status);
   }
 
+  /// Collage high-res render via `POST /api/render` with `kind: "collage"` — the
+  /// pile laid on the device ([collagePlan], plan version 2) is composited on Cloud
+  /// Run (`render-collage`). Same response shape, token and download flow as [render].
+  Future<ApiResult<RenderResult>> renderCollage({
+    required Map<String, dynamic> collagePlan,
+    required Map<String, String> tileUrls,
+    String fileName = 'photo-collage.jpg',
+  }) async {
+    final res = await _client.post<Map<String, dynamic>>(
+      '/api/render',
+      body: {
+        'kind': 'collage',
+        'collagePlan': collagePlan,
+        'tileUrls': tileUrls,
+        'fileName': fileName,
+      },
+      receiveTimeout: _renderTimeout,
+      sendTimeout: const Duration(minutes: 2),
+    );
+    if (!res.isOk || res.data == null) {
+      return ApiResult.fail(res.error ?? 'Render failed.', res.status);
+    }
+    final data = res.data!;
+    if (data['success'] != true || data['downloadUrl'] == null) {
+      return ApiResult.fail(
+          data['error'] as String? ?? 'Render failed.', res.status);
+    }
+    return ApiResult.ok(RenderResult.fromJson(data), res.status);
+  }
+
   /// Tile-less high-res render via `POST /api/render-generative` (word-art /
   /// ancient shapes). Rendered in-Node with @napi-rs/canvas — no tiles, no plan.
   /// Costs 1 token like [render] (free only while `AppConfig.freeRenders` sends

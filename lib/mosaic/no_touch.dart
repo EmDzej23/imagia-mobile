@@ -99,7 +99,9 @@ class NoTouchReport {
 
 /// Filter a touch-adjacency map down to pairs that share an actual EDGE.
 List<List<int>> buildEdgeAdjacency(
-    List<MosaicPlacement> placements, List<Set<int>> adjacency) {
+  List<MosaicPlacement> placements,
+  List<Set<int>> adjacency,
+) {
   final n = placements.length;
   final out = List<List<int>>.generate(n, (_) => <int>[], growable: false);
   for (var i = 0; i < n; i++) {
@@ -112,9 +114,11 @@ List<List<int>> buildEdgeAdjacency(
       final bB = b.y + b.height;
       // Vertical border: right edge of one meets left edge of the other, and the cells
       // overlap along y by more than a rounding error.
-      final vertical = ((aR - b.x).abs() <= _touch || (bR - a.x).abs() <= _touch) &&
+      final vertical =
+          ((aR - b.x).abs() <= _touch || (bR - a.x).abs() <= _touch) &&
           math.min(aB, bB) - math.max(a.y, b.y) > _minEdgeOverlap;
-      final horizontal = ((aB - b.y).abs() <= _touch || (bB - a.y).abs() <= _touch) &&
+      final horizontal =
+          ((aB - b.y).abs() <= _touch || (bB - a.y).abs() <= _touch) &&
           math.min(aR, bR) - math.max(a.x, b.x) > _minEdgeOverlap;
       if (vertical || horizontal) out[i].add(j);
     }
@@ -146,6 +150,7 @@ NoTouchReport enforceNoTouchingTwins(
   Map<String, TileDescriptor> tileMap,
   List<Set<int>> adjacency,
   List<double>? saliency, [
+
   /// Reuse ceiling, already resolved to a feasible value. 0 = unlimited.
   int maxUses = 0,
 ]) {
@@ -154,8 +159,10 @@ NoTouchReport enforceNoTouchingTwins(
 
   final edges = buildEdgeAdjacency(placements, adjacency);
   final baseIds = List<String>.generate(
-      n, (i) => getBaseTileId(placements[i].tileId),
-      growable: false);
+    n,
+    (i) => getBaseTileId(placements[i].tileId),
+    growable: false,
+  );
 
   /// Cost of putting [tile] in cell [idx] — colour error, saliency-weighted, PLUS the
   /// shape mismatch.
@@ -223,12 +230,13 @@ NoTouchReport enforceNoTouchingTwins(
   // the problem instead. Must match no-touch.ts.
   final twinRate = edgePairs > 0 ? initial / edgePairs : 0;
   final budget = math.max(
-      8,
-      (n *
-              (twinRate > _skipAboveTwinRate
-                  ? _maxSwapFractionHeavy
-                  : _maxSwapFraction))
-          .ceil());
+    8,
+    (n *
+            (twinRate > _skipAboveTwinRate
+                ? _maxSwapFractionHeavy
+                : _maxSwapFraction))
+        .ceil(),
+  );
   final rnd = _Mulberry(0x5eed);
   var swaps = 0;
 
@@ -359,7 +367,8 @@ NoTouchReport enforceNoTouchingTwins(
         bestBase = base;
       }
     }
-    if (bestBase == null) continue; // every photo borders this cell — genuinely stuck
+    if (bestBase == null)
+      continue; // every photo borders this cell — genuinely stuck
     final t = tileMap[bestBase];
     if (t == null) continue;
     cellsByBase[baseIds[i]]?.remove(i);

@@ -1,4 +1,3 @@
-
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -65,8 +64,10 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.x4),
           children: [
-            Text('Make a 9:16 video to share. Free — no token needed.',
-                style: AppTypography.caption),
+            Text(
+              'Make a 9:16 video to share. Free — no token needed.',
+              style: AppTypography.caption,
+            ),
             const SizedBox(height: AppSpacing.x4),
 
             Text('Style', style: AppTypography.label),
@@ -82,8 +83,7 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
                       controller.reset();
                     },
               options: [
-                for (final s in VideoStyle.values)
-                  SegmentOption(s, s.label),
+                for (final s in VideoStyle.values) SegmentOption(s, s.label),
               ],
             ),
             const SizedBox(height: AppSpacing.x4),
@@ -134,13 +134,17 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
       case VideoPhase.generating:
         return Column(
           children: [
-            Text('Rendering… ${(video.progress * 100).round()}%',
-                style: AppTypography.title),
+            Text(
+              'Rendering… ${(video.progress * 100).round()}%',
+              style: AppTypography.title,
+            ),
             const SizedBox(height: AppSpacing.x4),
             AppProgressBar(percent: video.progress * 100),
             const SizedBox(height: AppSpacing.x2),
-            Text('Encoding ${_hd ? '1080×1920' : '720×1280'}, 10s.',
-                style: AppTypography.caption),
+            Text(
+              'Encoding ${_hd ? '1080×1920' : '720×1280'}, 10s.',
+              style: AppTypography.caption,
+            ),
           ],
         );
       case VideoPhase.done:
@@ -149,7 +153,8 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
           children: [
             ConstrainedBox(
               constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.5),
+                maxHeight: MediaQuery.of(context).size.height * 0.5,
+              ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(AppRadius.card),
                 child: _VideoPreviewPlayer(key: ValueKey(path), path: path),
@@ -170,8 +175,9 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
               icon: Icons.ios_share,
               onPressed: _saving
                   ? null
-                  : () => SharePlus.instance
-                      .share(ShareParams(files: [XFile(path)])),
+                  : () => SharePlus.instance.share(
+                      ShareParams(files: [XFile(path)]),
+                    ),
             ),
             const SizedBox(height: AppSpacing.x3),
             TextButton(
@@ -185,15 +191,21 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
           children: [
             const Icon(Icons.error_outline, color: AppColors.error, size: 56),
             const SizedBox(height: AppSpacing.x3),
-            Text(video.error ?? 'Video failed',
-                textAlign: TextAlign.center,
-                style: AppTypography.body
-                    .copyWith(color: AppColors.textSecondary)),
+            Text(
+              video.error ?? 'Video failed',
+              textAlign: TextAlign.center,
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(
               label: 'Try again',
               onPressed: () => controller.generate(
-                  style: _style, hd: _hd, caption: _caption.text.trim()),
+                style: _style,
+                hd: _hd,
+                caption: _caption.text.trim(),
+              ),
             ),
           ],
         );
@@ -202,7 +214,10 @@ class _VideoExportScreenState extends ConsumerState<VideoExportScreen> {
           label: 'Generate video',
           icon: Icons.movie_creation_outlined,
           onPressed: () => controller.generate(
-              style: _style, hd: _hd, caption: _caption.text.trim()),
+            style: _style,
+            hd: _hd,
+            caption: _caption.text.trim(),
+          ),
         );
     }
   }

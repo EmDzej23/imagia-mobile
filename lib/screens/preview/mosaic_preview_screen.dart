@@ -81,29 +81,35 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
     final path = '${dir.path}/${rec.fileName}';
     // Full-res mosaics are large; allow a long total download but fail fast on a
     // stalled connection (otherwise the save spinner hangs forever).
-    final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 2), // per-chunk stall guard
-    ));
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(minutes: 2), // per-chunk stall guard
+      ),
+    );
     await dio.download(
       '${AppConfig.apiBaseUrl}${rec.downloadPath}',
       path,
       options: Options(
-          headers: token != null ? {'Authorization': 'Bearer $token'} : null),
+        headers: token != null ? {'Authorization': 'Bearer $token'} : null,
+      ),
     );
     return File(path);
   }
 
   Future<void> _run(
-      DownloadRecord rec, Future<void> Function(File) action) async {
+    DownloadRecord rec,
+    Future<void> Function(File) action,
+  ) async {
     setState(() => _saving = true);
     try {
       final file = await _downloadFull(rec);
       await action(file);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -118,15 +124,23 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
       final downloads = ref.watch(downloadsListProvider);
       final list = downloads.value;
       if (list == null) {
-        return _scaffold(const Center(
-            child: CircularProgressIndicator(color: AppColors.accent)));
+        return _scaffold(
+          const Center(
+            child: CircularProgressIndicator(color: AppColors.accent),
+          ),
+        );
       }
       if (list.isEmpty) {
-        return _scaffold(Center(
-          child: Text('No mosaics yet',
-              style: AppTypography.body
-                  .copyWith(color: AppColors.textSecondary)),
-        ));
+        return _scaffold(
+          Center(
+            child: Text(
+              'No mosaics yet',
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+        );
       }
       rec = list.first;
     }
@@ -139,42 +153,46 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
           // Loader sits behind the image so it's visible the instant the screen
           // opens — the image fades in over it once decoded.
           const Center(
-              child: CircularProgressIndicator(color: AppColors.accent)),
+            child: CircularProgressIndicator(color: AppColors.accent),
+          ),
           // Held back until the token resolves. Rendering first and re-rendering once
           // it arrives would fetch the image twice — once at the clamped 2560, once
           // at full size — and show the soft one first.
           if (_tokenLoaded)
-          InteractiveViewer(
-            minScale: 0.8,
-            maxScale: 10,
-            child: Center(
-              child: Image.network(
-                _imageUrl(record.downloadToken),
-                headers: _imageHeaders,
-                fit: BoxFit.contain,
-                // Magnifying to 10x samples far outside the source grid; `medium`
-                // (bilinear) keeps tile edges from breaking up into stair-steps the
-                // way the default does under a large InteractiveViewer transform.
-                filterQuality: FilterQuality.medium,
-                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                  if (wasSynchronouslyLoaded) return child;
-                  return AnimatedOpacity(
-                    opacity: frame == null ? 0 : 1,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOut,
-                    child: child,
-                  );
-                },
-                errorBuilder: (context, error, stack) => ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: Text('Could not load image',
-                        style: AppTypography.caption),
+            InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 10,
+              child: Center(
+                child: Image.network(
+                  _imageUrl(record.downloadToken),
+                  headers: _imageHeaders,
+                  fit: BoxFit.contain,
+                  // Magnifying to 10x samples far outside the source grid; `medium`
+                  // (bilinear) keeps tile edges from breaking up into stair-steps the
+                  // way the default does under a large InteractiveViewer transform.
+                  filterQuality: FilterQuality.medium,
+                  frameBuilder:
+                      (context, child, frame, wasSynchronouslyLoaded) {
+                        if (wasSynchronouslyLoaded) return child;
+                        return AnimatedOpacity(
+                          opacity: frame == null ? 0 : 1,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOut,
+                          child: child,
+                        );
+                      },
+                  errorBuilder: (context, error, stack) => ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Text(
+                        'Could not load image',
+                        style: AppTypography.caption,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
       actions: _saving
@@ -183,12 +201,15 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
                 padding: EdgeInsets.only(right: AppSpacing.x4),
                 child: Center(
                   child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.accent)),
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.accent,
+                    ),
+                  ),
                 ),
-              )
+              ),
             ]
           : [
               IconButton(
@@ -199,7 +220,8 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
                   await Gal.putImage(f.path);
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Saved to Photos')));
+                      const SnackBar(content: Text('Saved to Photos')),
+                    );
                   }
                 }),
               ),
@@ -207,9 +229,11 @@ class _MosaicPreviewScreenState extends ConsumerState<MosaicPreviewScreen> {
                 tooltip: 'Share',
                 icon: const Icon(Icons.ios_share),
                 onPressed: () => _run(
-                    record,
-                    (f) => SharePlus.instance
-                        .share(ShareParams(files: [XFile(f.path)]))),
+                  record,
+                  (f) => SharePlus.instance.share(
+                    ShareParams(files: [XFile(f.path)]),
+                  ),
+                ),
               ),
             ],
     );

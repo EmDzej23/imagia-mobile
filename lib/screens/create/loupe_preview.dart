@@ -8,8 +8,8 @@ import '../../theme/app_colors.dart';
 
 /// Renders one region of the picture at [outW]x[outH] device pixels.
 /// [crop] is in the preview image's own pixel space.
-typedef LoupeCropRenderer = Future<ui.Image> Function(
-    ui.Rect crop, int outW, int outH);
+typedef LoupeCropRenderer =
+    Future<ui.Image> Function(ui.Rect crop, int outW, int outH);
 
 /// Displays a rendered [ui.Image] with pinch-to-zoom and drag-to-pan.
 ///
@@ -24,11 +24,7 @@ typedef LoupeCropRenderer = Future<ui.Image> Function(
 /// flight, because re-rendering every frame would stutter — so a pinch reads as
 /// slightly soft and then snaps sharp when the fingers lift.
 class LoupePreviewImage extends StatefulWidget {
-  const LoupePreviewImage({
-    super.key,
-    required this.image,
-    this.cropRenderer,
-  });
+  const LoupePreviewImage({super.key, required this.image, this.cropRenderer});
 
   final ui.Image image;
 
@@ -112,13 +108,12 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
   /// wider than the image on an axis, centre on that axis instead of clamping —
   /// otherwise the drag fights the user at the edges.
   Offset _clamp(Offset f, double winW, double winH) => Offset(
-        winW >= _imgW ? _imgW / 2 : f.dx.clamp(winW / 2, _imgW - winW / 2),
-        winH >= _imgH ? _imgH / 2 : f.dy.clamp(winH / 2, _imgH - winH / 2),
-      );
+    winW >= _imgW ? _imgW / 2 : f.dx.clamp(winW / 2, _imgW - winW / 2),
+    winH >= _imgH ? _imgH / 2 : f.dy.clamp(winH / 2, _imgH - winH / 2),
+  );
 
   /// Contain-fit scale for a box: screen px per image px at zoom 1.
-  double _fitScale(Size box) =>
-      math.min(box.width / _imgW, box.height / _imgH);
+  double _fitScale(Size box) => math.min(box.width / _imgW, box.height / _imgH);
 
   ui.Rect _window(Size box) {
     final s = _fitScale(box) * _zoom;
@@ -163,58 +158,61 @@ class _LoupePreviewImageState extends State<LoupePreviewImage> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final box = constraints.biggest;
-      if (_box != box) {
-        _box = box;
-        // Debounced, not immediate: the studio's preview pane resizes on every frame
-        // while the settings are scrolled, and this fires for each of those.
-        _scheduleSharp();
-      }
-      final win = _window(box);
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onDoubleTap: () {
-          setState(() {
-            _zoom = 1;
-            _focus = null;
-            _dropSharp();
-          });
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final box = constraints.biggest;
+        if (_box != box) {
+          _box = box;
+          // Debounced, not immediate: the studio's preview pane resizes on every frame
+          // while the settings are scrolled, and this fires for each of those.
           _scheduleSharp();
-        },
-        onScaleStart: (_) => _zoomAtGestureStart = _zoom,
-        onScaleUpdate: (d) {
-          setState(() {
-            if (d.scale != 1.0) {
-              _zoom = (_zoomAtGestureStart * d.scale).clamp(1.0, _maxZoom);
-            }
-            final s = _fitScale(box) * _zoom;
-            final w = box.width / s, h = box.height / s;
-            _focus = _clamp(
+        }
+        final win = _window(box);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: () {
+            setState(() {
+              _zoom = 1;
+              _focus = null;
+              _dropSharp();
+            });
+            _scheduleSharp();
+          },
+          onScaleStart: (_) => _zoomAtGestureStart = _zoom,
+          onScaleUpdate: (d) {
+            setState(() {
+              if (d.scale != 1.0) {
+                _zoom = (_zoomAtGestureStart * d.scale).clamp(1.0, _maxZoom);
+              }
+              final s = _fitScale(box) * _zoom;
+              final w = box.width / s, h = box.height / s;
+              _focus = _clamp(
                 (_focus ?? Offset(_imgW / 2, _imgH / 2)) -
                     d.focalPointDelta / s,
                 w,
-                h);
-            // The sharp crop belongs to where the window WAS.
-            _dropSharp();
-          });
-        },
-        // Re-render once the gesture settles, not per frame: each render repaints the
-        // whole geometry and would make the pinch stutter.
-        onScaleEnd: (_) => _scheduleSharp(),
-        child: ClipRect(
-          child: CustomPaint(
-            size: Size.infinite,
-            painter: _ImageWindowPainter(
-              image: widget.image,
-              sharp: _sharp,
-              sharpWindow: _sharpWindow,
-              window: win,
+                h,
+              );
+              // The sharp crop belongs to where the window WAS.
+              _dropSharp();
+            });
+          },
+          // Re-render once the gesture settles, not per frame: each render repaints the
+          // whole geometry and would make the pinch stutter.
+          onScaleEnd: (_) => _scheduleSharp(),
+          child: ClipRect(
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: _ImageWindowPainter(
+                image: widget.image,
+                sharp: _sharp,
+                sharpWindow: _sharpWindow,
+                window: win,
+              ),
             ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
 }
 

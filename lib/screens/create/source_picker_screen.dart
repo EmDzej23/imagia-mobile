@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../state/features_providers.dart';
 import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -17,6 +18,7 @@ class SourcePickerScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final studio = ref.watch(studioControllerProvider);
     final base = studio.base;
+    final collageOn = ref.watch(collageEnabledProvider).value ?? false;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Choose a photo')),
@@ -30,8 +32,7 @@ class SourcePickerScreen extends ConsumerWidget {
                   child: base == null
                       ? _EmptyHint(busy: studio.isUploadingBase)
                       : ClipRRect(
-                          borderRadius:
-                              BorderRadius.circular(AppRadius.card),
+                          borderRadius: BorderRadius.circular(AppRadius.card),
                           child: RawImage(
                             image: base.thumbnail,
                             fit: BoxFit.contain,
@@ -40,8 +41,10 @@ class SourcePickerScreen extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: AppSpacing.x3),
-              Text('Portraits and clear subjects work best.',
-                  style: AppTypography.caption),
+              Text(
+                'Portraits and clear subjects work best.',
+                style: AppTypography.caption,
+              ),
               const SizedBox(height: AppSpacing.x4),
               SecondaryButton(
                 label: base == null ? 'Choose from library' : 'Choose another',
@@ -57,6 +60,24 @@ class SourcePickerScreen extends ConsumerWidget {
                     ? null
                     : () => context.push('/create/tiles'),
               ),
+              if (collageOn) ...[
+                const SizedBox(height: AppSpacing.x2),
+                // A collage needs no main photo — the photos ARE the picture.
+                TextButton.icon(
+                  onPressed: () {
+                    final c = ref.read(studioControllerProvider.notifier);
+                    c.updateSettings(
+                      ref
+                          .read(studioControllerProvider)
+                          .settings
+                          .copyWith(mosaicMode: 'collage'),
+                    );
+                    context.push('/create/tiles');
+                  },
+                  icon: const Icon(Icons.content_cut, size: 18),
+                  label: const Text('Make a photo collage instead'),
+                ),
+              ],
             ],
           ),
         ),
@@ -77,12 +98,12 @@ class _EmptyHint extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.image_outlined,
-            size: 64, color: AppColors.textMuted),
+        const Icon(Icons.image_outlined, size: 64, color: AppColors.textMuted),
         const SizedBox(height: AppSpacing.x3),
-        Text('No photo selected',
-            style: AppTypography.body
-                .copyWith(color: AppColors.textSecondary)),
+        Text(
+          'No photo selected',
+          style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+        ),
       ],
     );
   }

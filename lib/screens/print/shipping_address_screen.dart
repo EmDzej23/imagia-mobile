@@ -73,7 +73,7 @@ class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
       _address2,
       _city,
       _state,
-      _zip
+      _zip,
     ]) {
       c.dispose();
     }
@@ -111,10 +111,12 @@ class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
       countryCode: _country,
       zip: zip,
     );
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) =>
-          OrderReviewScreen(draft: widget.draft, recipient: recipient),
-    ));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            OrderReviewScreen(draft: widget.draft, recipient: recipient),
+      ),
+    );
   }
 
   @override
@@ -125,26 +127,50 @@ class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.screen),
           children: [
-            _field('Full name', _name,
-                cap: TextCapitalization.words,
-                hints: const [AutofillHints.name]),
-            _field('Email', _email,
-                keyboard: TextInputType.emailAddress,
-                hints: const [AutofillHints.email]),
-            _field('Phone (optional)', _phone,
-                keyboard: TextInputType.phone,
-                hints: const [AutofillHints.telephoneNumber]),
-            _field('Address line 1', _address1,
-                hints: const [AutofillHints.streetAddressLine1]),
-            _field('Address line 2 (optional)', _address2,
-                hints: const [AutofillHints.streetAddressLine2]),
-            _field('City', _city,
-                cap: TextCapitalization.words,
-                hints: const [AutofillHints.addressCity]),
-            _field('State / county (optional)', _state,
-                cap: TextCapitalization.words),
-            _field('Postal / ZIP code', _zip,
-                hints: const [AutofillHints.postalCode]),
+            _field(
+              'Full name',
+              _name,
+              cap: TextCapitalization.words,
+              hints: const [AutofillHints.name],
+            ),
+            _field(
+              'Email',
+              _email,
+              keyboard: TextInputType.emailAddress,
+              hints: const [AutofillHints.email],
+            ),
+            _field(
+              'Phone (optional)',
+              _phone,
+              keyboard: TextInputType.phone,
+              hints: const [AutofillHints.telephoneNumber],
+            ),
+            _field(
+              'Address line 1',
+              _address1,
+              hints: const [AutofillHints.streetAddressLine1],
+            ),
+            _field(
+              'Address line 2 (optional)',
+              _address2,
+              hints: const [AutofillHints.streetAddressLine2],
+            ),
+            _field(
+              'City',
+              _city,
+              cap: TextCapitalization.words,
+              hints: const [AutofillHints.addressCity],
+            ),
+            _field(
+              'State / county (optional)',
+              _state,
+              cap: TextCapitalization.words,
+            ),
+            _field(
+              'Postal / ZIP code',
+              _zip,
+              hints: const [AutofillHints.postalCode],
+            ),
             const SizedBox(height: AppSpacing.x3),
             Text('Country', style: AppTypography.caption),
             const SizedBox(height: AppSpacing.x1),
@@ -171,9 +197,10 @@ class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
             ),
             if (_error != null) ...[
               const SizedBox(height: AppSpacing.x3),
-              Text(_error!,
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.error)),
+              Text(
+                _error!,
+                style: AppTypography.caption.copyWith(color: AppColors.error),
+              ),
             ],
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(label: 'Continue to review', onPressed: _continue),
@@ -183,10 +210,13 @@ class _ShippingAddressScreenState extends ConsumerState<ShippingAddressScreen> {
     );
   }
 
-  Widget _field(String label, TextEditingController c,
-      {TextInputType? keyboard,
-      TextCapitalization cap = TextCapitalization.none,
-      List<String>? hints}) {
+  Widget _field(
+    String label,
+    TextEditingController c, {
+    TextInputType? keyboard,
+    TextCapitalization cap = TextCapitalization.none,
+    List<String>? hints,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.x3),
       child: AppTextField(

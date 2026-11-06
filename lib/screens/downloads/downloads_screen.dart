@@ -38,10 +38,12 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
     final path = '${dir.path}/${d.fileName}';
     // Fail fast on a dead connection (otherwise the spinner never ends); the
     // receive timeout is per chunk, so a slow but moving download is fine.
-    final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 1),
-    ));
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(minutes: 1),
+      ),
+    );
     await dio.download(
       '${AppConfig.apiBaseUrl}${d.downloadPath}',
       path,
@@ -53,7 +55,8 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
         if (known <= 0 || !mounted) return;
         final p = (got / known).clamp(0.0, 1.0);
         // Repaint only on whole-percent steps.
-        if (_progress == null || (p * 100).floor() != (_progress! * 100).floor()) {
+        if (_progress == null ||
+            (p * 100).floor() != (_progress! * 100).floor()) {
           setState(() => _progress = p);
         }
       },
@@ -61,7 +64,10 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
     return File(path);
   }
 
-  Future<void> _run(DownloadRecord d, Future<void> Function(File) action) async {
+  Future<void> _run(
+    DownloadRecord d,
+    Future<void> Function(File) action,
+  ) async {
     setState(() {
       _busyId = d.id;
       _progress = null;
@@ -71,8 +77,9 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
       await action(file);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     } finally {
       if (mounted) {
@@ -96,15 +103,29 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
         child: downloads.when(
           loading: () => const DownloadsListSkeleton(),
           error: (e, _) => Center(
-              child: Text('Could not load downloads.\n$e',
-                  textAlign: TextAlign.center, style: AppTypography.caption)),
+            child: Text(
+              'Could not load downloads.\n$e',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption,
+            ),
+          ),
           data: (list) => list.isEmpty
               ? Center(
-                  child: Text('No mosaics yet',
-                      style: AppTypography.body
-                          .copyWith(color: AppColors.textSecondary)))
+                  child: Text(
+                    'No mosaics yet',
+                    style: AppTypography.body.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                )
               : ListView.separated(
-                  padding: const EdgeInsets.all(AppSpacing.screen),
+                  // Clears Android's gesture bar (edge-to-edge).
+                  padding: EdgeInsets.fromLTRB(
+                    AppSpacing.screen,
+                    AppSpacing.screen,
+                    AppSpacing.screen,
+                    AppSpacing.screen + MediaQuery.paddingOf(context).bottom,
+                  ),
                   itemCount: list.length,
                   separatorBuilder: (_, _) =>
                       const SizedBox(height: AppSpacing.x2),
@@ -116,8 +137,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                       child: Row(
                         children: [
                           ClipRRect(
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.chip),
+                            borderRadius: BorderRadius.circular(AppRadius.chip),
                             child: SizedBox(
                               width: 48,
                               height: 48,
@@ -129,10 +149,12 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                           ),
                           const SizedBox(width: AppSpacing.x3),
                           Expanded(
-                            child: Text(d.fileName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppTypography.label),
+                            child: Text(
+                              d.fileName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.label,
+                            ),
                           ),
                           if (busy)
                             Padding(
@@ -144,14 +166,17 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                                     width: 20,
                                     height: 20,
                                     child: CircularProgressIndicator(
-                                        value: _progress,
-                                        strokeWidth: 2,
-                                        color: AppColors.accent),
+                                      value: _progress,
+                                      strokeWidth: 2,
+                                      color: AppColors.accent,
+                                    ),
                                   ),
                                   if (_progress != null) ...[
                                     const SizedBox(width: 8),
-                                    Text('${(_progress! * 100).round()}%',
-                                        style: AppTypography.caption),
+                                    Text(
+                                      '${(_progress! * 100).round()}%',
+                                      style: AppTypography.caption,
+                                    ),
                                   ],
                                 ],
                               ),
@@ -161,42 +186,56 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                           else if (_isVector(d.fileName))
                             IconButton(
                               tooltip: 'Save to Files or share',
-                              icon: const Icon(Icons.ios_share,
-                                  color: AppColors.textSecondary),
+                              icon: const Icon(
+                                Icons.ios_share,
+                                color: AppColors.textSecondary,
+                              ),
                               onPressed: () => _run(
-                                  d,
-                                  (f) => SharePlus.instance.share(
-                                      ShareParams(files: [XFile(f.path)]))),
+                                d,
+                                (f) => SharePlus.instance.share(
+                                  ShareParams(files: [XFile(f.path)]),
+                                ),
+                              ),
                             )
                           else ...[
                             IconButton(
                               tooltip: 'Preview',
-                              icon: const Icon(Icons.zoom_in,
-                                  color: AppColors.textSecondary),
+                              icon: const Icon(
+                                Icons.zoom_in,
+                                color: AppColors.textSecondary,
+                              ),
                               onPressed: () =>
                                   context.push('/preview', extra: d),
                             ),
                             IconButton(
                               tooltip: 'Save to Photos',
-                              icon: const Icon(Icons.download,
-                                  color: AppColors.textSecondary),
+                              icon: const Icon(
+                                Icons.download,
+                                color: AppColors.textSecondary,
+                              ),
                               onPressed: () => _run(d, (f) async {
                                 await Gal.putImage(f.path);
                                 if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('Saved to Photos')));
+                                    const SnackBar(
+                                      content: Text('Saved to Photos'),
+                                    ),
+                                  );
                                 }
                               }),
                             ),
                             IconButton(
                               tooltip: 'Share',
-                              icon: const Icon(Icons.ios_share,
-                                  color: AppColors.textSecondary),
+                              icon: const Icon(
+                                Icons.ios_share,
+                                color: AppColors.textSecondary,
+                              ),
                               onPressed: () => _run(
-                                  d,
-                                  (f) => SharePlus.instance.share(
-                                      ShareParams(files: [XFile(f.path)]))),
+                                d,
+                                (f) => SharePlus.instance.share(
+                                  ShareParams(files: [XFile(f.path)]),
+                                ),
+                              ),
                             ),
                           ],
                         ],

@@ -18,8 +18,11 @@ import '../account/checkout_webview_screen.dart';
 import 'order_processing_screen.dart';
 
 class OrderReviewScreen extends ConsumerStatefulWidget {
-  const OrderReviewScreen(
-      {super.key, required this.draft, required this.recipient});
+  const OrderReviewScreen({
+    super.key,
+    required this.draft,
+    required this.recipient,
+  });
   final PrintOrderDraft draft;
   final PrintRecipient recipient;
 
@@ -52,26 +55,28 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
           ? ref.read(gelatoApiProvider)
           : ref.read(printApiProvider);
       final checkout = await api.checkout(
-            productKey: widget.draft.productKey,
-            sessionId: 'mobile-${DateTime.now().millisecondsSinceEpoch}',
-            plan: plan.toJson(),
-            tileUrls: tileUrls,
-            baseUrl: base.blobUrl,
-            cropRect: widget.draft.cropNormalized,
-            recipient: widget.recipient,
-            attributes: widget.draft.attributes,
-          );
+        productKey: widget.draft.productKey,
+        sessionId: 'mobile-${DateTime.now().millisecondsSinceEpoch}',
+        plan: plan.toJson(),
+        tileUrls: tileUrls,
+        baseUrl: base.blobUrl,
+        cropRect: widget.draft.cropNormalized,
+        recipient: widget.recipient,
+        attributes: widget.draft.attributes,
+      );
       if (!checkout.isOk || checkout.data == null) {
         throw checkout.error ?? 'Could not start checkout.';
       }
       if (!mounted) return;
 
-      final paid = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => CheckoutWebviewScreen(
-          checkoutUrl: checkout.data!.checkoutUrl,
-          successPath: '/print-success',
+      final paid = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => CheckoutWebviewScreen(
+            checkoutUrl: checkout.data!.checkoutUrl,
+            successPath: '/print-success',
+          ),
         ),
-      ));
+      );
       if (!mounted) return;
       if (paid != true) {
         setState(() {
@@ -85,7 +90,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
       // Hand off to the global print job: it renders + submits the order and
       // survives leaving this screen. We jump to the processing screen (rooted
       // at the gallery) so the app-wide indicator can bring the user back.
-      ref.read(printJobControllerProvider.notifier).start(
+      ref
+          .read(printJobControllerProvider.notifier)
+          .start(
             orderId: checkout.data!.orderId,
             productName:
                 '${widget.draft.type.label} · ${widget.draft.sizeLabel}',
@@ -107,8 +114,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
   }
 
   void _snack(String m) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(m), duration: const Duration(seconds: 6)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(m), duration: const Duration(seconds: 6)),
+    );
   }
 
   @override
@@ -149,11 +157,15 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('${d.type.label} · ${d.orientation.label}',
-                          style: AppTypography.label),
+                      Text(
+                        '${d.type.label} · ${d.orientation.label}',
+                        style: AppTypography.label,
+                      ),
                       Text(d.sizeLabel, style: AppTypography.caption),
                       const Divider(
-                          color: AppColors.border, height: AppSpacing.x6),
+                        color: AppColors.border,
+                        height: AppSpacing.x6,
+                      ),
                       Text('Ship to', style: AppTypography.caption),
                       const SizedBox(height: AppSpacing.x1),
                       Text(r.name, style: AppTypography.body),
@@ -170,13 +182,18 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                   children: [
                     Text('Total', style: AppTypography.label),
                     const Spacer(),
-                    Text('€${d.priceEur.toStringAsFixed(2)}',
-                        style: AppTypography.number(AppTypography.title)
-                            .copyWith(color: AppColors.accent)),
+                    Text(
+                      '€${d.priceEur.toStringAsFixed(2)}',
+                      style: AppTypography.number(
+                        AppTypography.title,
+                      ).copyWith(color: AppColors.accent),
+                    ),
                   ],
                 ),
-                Text('VAT included · ships in 5–10 days',
-                    style: AppTypography.caption),
+                Text(
+                  'VAT included · ships in 5–10 days',
+                  style: AppTypography.caption,
+                ),
                 const SizedBox(height: AppSpacing.x6),
                 PrimaryButton(
                   label: 'Pay €${d.priceEur.toStringAsFixed(2)}',
@@ -200,9 +217,12 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                     children: [
                       const CircularProgressIndicator(color: AppColors.accent),
                       const SizedBox(height: AppSpacing.x4),
-                      Text(_step,
-                          style: AppTypography.body
-                              .copyWith(color: AppColors.textPrimary)),
+                      Text(
+                        _step,
+                        style: AppTypography.body.copyWith(
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
                     ],
                   ),
                 ),

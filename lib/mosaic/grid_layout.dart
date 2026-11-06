@@ -5,6 +5,8 @@ import 'analyze.dart';
 import 'hexagon.dart';
 import 'matching.dart';
 import 'no_touch.dart';
+import 'optimal_placement.dart';
+import 'repeat_spacing.dart';
 import 'rhombille.dart';
 import 'shared.dart';
 import 'types.dart';
@@ -871,7 +873,13 @@ List<MosaicPlacement> buildGridLayout({
   // Measured on web: 0.5 lifts raw composition SSIM over the old 0.25 with acceptable
   // cost on desktop. Mobile stays 0.25 (SA is main-thread + its iteration cap is already
   // lower, so doubling it there would hurt build time on low-end phones).
-  final defaultSaBudget = withinOptimalSize ? (isMobile ? 0.25 : 0.5) : 1.0;
+  // When optimal placement runs afterwards it redistributes the cells globally anyway,
+  // so annealing only needs to tidy up: on web, a fifth of the budget scored the same or
+  // better and halved the layout time. Keep in step with web grid-layout.ts.
+  final optimiserRuns = settings.optimalPlacement && mode != 'rhombille';
+  // Same on every device (web parity): a phone that anneals less gets a different plan.
+  final defaultSaBudget =
+      (withinOptimalSize ? 0.5 : 1.0) * (optimiserRuns ? 0.2 : 1.0);
   final saBudgetFactor = settings.saBudgetFactor ?? defaultSaBudget;
   if (isOptimalPath) {
     try {
@@ -965,6 +973,24 @@ List<MosaicPlacement> buildGridLayout({
     settings,
     saliency: saliency,
   );
+
+  // No photo again within `repeatSpacing` cells of itself, then every photo where it
+  // fits best over the whole mosaic (counts and spacing kept). Same as web.
+  final spacing = enforceRepeatSpacing(
+    placements,
+    eligibleTiles,
+    settings,
+    settings.repeatSpacing,
+  );
+  if (settings.optimalPlacement) {
+    optimizePlacementAssignment(
+      placements,
+      eligibleTiles,
+      settings,
+      saliency,
+      spacing.radius,
+    );
+  }
 
   // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
   // coverage specifically, because coverage places rare photos wherever it can and is

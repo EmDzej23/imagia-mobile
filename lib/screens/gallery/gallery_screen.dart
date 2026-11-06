@@ -59,9 +59,12 @@ class GalleryScreen extends ConsumerWidget {
             children: [
               const Icon(Icons.add, color: AppColors.textPrimary),
               const SizedBox(width: AppSpacing.x2),
-              Text('New Mosaic',
-                  style: AppTypography.label
-                      .copyWith(color: AppColors.textPrimary)),
+              Text(
+                'New Mosaic',
+                style: AppTypography.label.copyWith(
+                  color: AppColors.textPrimary,
+                ),
+              ),
             ],
           ),
         ),
@@ -71,9 +74,11 @@ class GalleryScreen extends ConsumerWidget {
         onRefresh: () async => ref.invalidate(projectsListProvider),
         child: projects.when(
           loading: () => const GalleryGridSkeleton(),
-          error: (e, _) => _Message(
-              icon: Icons.cloud_off,
-              text: 'Could not load your mosaics.\n$e'),
+          error: (e, _) => const _Message(
+            icon: Icons.cloud_off,
+            text:
+                'Could not load your mosaics.\nCheck your connection and pull down to try again.',
+          ),
           data: (list) =>
               list.isEmpty ? _EmptyGallery() : _ProjectGrid(projects: list),
         ),
@@ -91,10 +96,18 @@ class _ProjectGrid extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final thumbs =
-        ref.watch(projectThumbnailsProvider(projectThumbKey(projects)));
+    final thumbs = ref.watch(
+      projectThumbnailsProvider(projectThumbKey(projects)),
+    );
     return GridView.builder(
-      padding: const EdgeInsets.all(AppSpacing.screen),
+      // The last row clears the "New Mosaic" button and the gesture bar
+      // (Android draws edge-to-edge).
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.screen,
+        AppSpacing.screen,
+        AppSpacing.screen,
+        AppSpacing.screen + 88 + MediaQuery.paddingOf(context).bottom,
+      ),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         mainAxisSpacing: AppSpacing.x3,
@@ -116,7 +129,8 @@ class _ProjectCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Hidden once the user dismisses these tips; back when the team writes new ones.
-    final showTips = project.hasTips &&
+    final showTips =
+        project.hasTips &&
         (ref.watch(visibleTipProjectsProvider).value?.contains(project.id) ??
             false);
     return AppCard(
@@ -137,29 +151,72 @@ class _ProjectCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: _CardImage(project: project, thumbs: thumbs)),
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _CardImage(project: project, thumbs: thumbs),
+                // Delete was long-press only — easy to never find.
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: PopupMenuButton<String>(
+                    tooltip: 'More',
+                    icon: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.black45,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.more_vert,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                    onSelected: (v) {
+                      if (v == 'delete') _confirmDelete(context, ref);
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.all(AppSpacing.x3),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(project.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.label),
+                Text(
+                  project.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.label,
+                ),
                 const SizedBox(height: AppSpacing.x1),
                 Row(
                   children: [
-                    Text('${project.tileCount} tiles',
-                        style: AppTypography.caption),
+                    Text(
+                      '${project.tileCount} tiles',
+                      style: AppTypography.caption,
+                    ),
                     if (showTips) ...[
                       const SizedBox(width: AppSpacing.x2),
-                      const Icon(Icons.lightbulb_outline,
-                          size: 13, color: AppColors.accent),
+                      const Icon(
+                        Icons.lightbulb_outline,
+                        size: 13,
+                        color: AppColors.accent,
+                      ),
                       const SizedBox(width: 2),
-                      Text('Tips',
-                          style: AppTypography.caption
-                              .copyWith(color: AppColors.accent)),
+                      Text(
+                        'Tips',
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.accent,
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -178,9 +235,21 @@ class _ProjectCard extends ConsumerWidget {
       message: '"${project.name}" will be removed.',
       confirmLabel: 'Delete',
     );
-    if (ok) {
-      await ref.read(projectsApiProvider).delete(project.id);
+    if (!ok) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final res = await ref.read(projectsApiProvider).delete(project.id);
+      if (!res.isOk) throw StateError('delete failed');
       ref.invalidate(projectsListProvider);
+      messenger?.showSnackBar(const SnackBar(content: Text('Project deleted')));
+    } catch (_) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Couldn't delete the project. Check your connection and try again.",
+          ),
+        ),
+      );
     }
   }
 }
@@ -195,12 +264,12 @@ class _CardImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget placeholder() => Center(
-          child: Icon(
-            project.hasBase ? Icons.grid_on : Icons.image_outlined,
-            size: 40,
-            color: AppColors.textMuted,
-          ),
-        );
+      child: Icon(
+        project.hasBase ? Icons.grid_on : Icons.image_outlined,
+        size: 40,
+        color: AppColors.textMuted,
+      ),
+    );
 
     final url = project.baseImageUrl;
     Widget child;
@@ -209,11 +278,19 @@ class _CardImage extends StatelessWidget {
     } else {
       final bytes = thumbs.asData?.value[url];
       if (bytes != null) {
-        child = Image.memory(bytes,
+        child = LayoutBuilder(
+          builder: (context, c) => Image.memory(
+            bytes,
             width: double.infinity,
             height: double.infinity,
             fit: BoxFit.cover,
-            gaplessPlayback: true);
+            gaplessPlayback: true,
+            // Decoded at the card's size (display only).
+            cacheWidth: c.maxWidth.isFinite
+                ? (c.maxWidth * MediaQuery.devicePixelRatioOf(context)).round()
+                : null,
+          ),
+        );
       } else if (thumbs.isLoading) {
         child = const GradientShimmerBox();
       } else {
@@ -223,7 +300,8 @@ class _CardImage extends StatelessWidget {
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(AppRadius.card)),
+        top: Radius.circular(AppRadius.card),
+      ),
       child: SizedBox.expand(child: child),
     );
   }
@@ -235,17 +313,21 @@ class _EmptyGallery extends StatelessWidget {
     return ListView(
       children: [
         const SizedBox(height: 120),
-        const Icon(Icons.auto_awesome_mosaic,
-            size: 72, color: AppColors.textMuted),
+        const Icon(
+          Icons.auto_awesome_mosaic,
+          size: 72,
+          color: AppColors.textMuted,
+        ),
         const SizedBox(height: AppSpacing.x4),
         Center(
-            child: Text('Make your first mosaic',
-                style: AppTypography.display)),
+          child: Text('Make your first mosaic', style: AppTypography.display),
+        ),
         const SizedBox(height: AppSpacing.x2),
         Center(
-          child: Text('Tap “New Mosaic” to begin',
-              style: AppTypography.body
-                  .copyWith(color: AppColors.textSecondary)),
+          child: Text(
+            'Tap “New Mosaic” to begin',
+            style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+          ),
         ),
       ],
     );
@@ -266,10 +348,11 @@ class _Message extends StatelessWidget {
         const SizedBox(height: AppSpacing.x3),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.x6),
-          child: Text(text,
-              textAlign: TextAlign.center,
-              style: AppTypography.body
-                  .copyWith(color: AppColors.textSecondary)),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+          ),
         ),
       ],
     );

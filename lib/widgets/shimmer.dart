@@ -16,8 +16,7 @@ class Shimmer extends StatefulWidget {
   State<Shimmer> createState() => _ShimmerState();
 }
 
-class _ShimmerState extends State<Shimmer>
-    with SingleTickerProviderStateMixin {
+class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1300),
@@ -195,29 +194,44 @@ class _ShimmerNetworkImageState extends State<ShimmerNetworkImage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        const GradientShimmerBox(),
+        // Shimmer only while loading — under a loaded image its ticker kept repainting
+        // every row of the list every frame.
+        if (_bytes == null && !_failed)
+          const GradientShimmerBox()
+        else
+          const ColoredBox(color: AppColors.surfaceRaised),
         if (_failed)
           ColoredBox(
             color: AppColors.surfaceRaised,
             child: Center(
-              child: Icon(Icons.image,
-                  size: widget.errorIconSize, color: AppColors.textMuted),
+              child: Icon(
+                Icons.image,
+                size: widget.errorIconSize,
+                color: AppColors.textMuted,
+              ),
             ),
           )
         else if (_bytes != null)
-          Image.memory(
-            _bytes!,
-            fit: widget.fit,
-            gaplessPlayback: true,
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-              if (wasSynchronouslyLoaded) return child;
-              return AnimatedOpacity(
-                opacity: frame == null ? 0 : 1,
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeOut,
-                child: child,
-              );
-            },
+          LayoutBuilder(
+            builder: (context, c) => Image.memory(
+              _bytes!,
+              fit: widget.fit,
+              // Decode at the size it is shown (display only — the file is untouched).
+              cacheWidth: c.maxWidth.isFinite
+                  ? (c.maxWidth * MediaQuery.devicePixelRatioOf(context))
+                        .round()
+                  : null,
+              gaplessPlayback: true,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                if (wasSynchronouslyLoaded) return child;
+                return AnimatedOpacity(
+                  opacity: frame == null ? 0 : 1,
+                  duration: const Duration(milliseconds: 350),
+                  curve: Curves.easeOut,
+                  child: child,
+                );
+              },
+            ),
           ),
       ],
     );
@@ -266,8 +280,7 @@ class GalleryGridSkeleton extends StatelessWidget {
           childAspectRatio: 0.85,
         ),
         itemCount: 6,
-        itemBuilder: (_, _) =>
-            const SkeletonBox(radius: AppRadius.card),
+        itemBuilder: (_, _) => const SkeletonBox(radius: AppRadius.card),
       ),
     );
   }

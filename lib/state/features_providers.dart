@@ -10,3 +10,7 @@ final featuresApiProvider =
 /// if unknown (render then falls back to the plan's default size).
 final maxResolutionProvider = FutureProvider<int?>(
     (ref) => ref.watch(featuresApiProvider).maxResolution());
+
+/// Collage mode offered to this user? (cached for the session; false if unknown).
+final collageEnabledProvider = FutureProvider<bool>(
+    (ref) => ref.watch(featuresApiProvider).collageEnabled());

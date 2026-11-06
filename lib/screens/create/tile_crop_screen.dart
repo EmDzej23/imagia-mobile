@@ -121,10 +121,12 @@ class _TileCropScreenState extends State<TileCropScreen> {
       final bytes = await load();
       if (bytes == null || bytes.isEmpty) return;
       final landscape = widget.image.width >= widget.image.height;
-      final codec = await ui.instantiateImageCodec(bytes,
-          targetWidth: landscape ? _maxDecode : null,
-          targetHeight: landscape ? null : _maxDecode,
-          allowUpscaling: false);
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: landscape ? _maxDecode : null,
+        targetHeight: landscape ? null : _maxDecode,
+        allowUpscaling: false,
+      );
       final img = (await codec.getNextFrame()).image;
       codec.dispose();
       if (!mounted) {
@@ -233,8 +235,7 @@ class _TileCropScreenState extends State<TileCropScreen> {
         title: Text(widget.title, overflow: TextOverflow.ellipsis),
         actions: [
           TextButton(
-            onPressed: () =>
-                Navigator.pop(context, TileCropResult.crop(_crop)),
+            onPressed: () => Navigator.pop(context, TileCropResult.crop(_crop)),
             child: const Text('Done'),
           ),
         ],
@@ -243,7 +244,9 @@ class _TileCropScreenState extends State<TileCropScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.x4, vertical: AppSpacing.x2),
+              horizontal: AppSpacing.x4,
+              vertical: AppSpacing.x2,
+            ),
             child: Text(
               'Pinch to zoom, drag to choose what the mosaic uses. '
               'Your original photo is never changed.',
@@ -277,7 +280,10 @@ class _TileCropScreenState extends State<TileCropScreen> {
                         height: boxH,
                         child: CustomPaint(
                           painter: _CropPainter(
-                              _image, _crop, widget.cellShape),
+                            _image,
+                            _crop,
+                            widget.cellShape,
+                          ),
                         ),
                       ),
                     ),
@@ -294,8 +300,8 @@ class _TileCropScreenState extends State<TileCropScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   TextButton.icon(
-                    onPressed: () => Navigator.pop(
-                        context, const TileCropResult.cleared()),
+                    onPressed: () =>
+                        Navigator.pop(context, const TileCropResult.cleared()),
                     icon: const Icon(Icons.restart_alt, size: 18),
                     label: const Text('Reset'),
                   ),
@@ -303,7 +309,8 @@ class _TileCropScreenState extends State<TileCropScreen> {
                     onPressed: _confirmRemove,
                     icon: const Icon(Icons.delete_outline, size: 18),
                     style: TextButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary),
+                      foregroundColor: AppColors.textSecondary,
+                    ),
                     label: const Text('Remove photo'),
                   ),
                 ],
@@ -349,8 +356,12 @@ class _CropPainter extends CustomPainter {
       crop.w * image.width,
       crop.h * image.height,
     );
-    canvas.drawImageRect(image, src, Offset.zero & size,
-        Paint()..filterQuality = FilterQuality.medium);
+    canvas.drawImageRect(
+      image,
+      src,
+      Offset.zero & size,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
 
     // Thirds, to compose by. Deliberately faint — the picture is the point.
     final guide = Paint()
@@ -368,7 +379,11 @@ class _CropPainter extends CustomPainter {
     // quarter more area than will ever be drawn.
     if (cellShape == CropShape.hex) {
       final pts = hexCorners(
-          size.width / 2, size.height / 2, size.width, size.height);
+        size.width / 2,
+        size.height / 2,
+        size.width,
+        size.height,
+      );
       final hex = Path()..moveTo(pts[0][0], pts[0][1]);
       for (var i = 1; i < 6; i++) {
         hex.lineTo(pts[i][0], pts[i][1]);
@@ -376,14 +391,18 @@ class _CropPainter extends CustomPainter {
       hex.close();
       // Even-odd: the box MINUS the hexagon, i.e. the discarded corners.
       final corners = Path.combine(
-          PathOperation.difference, Path()..addRect(Offset.zero & size), hex);
+        PathOperation.difference,
+        Path()..addRect(Offset.zero & size),
+        hex,
+      );
       canvas.drawPath(corners, Paint()..color = const Color(0x8C020617));
       canvas.drawPath(
-          hex,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2
-            ..color = const Color(0xFF22D3EE));
+        hex,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = const Color(0xFF22D3EE),
+      );
     }
   }
 

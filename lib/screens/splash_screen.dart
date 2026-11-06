@@ -22,13 +22,20 @@ class _SplashScreenState extends State<SplashScreen>
   )..forward();
 
   late final Animation<double> _logoFade = _interval(0.0, 0.5);
-  late final Animation<double> _logoScale = Tween(begin: 0.82, end: 1.0).animate(
-      CurvedAnimation(parent: _c, curve: const Interval(0.0, 0.6, curve: Curves.easeOutBack)));
+  late final Animation<double> _logoScale = Tween(begin: 0.82, end: 1.0)
+      .animate(
+        CurvedAnimation(
+          parent: _c,
+          curve: const Interval(0.0, 0.6, curve: Curves.easeOutBack),
+        ),
+      );
   late final Animation<double> _titleFade = _interval(0.4, 0.8);
   late final Animation<double> _sloganFade = _interval(0.6, 1.0);
 
   Animation<double> _interval(double a, double b) => CurvedAnimation(
-      parent: _c, curve: Interval(a, b, curve: Curves.easeOut));
+    parent: _c,
+    curve: Interval(a, b, curve: Curves.easeOut),
+  );
 
   @override
   void dispose() {
@@ -51,8 +58,12 @@ class _SplashScreenState extends State<SplashScreen>
                   opacity: _logoFade.value,
                   child: Transform.scale(
                     scale: _logoScale.value,
-                    child: Image.asset('assets/logo.png',
-                        width: 168, height: 168, fit: BoxFit.contain),
+                    child: Image.asset(
+                      'assets/logo.png',
+                      width: 168,
+                      height: 168,
+                      fit: BoxFit.contain,
+                    ),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.x6),
@@ -60,9 +71,13 @@ class _SplashScreenState extends State<SplashScreen>
                   opacity: _titleFade.value,
                   child: Transform.translate(
                     offset: Offset(0, 12 * (1 - _titleFade.value)),
-                    child: Text('Imagia',
-                        style: AppTypography.display.copyWith(
-                            fontSize: 34, letterSpacing: 0.5)),
+                    child: Text(
+                      'Imagia',
+                      style: AppTypography.display.copyWith(
+                        fontSize: 34,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.x2),
@@ -70,9 +85,13 @@ class _SplashScreenState extends State<SplashScreen>
                   opacity: _sloganFade.value,
                   child: Transform.translate(
                     offset: Offset(0, 14 * (1 - _sloganFade.value)),
-                    child: Text('Made of moments.',
-                        style: AppTypography.body
-                            .copyWith(color: AppColors.accent, letterSpacing: 1.2)),
+                    child: Text(
+                      'Made of moments.',
+                      style: AppTypography.body.copyWith(
+                        color: AppColors.accent,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
                   ),
                 ),
               ],

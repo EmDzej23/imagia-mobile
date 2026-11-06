@@ -113,17 +113,25 @@ class _OrderProcessingScreenState extends ConsumerState<OrderProcessingScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle_outline,
-                size: 72, color: AppColors.success),
+            const Icon(
+              Icons.check_circle_outline,
+              size: 72,
+              color: AppColors.success,
+            ),
             const SizedBox(height: AppSpacing.x4),
-            Text('Your print is on its way to production',
-                textAlign: TextAlign.center, style: AppTypography.title),
+            Text(
+              'Your print is on its way to production',
+              textAlign: TextAlign.center,
+              style: AppTypography.title,
+            ),
             const SizedBox(height: AppSpacing.x2),
             Text(
-                'We\'ll notify you when it ships. You can track it under My orders.',
-                textAlign: TextAlign.center,
-                style: AppTypography.body
-                    .copyWith(color: AppColors.textSecondary)),
+              'We\'ll notify you when it ships. You can track it under My orders.',
+              textAlign: TextAlign.center,
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(label: 'View my orders', onPressed: _viewOrders),
             const SizedBox(height: AppSpacing.x3),
@@ -136,19 +144,26 @@ class _OrderProcessingScreenState extends ConsumerState<OrderProcessingScreen> {
           children: [
             const Icon(Icons.error_outline, size: 72, color: AppColors.error),
             const SizedBox(height: AppSpacing.x4),
-            Text('We couldn\'t finish your order',
-                textAlign: TextAlign.center, style: AppTypography.title),
+            Text(
+              'We couldn\'t finish your order',
+              textAlign: TextAlign.center,
+              style: AppTypography.title,
+            ),
             const SizedBox(height: AppSpacing.x2),
             Text(
-                job.error ??
-                    'Your payment went through. Tap retry to place the order again.',
-                textAlign: TextAlign.center,
-                style: AppTypography.caption),
+              job.error ??
+                  'Your payment went through. Tap retry to place the order again.',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption,
+            ),
             const SizedBox(height: AppSpacing.x2),
-            Text('Your payment is safe — retrying won\'t charge you again.',
-                textAlign: TextAlign.center,
-                style: AppTypography.caption
-                    .copyWith(color: AppColors.textSecondary)),
+            Text(
+              'Your payment is safe — retrying won\'t charge you again.',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(
               label: 'Retry',
@@ -156,7 +171,9 @@ class _OrderProcessingScreenState extends ConsumerState<OrderProcessingScreen> {
               onPressed: () {
                 final id = job.orderId;
                 if (id == null) return;
-                ref.read(printJobControllerProvider.notifier).start(
+                ref
+                    .read(printJobControllerProvider.notifier)
+                    .start(
                       orderId: id,
                       productName: job.productName ?? 'Print',
                     );
@@ -172,17 +189,25 @@ class _OrderProcessingScreenState extends ConsumerState<OrderProcessingScreen> {
           children: [
             const CircularProgressIndicator(color: AppColors.accent),
             const SizedBox(height: AppSpacing.x6),
-            Text(job.productName ?? 'Your print',
-                textAlign: TextAlign.center, style: AppTypography.title),
-            const SizedBox(height: AppSpacing.x2),
-            Text(job.step.isEmpty ? 'Placing your order…' : job.step,
-                textAlign: TextAlign.center, style: AppTypography.body),
+            Text(
+              job.productName ?? 'Your print',
+              textAlign: TextAlign.center,
+              style: AppTypography.title,
+            ),
             const SizedBox(height: AppSpacing.x2),
             Text(
-                'This can take a minute. You can leave this screen — we\'ll keep working and notify you when it ships.',
-                textAlign: TextAlign.center,
-                style: AppTypography.caption
-                    .copyWith(color: AppColors.textSecondary)),
+              job.step.isEmpty ? 'Placing your order…' : job.step,
+              textAlign: TextAlign.center,
+              style: AppTypography.body,
+            ),
+            const SizedBox(height: AppSpacing.x2),
+            Text(
+              'This can take a minute. You can leave this screen — we\'ll keep working and notify you when it ships.',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
           ],
         );
     }

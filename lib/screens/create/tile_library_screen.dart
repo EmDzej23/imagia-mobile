@@ -20,11 +20,13 @@ class TileLibraryScreen extends ConsumerWidget {
     // Surface upload/ingest failures so they're not silently swallowed.
     ref.listen(studioControllerProvider.select((s) => s.error), (_, err) {
       if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(err),
-          backgroundColor: AppColors.error,
-          duration: const Duration(seconds: 8),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(err),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 8),
+          ),
+        );
       }
     });
 
@@ -36,8 +38,8 @@ class TileLibraryScreen extends ConsumerWidget {
     final countColor = tiles.length >= 30
         ? AppColors.accent
         : tiles.isEmpty
-            ? AppColors.textMuted
-            : AppColors.textSecondary;
+        ? AppColors.textMuted
+        : AppColors.textSecondary;
 
     return Scaffold(
       appBar: AppBar(
@@ -48,15 +50,20 @@ class TileLibraryScreen extends ConsumerWidget {
             child: Center(
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.x3, vertical: AppSpacing.x1),
+                  horizontal: AppSpacing.x3,
+                  vertical: AppSpacing.x1,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(AppRadius.chip),
                   border: Border.all(color: AppColors.border),
                 ),
-                child: Text('${tiles.length}',
-                    style: AppTypography.number(AppTypography.label)
-                        .copyWith(color: countColor)),
+                child: Text(
+                  '${tiles.length}',
+                  style: AppTypography.number(
+                    AppTypography.label,
+                  ).copyWith(color: countColor),
+                ),
               ),
             ),
           ),
@@ -67,16 +74,21 @@ class TileLibraryScreen extends ConsumerWidget {
           children: [
             if (studio.isUploadingTiles)
               Padding(
-                padding: const EdgeInsets.fromLTRB(AppSpacing.screen,
-                    AppSpacing.x3, AppSpacing.screen, 0),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.screen,
+                  AppSpacing.x3,
+                  AppSpacing.screen,
+                  0,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                        studio.uploadDone == 0
-                            ? 'Preparing photos…'
-                            : 'Adding ${studio.uploadDone}/${studio.uploadTotal}…',
-                        style: AppTypography.caption),
+                      studio.uploadDone == 0
+                          ? 'Preparing photos…'
+                          : 'Adding ${studio.uploadDone}/${studio.uploadTotal}…',
+                      style: AppTypography.caption,
+                    ),
                     const SizedBox(height: AppSpacing.x2),
                     // Indeterminate "loader" until the first tile lands, then
                     // switch to a real progress bar.
@@ -84,7 +96,8 @@ class TileLibraryScreen extends ConsumerWidget {
                         ? const AppIndeterminateBar()
                         : AppProgressBar(
                             percent:
-                                studio.uploadDone / studio.uploadTotal * 100),
+                                studio.uploadDone / studio.uploadTotal * 100,
+                          ),
                   ],
                 ),
               ),
@@ -95,10 +108,10 @@ class TileLibraryScreen extends ConsumerWidget {
                       padding: const EdgeInsets.all(AppSpacing.screen),
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 4,
-                        mainAxisSpacing: AppSpacing.x2,
-                        crossAxisSpacing: AppSpacing.x2,
-                      ),
+                            crossAxisCount: 4,
+                            mainAxisSpacing: AppSpacing.x2,
+                            crossAxisSpacing: AppSpacing.x2,
+                          ),
                       itemCount: tiles.length,
                       itemBuilder: (context, i) {
                         final tile = tiles[i];
@@ -106,10 +119,13 @@ class TileLibraryScreen extends ConsumerWidget {
                           fit: StackFit.expand,
                           children: [
                             ClipRRect(
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.chip),
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.chip,
+                              ),
                               child: RawImage(
-                                  image: tile.thumbnail, fit: BoxFit.cover),
+                                image: tile.thumbnail,
+                                fit: BoxFit.cover,
+                              ),
                             ),
                             Positioned(
                               top: 0,
@@ -132,8 +148,11 @@ class TileLibraryScreen extends ConsumerWidget {
                                     shape: BoxShape.circle,
                                   ),
                                   padding: const EdgeInsets.all(2),
-                                  child: const Icon(Icons.close,
-                                      size: 14, color: Colors.white),
+                                  child: const Icon(
+                                    Icons.close,
+                                    size: 14,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ),
@@ -175,8 +194,8 @@ class TileLibraryScreen extends ConsumerWidget {
                         // studio, so back from the studio goes to the projects
                         // list, same as opening an existing project there.
                         : () => GoRouter.of(context)
-                          ..go('/')
-                          ..push('/create/studio'),
+                            ..go('/')
+                            ..push('/create/studio'),
                   ),
                 ],
               ),
@@ -197,13 +216,17 @@ class _Empty extends StatelessWidget {
         children: [
           const Icon(Icons.grid_view, size: 64, color: AppColors.textMuted),
           const SizedBox(height: AppSpacing.x3),
-          Text('Add the photos your mosaic is built from',
-              textAlign: TextAlign.center,
-              style: AppTypography.body
-                  .copyWith(color: AppColors.textSecondary)),
+          Text(
+            'Add the photos your mosaic is built from',
+            textAlign: TextAlign.center,
+            style: AppTypography.body.copyWith(color: AppColors.textSecondary),
+          ),
           const SizedBox(height: AppSpacing.x1),
-          Text('More and more varied photos give a better result',
-              textAlign: TextAlign.center, style: AppTypography.caption),
+          Text(
+            'More and more varied photos give a better result',
+            textAlign: TextAlign.center,
+            style: AppTypography.caption,
+          ),
         ],
       ),
     );

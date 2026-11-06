@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../video/video_generator.dart';
 import '../video/video_render.dart';
 import 'studio_controller.dart';
+import '../core/friendly_error.dart';
 
 enum VideoPhase { idle, generating, done, failed }
 
@@ -65,7 +66,7 @@ class VideoController extends Notifier<VideoUiState> {
       );
       state = state.copyWith(phase: VideoPhase.done, path: res.path);
     } catch (e) {
-      state = state.copyWith(phase: VideoPhase.failed, error: e.toString());
+      state = state.copyWith(phase: VideoPhase.failed, error: friendlyError(e, fallback: "Couldn't make the video. Please try again."));
     }
   }
 

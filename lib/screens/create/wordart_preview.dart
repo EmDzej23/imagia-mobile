@@ -83,7 +83,13 @@ class _WordArtPreviewState extends State<WordArtPreview> {
     if (!_building) setState(() => _building = true);
     final token = ++_token;
     final geo = buildWordArtGeometry(
-        rgba, _sw, _sh, _w.toDouble(), _h.toDouble(), widget.params);
+      rgba,
+      _sw,
+      _sh,
+      _w.toDouble(),
+      _h.toDouble(),
+      widget.params,
+    );
     final img = await renderWordArtImage(geo, _w, _h);
     if (!mounted || token != _token) {
       img.dispose();
@@ -118,19 +124,23 @@ class _WordArtPreviewState extends State<WordArtPreview> {
                 cropRenderer: _geo == null
                     ? null
                     : (crop, outW, outH) =>
-                        renderWordArtCrop(_geo!, _w, _h, crop, outW, outH),
+                          renderWordArtCrop(_geo!, _w, _h, crop, outW, outH),
               ),
             if (img == null || _building)
               Container(
-                color: img == null ? null : Colors.black.withValues(alpha: 0.35),
+                color: img == null
+                    ? null
+                    : Colors.black.withValues(alpha: 0.35),
                 child: const Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       CircularProgressIndicator(color: AppColors.accent),
                       SizedBox(height: 12),
-                      Text('Arranging words…',
-                          style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      Text(
+                        'Arranging words…',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
                     ],
                   ),
                 ),
@@ -147,8 +157,10 @@ class _WordArtPreviewState extends State<WordArtPreview> {
 /// the old text mode did).
 WordArtParams wordartParamsFromState(StudioState studio) {
   final s = studio.settings;
-  final phrases =
-      parseTextPhrases(studio.textInput, uppercase: studio.textUppercase);
+  final phrases = parseTextPhrases(
+    studio.textInput,
+    uppercase: studio.textUppercase,
+  );
   final titleColor = s.wordartTitleColor.trim();
   return WordArtParams(
     phrases: phrases.isEmpty ? const ['WORD'] : phrases,

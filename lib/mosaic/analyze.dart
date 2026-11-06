@@ -69,19 +69,43 @@ class ImageAnalyzer {
     required this.sourceWidth,
     required this.sourceHeight,
     required IntegralImage integral,
-  }) : _integral = integral;
+    RegionAnalysis Function(RegionAnalysis)? transform,
+  }) : _integral = integral,
+       _transform = transform;
 
   final double sourceWidth;
   final double sourceHeight;
   final IntegralImage _integral;
+  final RegionAnalysis Function(RegionAnalysis)? _transform;
 
-  RegionAnalysis sampleRegion(
-      {required double x,
-      required double y,
-      required double width,
-      required double height}) {
-    return sampleRegionFromIntegral(
-        x, y, width, height, sourceWidth, sourceHeight, _integral);
+  /// The same image, with every sampled region passed through [transform] (used by
+  /// tone_fit.dart so only the matcher sees the light-fitted photo).
+  ImageAnalyzer withTransform(
+    RegionAnalysis Function(RegionAnalysis) transform,
+  ) => ImageAnalyzer(
+    sourceWidth: sourceWidth,
+    sourceHeight: sourceHeight,
+    integral: _integral,
+    transform: transform,
+  );
+
+  RegionAnalysis sampleRegion({
+    required double x,
+    required double y,
+    required double width,
+    required double height,
+  }) {
+    final r = sampleRegionFromIntegral(
+      x,
+      y,
+      width,
+      height,
+      sourceWidth,
+      sourceHeight,
+      _integral,
+    );
+    final t = _transform;
+    return t == null ? r : t(r);
   }
 
   /// Builds an analyzer from a pre-sampled RGBA buffer of size
@@ -100,13 +124,15 @@ class ImageAnalyzer {
     bool invert = false,
     bool threshold = false,
   }) {
-    preprocessPixels(rgba,
-        colorBoost: colorBoost,
-        autoContrast: autoContrast,
-        grayscale: grayscale,
-        grayContrast: grayContrast,
-        invert: invert,
-        threshold: threshold);
+    preprocessPixels(
+      rgba,
+      colorBoost: colorBoost,
+      autoContrast: autoContrast,
+      grayscale: grayscale,
+      grayContrast: grayContrast,
+      invert: invert,
+      threshold: threshold,
+    );
     final integral = buildIntegralImage(rgba, sampleWidth, sampleHeight);
     return ImageAnalyzer(
       sourceWidth: sourceWidth,
@@ -119,8 +145,10 @@ class ImageAnalyzer {
 /// Returns the (sampleWidth, sampleHeight) for analyzing an image of the given
 /// source size at [maxDim] longest side.
 ({int sampleWidth, int sampleHeight}) getAnalysisDimensions(
-    double sourceWidth, double sourceHeight,
-    [int maxDim = defaultAnalysisDimension]) {
+  double sourceWidth,
+  double sourceHeight, [
+  int maxDim = defaultAnalysisDimension,
+]) {
   final longestSide = math.max(sourceWidth, sourceHeight);
   final scale = math.min(1.0, maxDim / longestSide);
   return (
@@ -281,21 +309,35 @@ RegionAnalysis sampleRegionFromIntegral(
   IntegralImage integral,
 ) {
   final x1 = _clampInt(
-      ((regionX / sourceWidth) * integral.width).floor(), 0, integral.width - 1);
-  final y1 = _clampInt(((regionY / sourceHeight) * integral.height).floor(), 0,
-      integral.height - 1);
+    ((regionX / sourceWidth) * integral.width).floor(),
+    0,
+    integral.width - 1,
+  );
+  final y1 = _clampInt(
+    ((regionY / sourceHeight) * integral.height).floor(),
+    0,
+    integral.height - 1,
+  );
   final x2 = _clampInt(
-      (((regionX + regionWidth) / sourceWidth) * integral.width).ceil(),
-      x1 + 1,
-      integral.width);
+    (((regionX + regionWidth) / sourceWidth) * integral.width).ceil(),
+    x1 + 1,
+    integral.width,
+  );
   final y2 = _clampInt(
-      (((regionY + regionHeight) / sourceHeight) * integral.height).ceil(),
-      y1 + 1,
-      integral.height);
+    (((regionY + regionHeight) / sourceHeight) * integral.height).ceil(),
+    y1 + 1,
+    integral.height,
+  );
   final pixelCount = math.max(1, (x2 - x1) * (y2 - y1));
 
-  final averageColor =
-      _sampleAvgColor(integral, x1, y1, x2, y2, pixelCount.toDouble());
+  final averageColor = _sampleAvgColor(
+    integral,
+    x1,
+    y1,
+    x2,
+    y2,
+    pixelCount.toDouble(),
+  );
   final averageLabColor = rgbToLab(averageColor);
 
   final w = integral.width;
@@ -308,9 +350,14 @@ RegionAnalysis sampleRegionFromIntegral(
 
   if (regionW < 5 || regionH < 5) {
     final uniformEdge = clampD(
-        _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount, 0, 1);
+      _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount,
+      0,
+      1,
+    );
     subregionColors = List<LabColor>.generate(
-        25, (_) => LabColor(averageLabColor.L, averageLabColor.a, averageLabColor.b));
+      25,
+      (_) => LabColor(averageLabColor.L, averageLabColor.a, averageLabColor.b),
+    );
     subregionEdges = List<double>.filled(25, uniformEdge);
     subregionEdgeOrientations = Float32List(100);
   } else {
@@ -318,8 +365,11 @@ RegionAnalysis sampleRegionFromIntegral(
     final ySplits = _compute5Splits(y1, y2);
     subregionColors = _sampleSubregions5x5(integral, xSplits, ySplits);
     subregionEdges = _sampleSubregionEdges5x5(integral, xSplits, ySplits);
-    subregionEdgeOrientations =
-        _sampleSubregionOrientations5x5(integral, xSplits, ySplits);
+    subregionEdgeOrientations = _sampleSubregionOrientations5x5(
+      integral,
+      xSplits,
+      ySplits,
+    );
   }
 
   final contrastMap = computeLocalContrast(subregionColors);
@@ -329,8 +379,9 @@ RegionAnalysis sampleRegionFromIntegral(
   final totalEdgeH = _sumIntegral(integral.edgeH, w, x1, y1, x2, y2);
   final totalEdgeV = _sumIntegral(integral.edgeV, w, x1, y1, x2, y2);
   final edgeSum = totalEdgeH + totalEdgeV;
-  final edgeOrientation =
-      edgeSum > 0 ? clampD((totalEdgeH - totalEdgeV) / edgeSum, -1, 1) : 0.0;
+  final edgeOrientation = edgeSum > 0
+      ? clampD((totalEdgeH - totalEdgeV) / edgeSum, -1, 1)
+      : 0.0;
 
   final b0 = _sumIntegral(integral.lumBin0, w, x1, y1, x2, y2);
   final b1 = _sumIntegral(integral.lumBin1, w, x1, y1, x2, y2);
@@ -361,9 +412,12 @@ RegionAnalysis sampleRegionFromIntegral(
     averageColor: averageColor,
     averageLabColor: averageLabColor,
     detailScore: math.max(
-        0,
-        math.min(
-            1, _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount)),
+      0,
+      math.min(
+        1,
+        _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount,
+      ),
+    ),
     subregionColors: subregionColors,
     subregionEdges: subregionEdges,
     contrastMap: contrastMap,
@@ -387,38 +441,71 @@ List<int> _compute5Splits(int lo, int hi) {
   ];
 }
 
-RgbColor _sampleAvgColor(IntegralImage integral, int x1, int y1, int x2, int y2,
-    double pixelCount) {
+RgbColor _sampleAvgColor(
+  IntegralImage integral,
+  int x1,
+  int y1,
+  int x2,
+  int y2,
+  double pixelCount,
+) {
   return RgbColor(
     roundChannel(
-        _sumIntegral(integral.red, integral.width, x1, y1, x2, y2) / pixelCount),
+      _sumIntegral(integral.red, integral.width, x1, y1, x2, y2) / pixelCount,
+    ),
     roundChannel(
-        _sumIntegral(integral.green, integral.width, x1, y1, x2, y2) /
-            pixelCount),
+      _sumIntegral(integral.green, integral.width, x1, y1, x2, y2) / pixelCount,
+    ),
     roundChannel(
-        _sumIntegral(integral.blue, integral.width, x1, y1, x2, y2) /
-            pixelCount),
+      _sumIntegral(integral.blue, integral.width, x1, y1, x2, y2) / pixelCount,
+    ),
   );
 }
 
 SubregionColors _sampleSubregions5x5(
-    IntegralImage integral, List<int> xs, List<int> ys) {
+  IntegralImage integral,
+  List<int> xs,
+  List<int> ys,
+) {
   LabColor q(int ax, int ay, int bx, int by) {
     final n = math.max(1, (bx - ax) * (by - ay)).toDouble();
     return rgbToLab(_sampleAvgColor(integral, ax, ay, bx, by, n));
   }
 
   return [
-    q(xs[0], ys[0], xs[1], ys[1]), q(xs[1], ys[0], xs[2], ys[1]), q(xs[2], ys[0], xs[3], ys[1]), q(xs[3], ys[0], xs[4], ys[1]), q(xs[4], ys[0], xs[5], ys[1]), //
-    q(xs[0], ys[1], xs[1], ys[2]), q(xs[1], ys[1], xs[2], ys[2]), q(xs[2], ys[1], xs[3], ys[2]), q(xs[3], ys[1], xs[4], ys[2]), q(xs[4], ys[1], xs[5], ys[2]),
-    q(xs[0], ys[2], xs[1], ys[3]), q(xs[1], ys[2], xs[2], ys[3]), q(xs[2], ys[2], xs[3], ys[3]), q(xs[3], ys[2], xs[4], ys[3]), q(xs[4], ys[2], xs[5], ys[3]),
-    q(xs[0], ys[3], xs[1], ys[4]), q(xs[1], ys[3], xs[2], ys[4]), q(xs[2], ys[3], xs[3], ys[4]), q(xs[3], ys[3], xs[4], ys[4]), q(xs[4], ys[3], xs[5], ys[4]),
-    q(xs[0], ys[4], xs[1], ys[5]), q(xs[1], ys[4], xs[2], ys[5]), q(xs[2], ys[4], xs[3], ys[5]), q(xs[3], ys[4], xs[4], ys[5]), q(xs[4], ys[4], xs[5], ys[5]),
+    q(xs[0], ys[0], xs[1], ys[1]),
+    q(xs[1], ys[0], xs[2], ys[1]),
+    q(xs[2], ys[0], xs[3], ys[1]),
+    q(xs[3], ys[0], xs[4], ys[1]),
+    q(xs[4], ys[0], xs[5], ys[1]), //
+    q(xs[0], ys[1], xs[1], ys[2]),
+    q(xs[1], ys[1], xs[2], ys[2]),
+    q(xs[2], ys[1], xs[3], ys[2]),
+    q(xs[3], ys[1], xs[4], ys[2]),
+    q(xs[4], ys[1], xs[5], ys[2]),
+    q(xs[0], ys[2], xs[1], ys[3]),
+    q(xs[1], ys[2], xs[2], ys[3]),
+    q(xs[2], ys[2], xs[3], ys[3]),
+    q(xs[3], ys[2], xs[4], ys[3]),
+    q(xs[4], ys[2], xs[5], ys[3]),
+    q(xs[0], ys[3], xs[1], ys[4]),
+    q(xs[1], ys[3], xs[2], ys[4]),
+    q(xs[2], ys[3], xs[3], ys[4]),
+    q(xs[3], ys[3], xs[4], ys[4]),
+    q(xs[4], ys[3], xs[5], ys[4]),
+    q(xs[0], ys[4], xs[1], ys[5]),
+    q(xs[1], ys[4], xs[2], ys[5]),
+    q(xs[2], ys[4], xs[3], ys[5]),
+    q(xs[3], ys[4], xs[4], ys[5]),
+    q(xs[4], ys[4], xs[5], ys[5]),
   ];
 }
 
 SubregionEdges _sampleSubregionEdges5x5(
-    IntegralImage integral, List<int> xs, List<int> ys) {
+  IntegralImage integral,
+  List<int> xs,
+  List<int> ys,
+) {
   final w = integral.width;
   double e(int ax, int ay, int bx, int by) {
     final n = math.max(1, (bx - ax) * (by - ay));
@@ -426,16 +513,39 @@ SubregionEdges _sampleSubregionEdges5x5(
   }
 
   return [
-    e(xs[0], ys[0], xs[1], ys[1]), e(xs[1], ys[0], xs[2], ys[1]), e(xs[2], ys[0], xs[3], ys[1]), e(xs[3], ys[0], xs[4], ys[1]), e(xs[4], ys[0], xs[5], ys[1]), //
-    e(xs[0], ys[1], xs[1], ys[2]), e(xs[1], ys[1], xs[2], ys[2]), e(xs[2], ys[1], xs[3], ys[2]), e(xs[3], ys[1], xs[4], ys[2]), e(xs[4], ys[1], xs[5], ys[2]),
-    e(xs[0], ys[2], xs[1], ys[3]), e(xs[1], ys[2], xs[2], ys[3]), e(xs[2], ys[2], xs[3], ys[3]), e(xs[3], ys[2], xs[4], ys[3]), e(xs[4], ys[2], xs[5], ys[3]),
-    e(xs[0], ys[3], xs[1], ys[4]), e(xs[1], ys[3], xs[2], ys[4]), e(xs[2], ys[3], xs[3], ys[4]), e(xs[3], ys[3], xs[4], ys[4]), e(xs[4], ys[3], xs[5], ys[4]),
-    e(xs[0], ys[4], xs[1], ys[5]), e(xs[1], ys[4], xs[2], ys[5]), e(xs[2], ys[4], xs[3], ys[5]), e(xs[3], ys[4], xs[4], ys[5]), e(xs[4], ys[4], xs[5], ys[5]),
+    e(xs[0], ys[0], xs[1], ys[1]),
+    e(xs[1], ys[0], xs[2], ys[1]),
+    e(xs[2], ys[0], xs[3], ys[1]),
+    e(xs[3], ys[0], xs[4], ys[1]),
+    e(xs[4], ys[0], xs[5], ys[1]), //
+    e(xs[0], ys[1], xs[1], ys[2]),
+    e(xs[1], ys[1], xs[2], ys[2]),
+    e(xs[2], ys[1], xs[3], ys[2]),
+    e(xs[3], ys[1], xs[4], ys[2]),
+    e(xs[4], ys[1], xs[5], ys[2]),
+    e(xs[0], ys[2], xs[1], ys[3]),
+    e(xs[1], ys[2], xs[2], ys[3]),
+    e(xs[2], ys[2], xs[3], ys[3]),
+    e(xs[3], ys[2], xs[4], ys[3]),
+    e(xs[4], ys[2], xs[5], ys[3]),
+    e(xs[0], ys[3], xs[1], ys[4]),
+    e(xs[1], ys[3], xs[2], ys[4]),
+    e(xs[2], ys[3], xs[3], ys[4]),
+    e(xs[3], ys[3], xs[4], ys[4]),
+    e(xs[4], ys[3], xs[5], ys[4]),
+    e(xs[0], ys[4], xs[1], ys[5]),
+    e(xs[1], ys[4], xs[2], ys[5]),
+    e(xs[2], ys[4], xs[3], ys[5]),
+    e(xs[3], ys[4], xs[4], ys[5]),
+    e(xs[4], ys[4], xs[5], ys[5]),
   ];
 }
 
 SubregionEdgeOrientations _sampleSubregionOrientations5x5(
-    IntegralImage integral, List<int> xs, List<int> ys) {
+  IntegralImage integral,
+  List<int> xs,
+  List<int> ys,
+) {
   final w = integral.width;
   final out = Float32List(100);
   for (var r = 0; r < 5; r++) {
@@ -513,7 +623,13 @@ double _deriveColorVariance(LabColor avg, SubregionColors s) {
 }
 
 double _sumIntegral(
-    Float64List integral, int width, int x1, int y1, int x2, int y2) {
+  Float64List integral,
+  int width,
+  int x1,
+  int y1,
+  int x2,
+  int y2,
+) {
   final stride = width + 1;
   return integral[y2 * stride + x2] -
       integral[y1 * stride + x2] -
@@ -521,13 +637,15 @@ double _sumIntegral(
       integral[y1 * stride + x1];
 }
 
-void preprocessPixels(Uint8List data,
-    {double colorBoost = 1.0,
-    double autoContrast = 0,
-    bool grayscale = false,
-    double grayContrast = 0,
-    bool invert = false,
-    bool threshold = false}) {
+void preprocessPixels(
+  Uint8List data, {
+  double colorBoost = 1.0,
+  double autoContrast = 0,
+  bool grayscale = false,
+  double grayContrast = 0,
+  bool invert = false,
+  bool threshold = false,
+}) {
   final contrast = autoContrast;
   final saturation = colorBoost;
   if (contrast <= 0 && saturation <= 1.0 && !grayscale) return;
@@ -596,12 +714,15 @@ void preprocessPixels(Uint8List data,
     for (var i = 0; i < len; i += 4) {
       final r = data[i], g = data[i + 1], b = data[i + 2];
       final gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      data[i] =
-          math.max(0, math.min(255, jsRound(gray + (r - gray) * saturation))).toInt();
-      data[i + 1] =
-          math.max(0, math.min(255, jsRound(gray + (g - gray) * saturation))).toInt();
-      data[i + 2] =
-          math.max(0, math.min(255, jsRound(gray + (b - gray) * saturation))).toInt();
+      data[i] = math
+          .max(0, math.min(255, jsRound(gray + (r - gray) * saturation)))
+          .toInt();
+      data[i + 1] = math
+          .max(0, math.min(255, jsRound(gray + (g - gray) * saturation)))
+          .toInt();
+      data[i + 2] = math
+          .max(0, math.min(255, jsRound(gray + (b - gray) * saturation)))
+          .toInt();
     }
   }
 
@@ -615,7 +736,9 @@ void preprocessPixels(Uint8List data,
     // image never collapses to a single flat color).
     final cutoff = math.max(0.1, math.min(0.9, k == 0 ? 0.5 : k));
     for (var i = 0; i < len; i += 4) {
-      var n = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
+      var n =
+          (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) /
+          255;
       if (threshold) {
         n = n < cutoff ? 0 : 1; // hard 2-color
       } else if (k > 0) {

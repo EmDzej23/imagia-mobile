@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'shared.dart' show CropShape, cropForTile, saturationColorFilter;
 import 'hexagon.dart';
 import 'rhombille.dart' show faceShade;
+import 'hires_tiles.dart';
+import 'local_recolor.dart';
+import 'tile_recolor.dart';
 import 'types.dart';
 
 /// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
@@ -20,7 +23,13 @@ double _hash01(int n) {
 }
 
 /// Geometry of the "contain" fit used to place the mosaic inside a canvas.
-typedef MosaicFit = ({double scale, double ox, double oy, double drawW, double drawH});
+typedef MosaicFit = ({
+  double scale,
+  double ox,
+  double oy,
+  double drawW,
+  double drawH,
+});
 
 MosaicFit computeMosaicFit(Size size, double baseW, double baseH) {
   final sx = size.width / baseW;
@@ -44,8 +53,12 @@ MosaicFit computeMosaicFit(Size size, double baseW, double baseH) {
 /// A manual [crop] overrides all of that: the chosen rectangle is cover-fitted to the
 /// cell, centred WITHIN the crop. Bit-exact port of the web's `resolveTileSourceRect`,
 /// so the on-device preview and the server export frame every tile identically.
-Rect centerCropSrc(ui.Image img, double cellAR,
-    {bool topCrop = false, TileCrop? crop}) {
+Rect centerCropSrc(
+  ui.Image img,
+  double cellAR, {
+  bool topCrop = false,
+  TileCrop? crop,
+}) {
   final tw = img.width.toDouble();
   final th = img.height.toDouble();
 
@@ -82,6 +95,98 @@ Rect centerCropSrc(ui.Image img, double cellAR,
   return Rect.fromLTWH(0, topCrop ? 0 : (th - srcH) / 2, tw, srcH);
 }
 
+/// Draw the tiles of a WINDOW of the mosaic — no recolour, tint or grade (those are
+/// applied to the finished pixels, exactly like the web: see recolor_bake.dart).
+///
+/// [k] = canvas px per base px, [win] = the window's top-left in base px. Rectangular
+/// cells snap OUTWARD to whole pixels, as the web's renderPreviewToCanvas does — the
+/// recolour runs over those exact rects. Returns the cells to recolour (rects, and
+/// honeycomb / cube cells with their exact-shape masks).
+List<RecolorCell> drawPlanWindow(
+  Canvas canvas,
+  SlimMosaicPlan plan,
+  Map<String, TileCrop> tileCrops,
+  double k,
+  Offset win,
+  Size canvasSize, {
+  required ui.Image? Function(SlimPlacement p, double needPx) imageFor,
+}) {
+  final cells = <RecolorCell>[];
+  final paint = Paint()
+    ..filterQuality = FilterQuality.medium
+    ..isAntiAlias = false;
+  final offX = win.dx * k, offY = win.dy * k;
+  for (final p in plan.placements) {
+    final x = p.x * k - offX, y = p.y * k - offY;
+    final w = p.width * k, h = p.height * k;
+    // Generous cull: honeycomb / cube cells reach past their sample rect.
+    final reach = (p.quad != null || plan.hexagon) ? math.max(w, h) : 0.0;
+    if (x + w + reach < 0 ||
+        y + h + reach < 0 ||
+        x - reach > canvasSize.width ||
+        y - reach > canvasSize.height) {
+      continue;
+    }
+    final avg = p.regionAvgColor ?? const [0.0, 0.0, 0.0];
+    final img = imageFor(p, math.max(w, h));
+    if (p.quad != null || plan.hexagon) {
+      if (img != null) {
+        _drawCell(
+          canvas,
+          img,
+          plan,
+          tileCrops,
+          p,
+          Rect.fromLTWH(x, y, w, h),
+          paint,
+          rhombSx: k,
+          rhombSy: k,
+          rhombOrigin: Offset(-offX, -offY),
+        );
+      }
+      final rc = shapedRecolorCell(
+        x: p.x,
+        y: p.y,
+        width: p.width,
+        height: p.height,
+        quad: p.quad,
+        face: p.face,
+        hexagon: plan.hexagon,
+        avg: avg,
+        grid: p.regionGrid,
+        kx: k,
+        ky: k,
+        offX: offX,
+        offY: offY,
+      );
+      if (rc != null) cells.add(rc);
+      continue;
+    }
+    final dx = x.floorToDouble(), dy = y.floorToDouble();
+    final dw = (x + w).ceilToDouble() - dx, dh = (y + h).ceilToDouble() - dy;
+    final rect = Rect.fromLTWH(dx, dy, dw, dh);
+    if (img == null) {
+      // Missing tile: its region's colour, like the web (never a transparent gap).
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = Color.fromARGB(
+            255,
+            avg[0].round(),
+            avg[1].round(),
+            avg[2].round(),
+          ),
+      );
+      continue;
+    }
+    _drawCell(canvas, img, plan, tileCrops, p, rect, paint);
+    cells.add(
+      RecolorCell(x: dx, y: dy, w: dw, h: dh, avg: avg, grid: p.regionGrid),
+    );
+  }
+  return cells;
+}
+
 /// Renders a [SlimMosaicPlan] on a canvas: each placement draws its matched
 /// tile thumbnail, center-cropped to the cell's aspect ratio, with an optional
 /// tinted overlay of the base image (the `tintStrength` setting).
@@ -90,7 +195,10 @@ Rect centerCropSrc(ui.Image img, double cellAR,
 Rect _hexBoundsFor(Rect sample) {
   final s = sample.height / hexSampleHPerS;
   return Rect.fromCenter(
-      center: sample.center, width: s * 2, height: s * math.sqrt(3));
+    center: sample.center,
+    width: s * 2,
+    height: s * math.sqrt(3),
+  );
 }
 
 /// Clip path for the flat-top hexagon inscribed in [rect].
@@ -100,8 +208,12 @@ Rect _hexBoundsFor(Rect sample) {
 /// through as dark hairlines along every seam. Same reason, and the same constant, as
 /// the server compositor.
 Path _hexClipPath(Rect rect) {
-  final pts = hexCorners(rect.center.dx, rect.center.dy,
-      rect.width + hexOverdraw * 2, rect.height + hexOverdraw * 2);
+  final pts = hexCorners(
+    rect.center.dx,
+    rect.center.dy,
+    rect.width + hexOverdraw * 2,
+    rect.height + hexOverdraw * 2,
+  );
   final path = Path()..moveTo(pts[0][0], pts[0][1]);
   for (var i = 1; i < 6; i++) {
     path.lineTo(pts[i][0], pts[i][1]);
@@ -118,9 +230,19 @@ Path _hexClipPath(Rect rect) {
 ///
 /// Per-face shading is what makes the wall read as lit solids rather than a flat pattern
 /// of diamonds — see [faceShade].
-void _drawRhombus(Canvas canvas, ui.Image img, SlimMosaicPlan plan,
-    Map<String, TileCrop> tileCrops, SlimPlacement p, double sx, double sy,
-    Offset origin, Paint paint) {
+void _drawRhombus(
+  Canvas canvas,
+  ui.Image img,
+  SlimMosaicPlan plan,
+  Map<String, TileCrop> tileCrops,
+  SlimPlacement p,
+  double sx,
+  double sy,
+  Offset origin,
+  Paint paint, {
+  double recolor = 0,
+  int index = -1,
+}) {
   final q = p.quad!;
   double px(int i) => q[i * 2] * sx + origin.dx;
   double py(int i) => q[i * 2 + 1] * sy + origin.dy;
@@ -144,61 +266,130 @@ void _drawRhombus(Canvas canvas, ui.Image img, SlimMosaicPlan plan,
 
   // Map a `side`-sized destination, NOT a 1x1 one: a unit-square destination rasterises
   // the image at one pixel and then magnifies it, producing a smear rather than a photo.
-  canvas.transform(Float64List.fromList([
-    ux / side, uy / side, 0, 0, //
-    vx / side, vy / side, 0, 0, //
-    0, 0, 1, 0, //
-    px(0), py(0), 0, 1, //
-  ]));
-  canvas.drawImageRect(
-      img,
-      Rect.fromLTWH(src.left + (src.width - side) / 2,
-          src.top + (src.height - side) / 2, side, side),
-      Rect.fromLTWH(0, 0, side, side),
-      paint);
+  canvas.transform(
+    Float64List.fromList([
+      ux / side, uy / side, 0, 0, //
+      vx / side, vy / side, 0, 0, //
+      0, 0, 1, 0, //
+      px(0), py(0), 0, 1, //
+    ]),
+  );
+  final squareSrc = Rect.fromLTWH(
+    src.left + (src.width - side) / 2,
+    src.top + (src.height - side) / 2,
+    side,
+    side,
+  );
+  // Tile recolour on the face's own draw; the shading below then darkens it like the
+  // export (which aims at the shaded colour after baking the shade in — the same thing).
+  paint.colorFilter = cellRecolorFilter(
+    plan: plan,
+    index: index,
+    count: plan.placements.length,
+    crops: tileCrops,
+    img: img,
+    src: squareSrc,
+    region: p.regionAvgColor,
+    strength: recolor,
+  );
+  canvas.drawImageRect(img, squareSrc, Rect.fromLTWH(0, 0, side, side), paint);
+  paint.colorFilter = null;
   canvas.restore();
 
   final shade = faceShade[p.face] ?? 1.0;
   if (shade < 1) {
     canvas.save();
     canvas.clipPath(path);
-    canvas.drawPath(
-        path, Paint()..color = Color.fromRGBO(0, 0, 0, 1 - shade));
+    canvas.drawPath(path, Paint()..color = Color.fromRGBO(0, 0, 0, 1 - shade));
     canvas.restore();
   }
 }
 
+/// The source rect pulled in by half a texel, so filtered sampling never reads past
+/// the crop (or the photo's edge) — which shows as a thin dark line along cell edges.
+Rect _insetHalfTexel(Rect r) =>
+    r.width > 2 && r.height > 2 ? r.deflate(0.5) : r;
+
+/// Overdraw per rectangular cell, in logical px (≥ 1 device px on 2–3× screens).
+const double cellBleed = 0.5;
+
 /// Draw ONE mosaic cell. Shared by both painters so the hexagon handling — and the crop
 /// slot it reads — cannot drift between the preview and the loupe.
-void _drawCell(Canvas canvas, ui.Image img, SlimMosaicPlan plan,
-    Map<String, TileCrop> tileCrops, SlimPlacement p, Rect rect, Paint paint,
-    {double? rhombSx, double? rhombSy, Offset rhombOrigin = Offset.zero}) {
+void _drawCell(
+  Canvas canvas,
+  ui.Image img,
+  SlimMosaicPlan plan,
+  Map<String, TileCrop> tileCrops,
+  SlimPlacement p,
+  Rect rect,
+  Paint paint, {
+  double? rhombSx,
+  double? rhombSy,
+  Offset rhombOrigin = Offset.zero,
+  double recolor = 0,
+  int index = -1,
+  double bleed = 0,
+}) {
   // 3D cubes: the cell is a parallelogram, drawn before the rectangular path because
   // none of that applies — there is no axis-aligned destination rect.
   if (p.quad != null && rhombSx != null && rhombSy != null) {
     _drawRhombus(
-        canvas, img, plan, tileCrops, p, rhombSx, rhombSy, rhombOrigin, paint);
+      canvas,
+      img,
+      plan,
+      tileCrops,
+      p,
+      rhombSx,
+      rhombSy,
+      rhombOrigin,
+      paint,
+      recolor: recolor,
+      index: index,
+    );
     return;
   }
   // Hexagon mode: cover-fit the hexagon's BOUNDING BOX and clip. Fitting the sample
   // rect instead would leave the six corners empty, and a honeycomb with transparent
   // corners reads as a rendering fault rather than a style.
   final hex = plan.hexagon ? _hexBoundsFor(rect) : null;
-  final dst = hex ?? rect;
+  // Rectangular cells are overdrawn by [bleed] on every side so neighbours overlap:
+  // where two cells meet on a fractional pixel the background could otherwise show
+  // through as a hairline (hexagons carry their own overdraw).
+  final dst = hex ?? (bleed > 0 ? rect.inflate(bleed) : rect);
   if (hex != null) {
     canvas.save();
     canvas.clipPath(_hexClipPath(hex));
   }
-  canvas.drawImageRect(
+  final src = _insetHalfTexel(
+    centerCropSrc(
       img,
-      centerCropSrc(img, dst.width / dst.height,
-          topCrop: plan.cropPortraitTop,
-          // Crops are per CELL SHAPE — the slot must match what the cell is, or a
-          // portrait cell reads back the square mode's framing.
-          crop: cropForTile(tileCrops, p.tileId, p.width / p.height,
-              plan.hexagon ? CropShape.hex : null)),
-      dst,
-      paint);
+      (hex ?? rect).width / (hex ?? rect).height,
+      topCrop: plan.cropPortraitTop,
+      // Crops are per CELL SHAPE — the slot must match what the cell is, or a
+      // portrait cell reads back the square mode's framing.
+      crop: cropForTile(
+        tileCrops,
+        p.tileId,
+        p.width / p.height,
+        plan.hexagon ? CropShape.hex : null,
+      ),
+    ),
+  );
+  // Tile recolouring, as a colour matrix on this same draw (honeycomb cells too; 3D
+  // cubes in _drawRhombus) — same as the web and the server.
+  final filter = cellRecolorFilter(
+    plan: plan,
+    index: index,
+    count: plan.placements.length,
+    crops: tileCrops,
+    img: img,
+    src: src,
+    region: p.regionAvgColor,
+    strength: recolor,
+  );
+  paint.colorFilter = filter;
+  canvas.drawImageRect(img, src, dst, paint);
+  paint.colorFilter = null;
   if (hex != null) canvas.restore();
 }
 
@@ -209,11 +400,15 @@ class MosaicPreviewPainter extends CustomPainter {
     this.baseImage,
     double? tintStrength,
     double? outputSaturation,
+    double? tileRecolor,
     this.appear = 1.0,
     Map<String, TileCrop>? tileCrops,
-  })  : tintStrength = tintStrength ?? plan.tintStrength,
-        outputSaturation = outputSaturation ?? plan.outputSaturation,
-        tileCrops = tileCrops ?? plan.tileCrops;
+  }) : tintStrength = tintStrength ?? plan.tintStrength,
+       outputSaturation = outputSaturation ?? plan.outputSaturation,
+       tileRecolor = tileRecolor ?? plan.tileRecolor,
+       tileCrops = tileCrops ?? plan.tileCrops,
+       // Repaint when tile colour grids arrive (the recolour needs them).
+       super(repaint: tileColorGridsVersion);
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
@@ -231,6 +426,10 @@ class MosaicPreviewPainter extends CustomPainter {
   /// Output saturation grade. Also kept separate from [plan] so the slider repaints
   /// without a replan.
   final double outputSaturation;
+
+  /// Tile recolouring strength. Kept separate from [plan] like the tint, so the
+  /// slider repaints without a replan.
+  final double tileRecolor;
 
   /// Reveal progress 0→1. At 1 the steady-state fast path runs (no per-tile
   /// transform); below 1 tiles fade + scale + drift into place, staggered.
@@ -256,7 +455,9 @@ class MosaicPreviewPainter extends CustomPainter {
     final grade = saturationColorFilter(outputSaturation);
     if (grade != null) {
       canvas.saveLayer(
-          Rect.fromLTWH(0, 0, fit.drawW, fit.drawH), Paint()..colorFilter = grade);
+        Rect.fromLTWH(0, 0, fit.drawW, fit.drawH),
+        Paint()..colorFilter = grade,
+      );
     }
 
     final paint = Paint()
@@ -281,7 +482,9 @@ class MosaicPreviewPainter extends CustomPainter {
         final dist = (1 - e) * dst.width * 1.3;
         drawRect = Rect.fromCenter(
           center: dst.center.translate(
-              math.cos(ang) * dist, math.sin(ang) * dist),
+            math.cos(ang) * dist,
+            math.sin(ang) * dist,
+          ),
           width: dst.width * scale,
           height: dst.height * scale,
         );
@@ -292,21 +495,42 @@ class MosaicPreviewPainter extends CustomPainter {
         final c = p.regionAvgColor;
         if (c != null) {
           canvas.drawRect(
-              drawRect,
-              Paint()
-                ..color = Color.fromRGBO(c[0].round(), c[1].round(),
-                    c[2].round(), opacity));
+            drawRect,
+            Paint()
+              ..color = Color.fromRGBO(
+                c[0].round(),
+                c[1].round(),
+                c[2].round(),
+                opacity,
+              ),
+          );
         }
         continue;
       }
       paint.color = Color.fromRGBO(255, 255, 255, opacity);
-      _drawCell(canvas, img, plan, tileCrops, p, drawRect, paint,
-          rhombSx: s, rhombSy: s);
+      _drawCell(
+        canvas,
+        img,
+        plan,
+        tileCrops,
+        p,
+        drawRect,
+        paint,
+        rhombSx: s,
+        rhombSy: s,
+        recolor: tileRecolor,
+        index: i,
+        bleed: animating ? 0 : cellBleed,
+      );
     }
 
     if (baseImage != null && tintStrength > 0) {
       final src = Rect.fromLTWH(
-          0, 0, baseImage!.width.toDouble(), baseImage!.height.toDouble());
+        0,
+        0,
+        baseImage!.width.toDouble(),
+        baseImage!.height.toDouble(),
+      );
       final dst = Rect.fromLTWH(0, 0, fit.drawW, fit.drawH);
       // Fade the tint in alongside the reveal so the picture resolves last.
       final tintAlpha = tintStrength.toDouble() * appear;
@@ -330,6 +554,7 @@ class MosaicPreviewPainter extends CustomPainter {
       old.baseImage != baseImage ||
       old.tintStrength != tintStrength ||
       old.outputSaturation != outputSaturation ||
+      old.tileRecolor != tileRecolor ||
       old.appear != appear ||
       !identical(old.tileCrops, tileCrops) ||
       old.tileImages.length != tileImages.length;
@@ -348,9 +573,22 @@ class MosaicZoomPainter extends CustomPainter {
     this.baseImage,
     this.tintStrength = 0,
     double? outputSaturation,
+    double? tileRecolor,
     Map<String, TileCrop>? tileCrops,
-  })  : outputSaturation = outputSaturation ?? plan.outputSaturation,
-        tileCrops = tileCrops ?? plan.tileCrops;
+    this.hiRes,
+    this.devicePixelRatio = 3,
+  }) : outputSaturation = outputSaturation ?? plan.outputSaturation,
+       tileRecolor = tileRecolor ?? plan.tileRecolor,
+       tileCrops = tileCrops ?? plan.tileCrops,
+       super(
+         repaint: hiRes == null
+             ? tileColorGridsVersion
+             : Listenable.merge([tileColorGridsVersion, hiRes.version]),
+       );
+
+  /// Sharp copies for deep zoom (see [HiResTiles]); thumbnails are used until they land.
+  final HiResTiles? hiRes;
+  final double devicePixelRatio;
 
   final SlimMosaicPlan plan;
   final Map<String, ui.Image> tileImages;
@@ -364,6 +602,7 @@ class MosaicZoomPainter extends CustomPainter {
   final double windowSize;
   final double tintStrength;
   final double outputSaturation;
+  final double tileRecolor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -382,7 +621,8 @@ class MosaicZoomPainter extends CustomPainter {
       ..filterQuality = FilterQuality.high
       ..isAntiAlias = false;
 
-    for (final p in plan.placements) {
+    for (var i = 0; i < plan.placements.length; i++) {
+      final p = plan.placements[i];
       final dx = p.x * s + ox;
       final dy = p.y * s + oy;
       final dw = p.width * s;
@@ -391,27 +631,69 @@ class MosaicZoomPainter extends CustomPainter {
         continue; // cull off-window cells
       }
       final dst = Rect.fromLTWH(dx, dy, dw, dh);
-      final img = tileImages[p.tileId];
+      final thumb = tileImages[p.tileId];
+      var img = thumb;
+      final hr = hiRes;
+      if (thumb != null && hr != null) {
+        // How many device pixels the photo spans on screen. Honeycomb and cube cells are
+        // larger than their sample rect, so they need a bit more.
+        final shapeK = p.quad != null ? 2.0 : (plan.hexagon ? 1.6 : 1.0);
+        final need = math.max(dw, dh) * shapeK * devicePixelRatio;
+        if (need > math.max(thumb.width, thumb.height) * 1.25) {
+          final sharp = hr.get(p.tileId, need);
+          if (sharp != null) {
+            img = sharp;
+          } else {
+            hr.want(p.tileId, need);
+          }
+        }
+      }
       if (img == null) {
         final c = p.regionAvgColor;
         if (c != null) {
           canvas.drawRect(
-              dst,
-              Paint()
-                ..color = Color.fromRGBO(
-                    c[0].round(), c[1].round(), c[2].round(), 1));
+            dst,
+            Paint()
+              ..color = Color.fromRGBO(
+                c[0].round(),
+                c[1].round(),
+                c[2].round(),
+                1,
+              ),
+          );
         }
         continue;
       }
-      _drawCell(canvas, img, plan, tileCrops, p, dst, paint,
-          rhombSx: s, rhombSy: s, rhombOrigin: Offset(ox, oy));
+      _drawCell(
+        canvas,
+        img,
+        plan,
+        tileCrops,
+        p,
+        dst,
+        paint,
+        rhombSx: s,
+        rhombSy: s,
+        rhombOrigin: Offset(ox, oy),
+        recolor: tileRecolor,
+        index: i,
+        bleed: cellBleed,
+      );
     }
 
     if (baseImage != null && tintStrength > 0) {
       final src = Rect.fromLTWH(
-          0, 0, baseImage!.width.toDouble(), baseImage!.height.toDouble());
-      final dst =
-          Rect.fromLTWH(ox, oy, plan.baseWidth * s, plan.baseHeight * s);
+        0,
+        0,
+        baseImage!.width.toDouble(),
+        baseImage!.height.toDouble(),
+      );
+      final dst = Rect.fromLTWH(
+        ox,
+        oy,
+        plan.baseWidth * s,
+        plan.baseHeight * s,
+      );
       canvas.drawImageRect(
         baseImage!,
         src,
@@ -433,5 +715,7 @@ class MosaicZoomPainter extends CustomPainter {
       old.windowSize != windowSize ||
       old.tintStrength != tintStrength ||
       !identical(old.tileCrops, tileCrops) ||
-      old.outputSaturation != outputSaturation;
+      old.outputSaturation != outputSaturation ||
+      old.tileRecolor != tileRecolor ||
+      old.hiRes != hiRes;
 }

@@ -57,7 +57,10 @@ class LuminanceBalance {
     (j['horizontal'] as num).toDouble(),
   );
 
-  Map<String, dynamic> toJson() => {'vertical': vertical, 'horizontal': horizontal};
+  Map<String, dynamic> toJson() => {
+    'vertical': vertical,
+    'horizontal': horizontal,
+  };
 }
 
 /// 8-bin luminance histogram (length 8).
@@ -126,6 +129,41 @@ class SignalWeights {
 /// "original" | "blocks" | "square" | "landscape" | "portrait"
 typedef MosaicMode = String;
 
+/// A finished collage cut-out (private Blob files from the render service). Same
+/// shape as the web's `CollageCut`.
+class CollageCut {
+  CollageCut({
+    required this.src,
+    required this.cutUrl,
+    required this.cutPreviewUrl,
+    required this.width,
+    required this.height,
+  });
+
+  /// The uploaded photo it was cut from — a cut only counts for that same photo.
+  final String src;
+  final String cutUrl;
+  final String cutPreviewUrl;
+  final int width;
+  final int height;
+
+  factory CollageCut.fromJson(Map<String, dynamic> j) => CollageCut(
+    src: j['src'] as String? ?? '',
+    cutUrl: j['cutUrl'] as String? ?? '',
+    cutPreviewUrl: j['cutPreviewUrl'] as String? ?? '',
+    width: (j['width'] as num?)?.toInt() ?? 0,
+    height: (j['height'] as num?)?.toInt() ?? 0,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'src': src,
+    'cutUrl': cutUrl,
+    'cutPreviewUrl': cutPreviewUrl,
+    'width': width,
+    'height': height,
+  };
+}
+
 class MosaicSettings {
   MosaicSettings({
     required this.mosaicMode,
@@ -160,7 +198,20 @@ class MosaicSettings {
     this.wordartCoverage = 0.5,
     this.wordartCaption = '',
     this.wordartTitleColor = '',
-    this.outputSaturation = 1.2,
+    this.collageFormat = 'portrait',
+    this.collageRotation = 12,
+    this.collageOutline = 0.5,
+    this.collageShadow = 0.5,
+    this.collageBackground = '#18181b',
+    this.collageKinds,
+    this.collageHero,
+    this.collageCuts,
+    this.outputSaturation = 1,
+    this.tileRecolor = 1,
+    this.shapeMatch = 0.5,
+    this.repeatSpacing = 2,
+    this.optimalPlacement = true,
+    this.fitLightToLibrary = false,
     this.saBudgetFactor,
     this.signalWeights,
   });
@@ -208,21 +259,67 @@ class MosaicSettings {
   String ancientShape; // "none" | "heart" | "basketball" | "flower"
 
   // Word-art (tile-less typographic renderer). Look settings only.
-  double wordartDensity; // largest word size at the reference long side (18..100)
+  double
+  wordartDensity; // largest word size at the reference long side (18..100)
   double wordartRotation; // max tilt degrees (0..80)
   double wordartContrast; // signed: >=0 light-on-dark, <0 dark-on-white (-1..1)
-  double wordartPalette; // quantise to N colours; 64 = full (photo) colours (2..64)
+  double
+  wordartPalette; // quantise to N colours; 64 = full (photo) colours (2..64)
   double wordartGround; // 0..1 ground / dark-floor brightness
   double wordartVivid; // 0..1 letter vividness
   double wordartEmpty; // 0..1 empty space (1 = leave dark areas bare)
   double wordartCoverage; // 0..1 pack whole phrases into gaps (denser subject)
   String wordartCaption; // in-artwork photo title (upper-cased); '' = off
-  String wordartTitleColor; // CSS colour ('#rrggbb'/'rgb(..)') for the title; '' = auto
+  String
+  wordartTitleColor; // CSS colour ('#rrggbb'/'rgb(..)') for the title; '' = auto
+
+  // ── Collage (a cut-and-paste pile of the photos; no base photo, each photo once).
+  // Same keys as the web (lib/collage/), so a project opens the same on both.
+  /// 'portrait' (2:3) | 'square' | 'landscape' (3:2).
+  String collageFormat;
+
+  /// Max tilt in degrees for cut-outs (whole photos tilt less).
+  double collageRotation;
+
+  /// White sticker outline around cut-outs, 0..1.
+  double collageOutline;
+
+  /// Drop shadow, 0..1.
+  double collageShadow;
+
+  /// '#rrggbb' shown between photos.
+  String collageBackground;
+
+  /// Per tile id: 'cutout' (cut out of its background) or 'full'.
+  Map<String, String>? collageKinds;
+
+  /// The centre piece's tile id.
+  String? collageHero;
+
+  /// Finished cut-outs by tile id — a photo is never cut twice.
+  Map<String, CollageCut>? collageCuts;
 
   /// Output saturation grade applied to the FINISHED composite (tiles + tint), not to
   /// any single layer. 1 = untouched; above 1 punches the colour up. Same matrix the
   /// server applies via Sharp `.recomb()`, so preview / video / export all match.
   double outputSaturation;
+
+  /// Tile recolouring 0..1: each tile's colours are moved toward its cell's colour in
+  /// the base photo, keeping the tile's own detail (see `tileRecolorLinear` in
+  /// tile_recolor.dart). Render-only, like tint. Mirrors web `MosaicSettings.tileRecolor`.
+  double tileRecolor;
+
+  /// Engine tuning, mirrors web `MosaicSettings` (hidden there too, not persisted):
+  /// weight of the shape signal (`shapeDistance`), the no-repeat radius in cells
+  /// (repeat_spacing.dart), and the global placement pass (optimal_placement.dart).
+  double shapeMatch;
+  int repeatSpacing;
+  bool optimalPlacement;
+
+  /// "Fit light to your photos": the matcher sees the photo's brightness ends squeezed
+  /// into the library's range (tone_fit.dart). Opt-in, default off; a user choice, so it
+  /// is persisted. Mirrors web `MosaicSettings.fitLightToLibrary`.
+  bool fitLightToLibrary;
 
   /// Admin override for the simulated-annealing iteration budget. Null = use the
   /// per-platform default in `buildGridLayout`.
@@ -263,7 +360,20 @@ class MosaicSettings {
     double? wordartCoverage,
     String? wordartCaption,
     String? wordartTitleColor,
+    String? collageFormat,
+    double? collageRotation,
+    double? collageOutline,
+    double? collageShadow,
+    String? collageBackground,
+    Map<String, String>? collageKinds,
+    String? collageHero,
+    Map<String, CollageCut>? collageCuts,
     double? outputSaturation,
+    double? tileRecolor,
+    double? shapeMatch,
+    int? repeatSpacing,
+    bool? optimalPlacement,
+    bool? fitLightToLibrary,
     double? saBudgetFactor,
     SignalWeights? signalWeights,
   }) => MosaicSettings(
@@ -299,7 +409,23 @@ class MosaicSettings {
     wordartCoverage: wordartCoverage ?? this.wordartCoverage,
     wordartCaption: wordartCaption ?? this.wordartCaption,
     wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
+    collageFormat: collageFormat ?? this.collageFormat,
+    collageRotation: collageRotation ?? this.collageRotation,
+    collageOutline: collageOutline ?? this.collageOutline,
+    collageShadow: collageShadow ?? this.collageShadow,
+    collageBackground: collageBackground ?? this.collageBackground,
+    collageKinds: collageKinds ?? this.collageKinds,
+    // '' clears the centre piece.
+    collageHero: collageHero == null
+        ? this.collageHero
+        : (collageHero.isEmpty ? null : collageHero),
+    collageCuts: collageCuts ?? this.collageCuts,
     outputSaturation: outputSaturation ?? this.outputSaturation,
+    tileRecolor: tileRecolor ?? this.tileRecolor,
+    shapeMatch: shapeMatch ?? this.shapeMatch,
+    repeatSpacing: repeatSpacing ?? this.repeatSpacing,
+    optimalPlacement: optimalPlacement ?? this.optimalPlacement,
+    fitLightToLibrary: fitLightToLibrary ?? this.fitLightToLibrary,
     saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
     signalWeights: signalWeights ?? this.signalWeights,
   );
@@ -336,11 +462,33 @@ class MosaicSettings {
     wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
     wordartCaption: j['wordartCaption'] as String? ?? '',
     wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
-    outputSaturation: (j['outputSaturation'] as num?)?.toDouble() ?? 1.2,
+    collageFormat: j['collageFormat'] as String? ?? 'portrait',
+    collageRotation: (j['collageRotation'] as num?)?.toDouble() ?? 12,
+    collageOutline: (j['collageOutline'] as num?)?.toDouble() ?? 0.5,
+    collageShadow: (j['collageShadow'] as num?)?.toDouble() ?? 0.5,
+    collageBackground: j['collageBackground'] as String? ?? '#18181b',
+    collageKinds: (j['collageKinds'] as Map?)?.map(
+      (k, v) => MapEntry(k as String, v as String),
+    ),
+    collageHero: j['collageHero'] as String?,
+    collageCuts: (j['collageCuts'] as Map?)?.map(
+      (k, v) => MapEntry(
+        k as String,
+        CollageCut.fromJson((v as Map).cast<String, dynamic>()),
+      ),
+    ),
+    outputSaturation: (j['outputSaturation'] as num?)?.toDouble() ?? 1,
+    tileRecolor: (j['tileRecolor'] as num?)?.toDouble() ?? 1,
+    shapeMatch: (j['shapeMatch'] as num?)?.toDouble() ?? 0.5,
+    repeatSpacing: (j['repeatSpacing'] as num?)?.round() ?? 2,
+    optimalPlacement: j['optimalPlacement'] as bool? ?? true,
+    fitLightToLibrary: j['fitLightToLibrary'] == true,
     saBudgetFactor: (j['saBudgetFactor'] as num?)?.toDouble(),
     signalWeights: j['signalWeights'] == null
         ? null
-        : SignalWeights.fromJson((j['signalWeights'] as Map).cast<String, dynamic>()),
+        : SignalWeights.fromJson(
+            (j['signalWeights'] as Map).cast<String, dynamic>(),
+          ),
   );
 
   Map<String, dynamic> toJson() => {
@@ -375,7 +523,18 @@ class MosaicSettings {
     'wordartCoverage': wordartCoverage,
     'wordartCaption': wordartCaption,
     'wordartTitleColor': wordartTitleColor,
+    'collageFormat': collageFormat,
+    'collageRotation': collageRotation,
+    'collageOutline': collageOutline,
+    'collageShadow': collageShadow,
+    'collageBackground': collageBackground,
+    if (collageKinds != null) 'collageKinds': collageKinds,
+    if (collageHero != null) 'collageHero': collageHero,
+    if (collageCuts != null)
+      'collageCuts': collageCuts!.map((k, v) => MapEntry(k, v.toJson())),
     'outputSaturation': outputSaturation,
+    'tileRecolor': tileRecolor,
+    'fitLightToLibrary': fitLightToLibrary,
     if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
     // NOT persisted: engine tuning, not user content. See
     // ProjectsApi._parseSettings — writing these froze old tuning into saved
@@ -430,7 +589,9 @@ class TileDescriptor {
     height: (j['height'] as num).toDouble(),
     aspectRatio: (j['aspectRatio'] as num).toDouble(),
     orientation: j['orientation'] as String,
-    averageColor: RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
+    averageColor: RgbColor.fromJson(
+      (j['averageColor'] as Map).cast<String, dynamic>(),
+    ),
     averageLabColor: LabColor.fromJson(
       (j['averageLabColor'] as Map).cast<String, dynamic>(),
     ),
@@ -461,7 +622,9 @@ List<double>? _doubleList(dynamic v) =>
 
 Float32List? _floatList(dynamic v) => v == null
     ? null
-    : Float32List.fromList((v as List).map((e) => (e as num).toDouble()).toList());
+    : Float32List.fromList(
+        (v as List).map((e) => (e as num).toDouble()).toList(),
+      );
 
 class RegionAnalysis {
   RegionAnalysis({
@@ -503,7 +666,9 @@ class RegionAnalysis {
     y: (j['y'] as num).toDouble(),
     width: (j['width'] as num).toDouble(),
     height: (j['height'] as num).toDouble(),
-    averageColor: RgbColor.fromJson((j['averageColor'] as Map).cast<String, dynamic>()),
+    averageColor: RgbColor.fromJson(
+      (j['averageColor'] as Map).cast<String, dynamic>(),
+    ),
     averageLabColor: LabColor.fromJson(
       (j['averageLabColor'] as Map).cast<String, dynamic>(),
     ),
@@ -521,28 +686,32 @@ class RegionAnalysis {
   );
 
   /// Builds a placement from this region with an assigned tile.
-  MosaicPlacement toPlacement(int index, String tileId, String tileName, double score) =>
-      MosaicPlacement(
-        x: x,
-        y: y,
-        width: width,
-        height: height,
-        averageColor: averageColor,
-        averageLabColor: averageLabColor,
-        detailScore: detailScore,
-        subregionColors: subregionColors,
-        subregionEdges: subregionEdges,
-        contrastMap: contrastMap,
-        luminanceBalance: luminanceBalance,
-        colorVariance: colorVariance,
-        edgeOrientation: edgeOrientation,
-        tonalHistogram: tonalHistogram,
-        subregionEdgeOrientations: subregionEdgeOrientations,
-        index: index,
-        tileId: tileId,
-        tileName: tileName,
-        score: score,
-      );
+  MosaicPlacement toPlacement(
+    int index,
+    String tileId,
+    String tileName,
+    double score,
+  ) => MosaicPlacement(
+    x: x,
+    y: y,
+    width: width,
+    height: height,
+    averageColor: averageColor,
+    averageLabColor: averageLabColor,
+    detailScore: detailScore,
+    subregionColors: subregionColors,
+    subregionEdges: subregionEdges,
+    contrastMap: contrastMap,
+    luminanceBalance: luminanceBalance,
+    colorVariance: colorVariance,
+    edgeOrientation: edgeOrientation,
+    tonalHistogram: tonalHistogram,
+    subregionEdgeOrientations: subregionEdgeOrientations,
+    index: index,
+    tileId: tileId,
+    tileName: tileName,
+    score: score,
+  );
 }
 
 /// RegionAnalysis & { index, tileId, tileName, score }
@@ -596,6 +765,7 @@ class SlimPlacement {
     this.regionAvgColor,
     this.quad,
     this.face,
+    this.regionGrid,
   });
 
   int index;
@@ -604,6 +774,11 @@ class SlimPlacement {
   double width;
   double height;
   String tileId;
+
+  /// The photo's 5×5 colours under the cell (RGB, 75 values, row-major) — what the
+  /// in-cell tile recolour follows (local_recolor.dart). App-only: never sent to the
+  /// server (the export samples the photo itself). Null = flat recolour to the average.
+  Float64List? regionGrid;
 
   /// [r, g, b] 0-255 average of the matched region (optional color nudge).
   List<double>? regionAvgColor;
@@ -687,7 +862,11 @@ class TileCrop {
   /// preview repaints off exactly this comparison.
   @override
   bool operator ==(Object other) =>
-      other is TileCrop && other.x == x && other.y == y && other.w == w && other.h == h;
+      other is TileCrop &&
+      other.x == x &&
+      other.y == y &&
+      other.w == w &&
+      other.h == h;
 
   @override
   int get hashCode => Object.hash(x, y, w, h);
@@ -705,6 +884,7 @@ class SlimMosaicPlan {
     this.cropPortraitTop = false,
     this.hexagon = false,
     this.outputSaturation = 1.0,
+    this.tileRecolor = 0,
     this.tileCrops = const {},
   });
 
@@ -736,6 +916,10 @@ class SlimMosaicPlan {
   /// high-res export carries the same grade as the on-device preview.
   double outputSaturation;
 
+  /// Tile recolouring strength (see [MosaicSettings.tileRecolor]). Sent to the server
+  /// compositor, which applies the same transform, so the export matches the preview.
+  double tileRecolor;
+
   /// Per-tile manual crops, keyed by BASE tile id (see [TileCrop]). Overrides
   /// [cropPortraitTop] for the tiles listed; absent tiles keep the automatic crop.
   /// Travels to the server inside the plan, so the export is framed exactly as the
@@ -752,6 +936,7 @@ class SlimMosaicPlan {
     'cropPortraitTop': cropPortraitTop,
     if (hexagon) 'hexagon': true,
     'outputSaturation': outputSaturation,
+    if (tileRecolor > 0) 'tileRecolor': tileRecolor,
     // Omitted when empty — the server treats absent as "all automatic".
     if (tileCrops.isNotEmpty)
       'tileCrops': {for (final e in tileCrops.entries) e.key: e.value.toJson()},

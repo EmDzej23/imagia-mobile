@@ -28,15 +28,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _page = 0;
 
   static const _slides = [
-    _Slide('Turn photos into mosaics',
-        'Recreate any picture out of hundreds of your own photos.',
-        Icons.auto_awesome_mosaic),
-    _Slide('Tune it live',
-        'Adjust density and style and watch the mosaic rebuild in real time. Pinch to zoom right into the tiles.',
-        Icons.tune),
-    _Slide('Export & share',
-        'Render in print-ready resolution, save to your photos, or make a free video to share.',
-        Icons.ios_share),
+    _Slide(
+      'Turn photos into mosaics',
+      'Recreate any picture out of hundreds of your own photos.',
+      Icons.auto_awesome_mosaic,
+    ),
+    _Slide(
+      'Tune it live',
+      'Adjust density and style and watch the mosaic rebuild in real time. Pinch to zoom right into the tiles.',
+      Icons.tune,
+    ),
+    _Slide(
+      'Export & share',
+      'Render in print-ready resolution, save to your photos, or make a free video to share.',
+      Icons.ios_share,
+    ),
   ];
 
   @override
@@ -57,7 +63,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     Haptics.selection();
     _pager.nextPage(
-        duration: const Duration(milliseconds: 320), curve: Curves.easeOut);
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
+    );
   }
 
   @override
@@ -72,9 +80,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: _finish,
-                child: Text('Skip',
-                    style: AppTypography.label
-                        .copyWith(color: AppColors.textSecondary)),
+                child: Text(
+                  'Skip',
+                  style: AppTypography.label.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
               ),
             ),
             Expanded(
@@ -85,24 +96,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 itemBuilder: (context, i) {
                   final s = _slides[i];
                   return Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: AppSpacing.x6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.x6,
+                    ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         // Replays the assemble animation each time it's shown.
                         _MosaicHero(
-                            key: ValueKey(i == _page ? 'on-$i' : 'off-$i'),
-                            icon: s.icon),
+                          key: ValueKey(i == _page ? 'on-$i' : 'off-$i'),
+                          icon: s.icon,
+                        ),
                         const SizedBox(height: AppSpacing.x8),
-                        Text(s.title,
-                            textAlign: TextAlign.center,
-                            style: AppTypography.display),
+                        Text(
+                          s.title,
+                          textAlign: TextAlign.center,
+                          style: AppTypography.display,
+                        ),
                         const SizedBox(height: AppSpacing.x3),
-                        Text(s.body,
-                            textAlign: TextAlign.center,
-                            style: AppTypography.body.copyWith(
-                                color: AppColors.textSecondary, height: 1.5)),
+                        Text(
+                          s.body,
+                          textAlign: TextAlign.center,
+                          style: AppTypography.body.copyWith(
+                            color: AppColors.textSecondary,
+                            height: 1.5,
+                          ),
+                        ),
                       ],
                     ),
                   );
@@ -179,9 +198,9 @@ class _MosaicHeroState extends State<_MosaicHero>
             ),
             Opacity(
               opacity: Curves.easeIn.transform(
-                  ((_c.value - 0.55) / 0.45).clamp(0.0, 1.0)),
-              child: Icon(widget.icon,
-                  size: 56, color: AppColors.textPrimary),
+                ((_c.value - 0.55) / 0.45).clamp(0.0, 1.0),
+              ),
+              child: Icon(widget.icon, size: 56, color: AppColors.textPrimary),
             ),
           ],
         ),
@@ -206,7 +225,9 @@ class _MosaicHeroPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final cell = size.width / _n;
     final radius = RRect.fromRectAndRadius(
-        Offset.zero & size, const Radius.circular(24));
+      Offset.zero & size,
+      const Radius.circular(24),
+    );
     canvas.clipRRect(radius);
     final center = size.center(Offset.zero);
     final paint = Paint();
@@ -218,8 +239,11 @@ class _MosaicHeroPainter extends CustomPainter {
         final lt = ((t - start) / 0.5).clamp(0.0, 1.0);
         if (lt <= 0) continue;
         final e = Curves.easeOutCubic.transform(lt);
-        final color = Color.lerp(AppColors.gradientStart, AppColors.gradientEnd,
-            (r + c) / (2 * _n))!;
+        final color = Color.lerp(
+          AppColors.gradientStart,
+          AppColors.gradientEnd,
+          (r + c) / (2 * _n),
+        )!;
         final cellRect = Rect.fromLTWH(c * cell, r * cell, cell, cell);
         final scaled = Rect.fromCenter(
           center: Offset.lerp(center, cellRect.center, e)!,
@@ -228,8 +252,10 @@ class _MosaicHeroPainter extends CustomPainter {
         );
         paint.color = color.withValues(alpha: e);
         canvas.drawRRect(
-          RRect.fromRectAndRadius(scaled.deflate(1.5),
-              const Radius.circular(4)),
+          RRect.fromRectAndRadius(
+            scaled.deflate(1.5),
+            const Radius.circular(4),
+          ),
           paint,
         );
       }

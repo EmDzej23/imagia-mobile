@@ -31,11 +31,13 @@ class ImageService {
         ),
       );
 
-  Future<Uint8List> compressTile(Uint8List bytes) => _serialized(
+  /// [long] = the size to keep (600 for mosaic tiles; collage photos are shown
+  /// big, so collage mode uploads them at 2400 — same as the web).
+  Future<Uint8List> compressTile(Uint8List bytes, {int long = 600}) => _serialized(
         () => FlutterImageCompress.compressWithList(
           bytes,
-          minWidth: 600,
-          minHeight: 600,
+          minWidth: long,
+          minHeight: long,
           quality: 85,
           format: CompressFormat.jpeg,
         ),

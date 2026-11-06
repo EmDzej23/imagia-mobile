@@ -9,6 +9,7 @@ import '../ancient/ancient_renderer.dart';
 import '../api/projects_api.dart';
 import '../api/tiles_api.dart';
 import '../core/config.dart';
+import '../collage/collage_renderer.dart' show collageUploadLong;
 import '../mosaic/grid_layout.dart';
 import '../mosaic/hexagon.dart';
 import '../mosaic/mosaic_engine.dart';
@@ -17,6 +18,7 @@ import '../mosaic/types.dart';
 import '../services/image_service.dart';
 import 'auth_controller.dart';
 import 'library_providers.dart';
+import '../core/friendly_error.dart';
 
 const int _maxTiles = 2000;
 
@@ -297,7 +299,7 @@ class StudioController extends Notifier<StudioState> {
         clearPlan: true,
       );
     } catch (e) {
-      state = state.copyWith(isUploadingBase: false, error: e.toString());
+      state = state.copyWith(isUploadingBase: false, error: friendlyError(e));
     }
   }
 
@@ -352,7 +354,10 @@ class StudioController extends Notifier<StudioState> {
       final uploadKey = 'tile-${_ts()}-$i';
       try {
         final original = await file.readAsBytes();
-        final compressed = await _images.compressTile(original);
+        final compressed = await _images.compressTile(original,
+            long: state.settings.mosaicMode == 'collage'
+                ? collageUploadLong
+                : 600);
         if (compressed.isEmpty) {
           firstError ??= 'Could not read image (unsupported format?)';
           return;
@@ -375,7 +380,7 @@ class StudioController extends Notifier<StudioState> {
           filename: filename,
         );
       } catch (e) {
-        firstError ??= e.toString();
+        firstError ??= friendlyError(e);
       }
       done++;
       state = state.copyWith(uploadDone: done);
@@ -472,7 +477,7 @@ class StudioController extends Notifier<StudioState> {
         error: added.isEmpty ? 'No sample tiles were added.' : null,
       );
     } catch (e) {
-      state = state.copyWith(isUploadingTiles: false, error: e.toString());
+      state = state.copyWith(isUploadingTiles: false, error: friendlyError(e));
     }
   }
 
@@ -610,7 +615,11 @@ class StudioController extends Notifier<StudioState> {
     // Tile-less modes render themselves (no tiles / matching), so never kick off
     // the heavy layout isolate — it would run pointlessly and jank the UI. Still
     // persist their look settings (+ word-art phrases) via autosave.
-    if (m == 'ancient' || m == 'ancient-curved' || m == 'wordart') {
+    // Collage lays its own pile (lib/collage/) — no tile plan either.
+    if (m == 'ancient' ||
+        m == 'ancient-curved' ||
+        m == 'wordart' ||
+        m == 'collage') {
       _scheduleAutoSave();
       return;
     }
@@ -621,16 +630,21 @@ class StudioController extends Notifier<StudioState> {
   /// don't affect tile matching, so no replan — the preview repaints instantly and
   /// the value is synced into the plan so the server render matches.
   void updateRenderParam(
-      {double? tintStrength, double? baseBlur, double? outputSaturation}) {
+      {double? tintStrength,
+      double? baseBlur,
+      double? outputSaturation,
+      double? tileRecolor}) {
     final settings = state.settings.copyWith(
         tintStrength: tintStrength,
         baseBlur: baseBlur,
-        outputSaturation: outputSaturation);
+        outputSaturation: outputSaturation,
+        tileRecolor: tileRecolor);
     final plan = state.plan;
     if (plan != null) {
       if (tintStrength != null) plan.tintStrength = tintStrength;
       if (baseBlur != null) plan.baseBlur = baseBlur;
       if (outputSaturation != null) plan.outputSaturation = outputSaturation;
+      if (tileRecolor != null) plan.tileRecolor = tileRecolor;
     }
     state = state.copyWith(settings: settings);
   }
@@ -638,6 +652,8 @@ class StudioController extends Notifier<StudioState> {
   /// Builds the full-quality plan on-device (layout + match + SA in an isolate).
   Future<void> buildPlan() async {
     if (!state.canPlan) return;
+    // Collage has no tile plan (it lays its own pile, see lib/collage/).
+    if (state.settings.mosaicMode == 'collage') return;
     final token = ++_planToken;
     state = state.copyWith(isPlanning: true, error: null);
     try {
@@ -655,7 +671,7 @@ class StudioController extends Notifier<StudioState> {
       _scheduleAutoSave();
     } catch (e) {
       if (token != _planToken) return;
-      state = state.copyWith(isPlanning: false, error: e.toString());
+      state = state.copyWith(isPlanning: false, error: friendlyError(e, fallback: "Couldn't build the preview. Please try again."));
     }
   }
 
@@ -669,8 +685,9 @@ class StudioController extends Notifier<StudioState> {
 
   Future<void> _autoSaveProject() async {
     final base = state.base;
-    if (base == null) return;
     final m = state.settings.mosaicMode;
+    // A collage has no base photo — it is just the photos.
+    if (base == null && m != 'collage') return;
     final isTileless =
         m == 'ancient' || m == 'ancient-curved' || m == 'wordart';
     // Tile modes need a tile set to be worth saving; tile-less modes persist
@@ -869,7 +886,7 @@ class StudioController extends Notifier<StudioState> {
       await buildPlan();
     } catch (e) {
       if (token == _restoreToken) {
-        state = state.copyWith(isRestoring: false, error: e.toString());
+        state = state.copyWith(isRestoring: false, error: friendlyError(e, fallback: "Couldn't open the project. Please try again."));
       }
     }
   }

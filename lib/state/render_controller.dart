@@ -10,7 +10,9 @@ import '../services/haptics.dart';
 import '../services/notifications.dart';
 import 'auth_controller.dart';
 import 'features_providers.dart';
+import 'collage_controller.dart';
 import 'studio_controller.dart';
+import '../collage/collage_renderer.dart' show collagePlanJson;
 
 final renderApiProvider =
     Provider((ref) => RenderApi(ref.watch(apiClientProvider)));
@@ -75,6 +77,12 @@ class RenderController extends Notifier<RenderUiState> {
     // global indicator must not restart an in-flight render).
     if (state.phase == RenderPhase.rendering) return;
     final studio = ref.read(studioControllerProvider);
+    // Collage: no base photo — the photos are the picture.
+    if (studio.settings.mosaicMode == 'collage') {
+      NotificationService.instance.requestPermission();
+      await _startCollage(studio);
+      return;
+    }
     final base = studio.base;
     if (base == null) return;
 
@@ -115,6 +123,46 @@ class RenderController extends Notifier<RenderUiState> {
 
     state = state.copyWith(phase: RenderPhase.completed, result: res.data);
     // Celebrate, notify (deep-links to the preview) + refresh the token balance.
+    Haptics.success();
+    NotificationService.instance.showRenderDone(fileName: res.data!.fileName);
+    ref.read(authControllerProvider.notifier).refreshUser();
+  }
+
+  /// Collage export: lay the SAME pile the preview shows (same photos, settings and
+  /// shuffle) and send it to the server compositor.
+  Future<void> _startCollage(StudioState studio) async {
+    final collage = ref.read(collageControllerProvider.notifier);
+    if (!collage.settled) {
+      state = state.copyWith(
+          phase: RenderPhase.failed,
+          error: 'The collage is still getting ready — try again in a moment.');
+      return;
+    }
+    state = const RenderUiState(
+        phase: RenderPhase.rendering, message: 'Rendering your collage…');
+    final params = collageParamsFrom(studio, collage.seedNonce);
+    final placements = await layPile(collage.pieces(), params);
+    final urls = <String, String>{};
+    for (final p in placements) {
+      final src = collage.sourceFor(p.tileId, p.kind);
+      if (src != null) urls[p.tileId] = src;
+    }
+    final kept = [for (final p in placements) if (urls.containsKey(p.tileId)) p];
+    if (kept.isEmpty) {
+      state = state.copyWith(
+          phase: RenderPhase.failed, error: 'Add photos to make a collage.');
+      return;
+    }
+    final res = await _api.renderCollage(
+      collagePlan: collagePlanJson(placements: kept, params: params),
+      tileUrls: urls,
+    );
+    if (!res.isOk || res.data == null) {
+      state = state.copyWith(
+          phase: RenderPhase.failed, error: res.error ?? 'Render failed.');
+      return;
+    }
+    state = state.copyWith(phase: RenderPhase.completed, result: res.data);
     Haptics.success();
     NotificationService.instance.showRenderDone(fileName: res.data!.fileName);
     ref.read(authControllerProvider.notifier).refreshUser();

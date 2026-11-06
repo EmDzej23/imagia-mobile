@@ -57,7 +57,14 @@ enum _Kind { panImage, move, nw, n, ne, e, se, s, sw, w }
 
 const _corners = [_Kind.nw, _Kind.ne, _Kind.se, _Kind.sw];
 const _allHandles = [
-  _Kind.nw, _Kind.n, _Kind.ne, _Kind.e, _Kind.se, _Kind.s, _Kind.sw, _Kind.w,
+  _Kind.nw,
+  _Kind.n,
+  _Kind.ne,
+  _Kind.e,
+  _Kind.se,
+  _Kind.s,
+  _Kind.sw,
+  _Kind.w,
 ];
 
 class BaseCropScreen extends StatefulWidget {
@@ -98,8 +105,7 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
   double get _iw => widget.image.width.toDouble();
   double get _ih => widget.image.height.toDouble();
 
-  double get _fitScale =>
-      math.min(_stage.width / _iw, _stage.height / _ih);
+  double get _fitScale => math.min(_stage.width / _iw, _stage.height / _ih);
 
   Rect get _imageRect => Rect.fromLTWH(_ix, _iy, _iw * _scale, _ih * _scale);
 
@@ -116,8 +122,10 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
   /// Width/height ratio for the active mode, or null if unconstrained.
   double? get _ratio {
     if (_mode == 'free' || _mode == 'original') return null;
-    final p = _ratioPresets.firstWhere((e) => e.id == _mode,
-        orElse: () => _ratioPresets.first);
+    final p = _ratioPresets.firstWhere(
+      (e) => e.id == _mode,
+      orElse: () => _ratioPresets.first,
+    );
     if (p.a == p.b) return 1;
     return _portrait ? p.a / p.b : p.b / p.a;
   }
@@ -139,7 +147,11 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
       w = h * ratio;
     }
     return Rect.fromLTWH(
-        b.left + (b.width - w) / 2, b.top + (b.height - h) / 2, w, h);
+      b.left + (b.width - w) / 2,
+      b.top + (b.height - h) / 2,
+      w,
+      h,
+    );
   }
 
   Rect _normalize(Rect crop, double? ratio, Rect b) {
@@ -215,8 +227,10 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
     if (d.pointerCount >= 2 || _kind == _Kind.panImage) {
       setState(() {
         if (d.scale != 1.0) {
-          final newScale =
-              (_startScale * d.scale).clamp(_fitScale, _fitScale * 8);
+          final newScale = (_startScale * d.scale).clamp(
+            _fitScale,
+            _fitScale * 8,
+          );
           final k = newScale / _startScale;
           _scale = newScale;
           _ix = d.localFocalPoint.dx - (_startFocal.dx - _startIx) * k;
@@ -343,7 +357,8 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
             child: Text(
               _mode == 'original' ? 'Use original' : 'Apply',
               style: AppTypography.label.copyWith(
-                  color: _busy ? AppColors.textMuted : AppColors.accent),
+                color: _busy ? AppColors.textMuted : AppColors.accent,
+              ),
             ),
           ),
         ],
@@ -352,28 +367,33 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
         child: Column(
           children: [
             Expanded(
-              child: LayoutBuilder(builder: (context, constraints) {
-                final size = Size(constraints.maxWidth, constraints.maxHeight);
-                if (!_init || _stage != size) {
-                  _stage = size;
-                  _initTransform();
-                }
-                return GestureDetector(
-                  onScaleStart: _onScaleStart,
-                  onScaleUpdate: _handleUpdate,
-                  child: CustomPaint(
-                    size: size,
-                    painter: _CropPainter(
-                      image: widget.image,
-                      dst: _imageRect,
-                      crop: _mode == 'original' ? null : _crop,
-                      handles: _crop == null
-                          ? const []
-                          : (_ratio != null ? _corners : _allHandles),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final size = Size(
+                    constraints.maxWidth,
+                    constraints.maxHeight,
+                  );
+                  if (!_init || _stage != size) {
+                    _stage = size;
+                    _initTransform();
+                  }
+                  return GestureDetector(
+                    onScaleStart: _onScaleStart,
+                    onScaleUpdate: _handleUpdate,
+                    child: CustomPaint(
+                      size: size,
+                      painter: _CropPainter(
+                        image: widget.image,
+                        dst: _imageRect,
+                        crop: _mode == 'original' ? null : _crop,
+                        handles: _crop == null
+                            ? const []
+                            : (_ratio != null ? _corners : _allHandles),
+                      ),
                     ),
-                  ),
-                );
-              }),
+                  );
+                },
+              ),
             ),
             _controls(),
           ],
@@ -386,7 +406,11 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
     return Container(
       color: Colors.black,
       padding: const EdgeInsets.fromLTRB(
-          AppSpacing.x3, AppSpacing.x3, AppSpacing.x3, AppSpacing.x4),
+        AppSpacing.x3,
+        AppSpacing.x3,
+        AppSpacing.x3,
+        AppSpacing.x4,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -405,14 +429,14 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
           Row(
             children: [
               OutlinedButton.icon(
-                onPressed: (_mode == 'original' ||
-                        _mode == 'free' ||
-                        _mode == '1x1')
+                onPressed:
+                    (_mode == 'original' || _mode == 'free' || _mode == '1x1')
                     ? null
                     : _toggleOrientation,
                 icon: Icon(
-                    _portrait ? Icons.crop_portrait : Icons.crop_landscape,
-                    size: 18),
+                  _portrait ? Icons.crop_portrait : Icons.crop_landscape,
+                  size: 18,
+                ),
                 label: Text(_portrait ? 'Portrait' : 'Landscape'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.textSecondary,
@@ -425,8 +449,9 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
                   _mode == 'original'
                       ? 'The full photo will be used.'
                       : 'Drag box to move · handles to resize · pinch to zoom.',
-                  style: AppTypography.caption
-                      .copyWith(color: AppColors.textMuted),
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textMuted,
+                  ),
                 ),
               ),
             ],
@@ -444,12 +469,15 @@ class _BaseCropScreenState extends State<BaseCropScreen> {
         onTap: () => _selectMode(id),
         child: Container(
           padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+            horizontal: AppSpacing.x3,
+            vertical: AppSpacing.x2,
+          ),
           decoration: BoxDecoration(
             color: active ? AppColors.accent : AppColors.surface,
             borderRadius: BorderRadius.circular(AppRadius.control),
             border: Border.all(
-                color: active ? AppColors.accent : AppColors.border),
+              color: active ? AppColors.accent : AppColors.border,
+            ),
           ),
           child: Text(
             label,

@@ -42,21 +42,25 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     final prefs = ref.read(appPrefsProvider);
     if (await prefs.onboardingSeen()) return;
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(
-      fullscreenDialog: true,
-      builder: (_) => const OnboardingScreen(),
-    ));
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const OnboardingScreen(),
+      ),
+    );
     await prefs.setOnboardingSeen();
   }
 
   Future<void> _openVerify() async {
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => VerifyEmailScreen(
-        email: _email.text.trim(),
-        password: _password.text,
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VerifyEmailScreen(
+          email: _email.text.trim(),
+          password: _password.text,
+        ),
       ),
-    ));
+    );
   }
 
   @override
@@ -81,23 +85,23 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   }
 
   Future<void> _signInEmail() => _run(() async {
-        try {
-          await ref
-              .read(authControllerProvider.notifier)
-              .signInEmail(_email.text, _password.text);
-        } on AuthException catch (e) {
-          if (!e.emailNotVerified) rethrow;
-          unawaited(_openVerify());
-        }
-      });
+    try {
+      await ref
+          .read(authControllerProvider.notifier)
+          .signInEmail(_email.text, _password.text);
+    } on AuthException catch (e) {
+      if (!e.emailNotVerified) rethrow;
+      unawaited(_openVerify());
+    }
+  });
 
   Future<void> _signInGoogle() => _run(() async {
-        await ref.read(authControllerProvider.notifier).signInWithGoogle();
-      });
+    await ref.read(authControllerProvider.notifier).signInWithGoogle();
+  });
 
   Future<void> _signInApple() => _run(() async {
-        await ref.read(authControllerProvider.notifier).signInWithApple();
-      });
+    await ref.read(authControllerProvider.notifier).signInWithApple();
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -111,9 +115,12 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
               children: [
                 Text('Imagia', style: AppTypography.display),
                 const SizedBox(height: AppSpacing.x2),
-                Text('Sign in to build mosaics.',
-                    style: AppTypography.body
-                        .copyWith(color: AppColors.textSecondary)),
+                Text(
+                  'Sign in to build mosaics.',
+                  style: AppTypography.body.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
                 const SizedBox(height: AppSpacing.x8),
                 AppTextField(
                   label: 'Email',
@@ -139,9 +146,12 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: AppSpacing.x3),
-                  Text(_error!,
-                      style: AppTypography.caption
-                          .copyWith(color: AppColors.error)),
+                  Text(
+                    _error!,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.error,
+                    ),
+                  ),
                 ],
                 const SizedBox(height: AppSpacing.x6),
                 PrimaryButton(
@@ -155,8 +165,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                     onPressed: _busy ? () {} : _signInApple,
                     style: SignInWithAppleButtonStyle.white,
                     height: 48,
-                    borderRadius:
-                        BorderRadius.circular(AppRadius.control),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
                   ),
                   const SizedBox(height: AppSpacing.x3),
                 ],
@@ -168,9 +177,12 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                 const SizedBox(height: AppSpacing.x6),
                 TextButton(
                   onPressed: _busy ? null : () => context.push('/sign-up'),
-                  child: Text('Create an account',
-                      style: AppTypography.label
-                          .copyWith(color: AppColors.primaryBright)),
+                  child: Text(
+                    'Create an account',
+                    style: AppTypography.label.copyWith(
+                      color: AppColors.primaryBright,
+                    ),
+                  ),
                 ),
               ],
             ),

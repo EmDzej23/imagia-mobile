@@ -85,13 +85,13 @@ HexCell hexFromRect(double x, double y, double width, double height) =>
 /// gaps along every seam. Taking width and height separately also handles the
 /// anisotropic case, which a single radius cannot express at all.
 List<List<double>> hexCorners(double cx, double cy, double w, double h) => [
-      [cx - w / 4, cy - h / 2],
-      [cx + w / 4, cy - h / 2],
-      [cx + w / 2, cy],
-      [cx + w / 4, cy + h / 2],
-      [cx - w / 4, cy + h / 2],
-      [cx - w / 2, cy],
-    ];
+  [cx - w / 4, cy - h / 2],
+  [cx + w / 4, cy - h / 2],
+  [cx + w / 2, cy],
+  [cx + w / 4, cy + h / 2],
+  [cx - w / 4, cy + h / 2],
+  [cx - w / 2, cy],
+];
 
 /// Lay a hexagon lattice over the canvas.
 ///
@@ -156,8 +156,9 @@ List<Set<int>> buildHexAdjacency(List<MosaicPlacement> placements) {
   for (var i = 0; i < n; i++) {
     buckets
         .putIfAbsent(
-            key((cells[i].cx / cell).floor(), (cells[i].cy / cell).floor()),
-            () => <int>[])
+          key((cells[i].cx / cell).floor(), (cells[i].cy / cell).floor()),
+          () => <int>[],
+        )
         .add(i);
   }
 

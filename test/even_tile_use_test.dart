@@ -218,8 +218,11 @@ void main() {
       expect(resolveMaxTileUses(0, 2000, 1600), 0);
       expect(resolveMaxTileUses(evenTileUses, 2000, 1600), 3);
       expect(resolveMaxTileUses(uniqueTileUses, 2000, 1600), 1);
-      // 32 photos over 1962 cells: no cap below 62 is possible.
-      expect(resolveMaxTileUses(evenTileUses, 32, 1962), 62);
+      // 32 photos over 1962 cells: no cap below 62 is possible; "Max N" leaves 2× the
+      // fair share (123) so poor fits can sit out instead of being forced in.
+      expect(resolveMaxTileUses(evenTileUses, 32, 1962), 123);
+      // The reported project: 415 photos, 2016 cells → 10, not the slack-free 5.
+      expect(resolveMaxTileUses(evenTileUses, 415, 2016), 10);
       expect(resolveMaxTileUses(uniqueTileUses, 32, 1962), 62);
       // Unknown counts: unlimited, never a cap of 1.
       expect(resolveMaxTileUses(uniqueTileUses, 0, 0), 0);

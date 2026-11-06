@@ -128,7 +128,9 @@ int resolveMaxTileUses(int? maxTileUses, int tiles, int cells) {
     // and wrecks the mosaic. Unknown counts mean unlimited: the same answer this gave
     // before the sentinel existed, and the safe direction to be wrong in.
     if (tiles <= 0 || cells <= 0) return 0;
-    return math.max(limitedRepeatsMax, minFeasibleTileUses(tiles, cells));
+    // At least twice the fair share — slack for poor fits to sit out (web parity; see
+    // resolveMaxTileUses in lib/mosaic/shared.ts for the measurements).
+    return math.max(limitedRepeatsMax, (2 * cells / tiles).ceil());
   }
   if (maxTileUses == null || maxTileUses <= 0) return 0;
   return math.max(maxTileUses, minFeasibleTileUses(tiles, cells));
@@ -143,12 +145,15 @@ MosaicSettings defaultSettings() => MosaicSettings(
   detailWeight: 0.05,
   minBlockSize: 4,
   maxBlockSize: 10,
-  tintStrength: 0.4,
+  // No tint veil: the tiles themselves are recoloured toward the photo (toned, in-cell),
+  // so the picture reads from crisp tiles. Same as the web defaults.
+  tintStrength: 0,
+  tileRecolor: 1,
   baseBlur: 1,
   colorBoost: 1.0,
   autoContrast: 0,
   maxTileUses: 0, // unlimited
-  outputSaturation: 1.2,
+  outputSaturation: 1, // no grade by default — same as web
   signalWeights: defaultSignalWeights(),
 );
 
@@ -251,6 +256,7 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     'ancient',
     'ancient-curved',
     'wordart',
+    'collage',
   ];
   const validGrout = ['dark', 'stone', 'light'];
   const validAncientShape = ['none', 'heart', 'basketball', 'flower'];
@@ -276,8 +282,11 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     maxBlockSize: math.max(maxBlockSize, minBlockSize + 2),
     tintStrength: clampD(input.tintStrength, 0, 0.5),
     baseBlur: clampD(input.baseBlur, 0, 5),
-    colorBoost: clampD(input.colorBoost, 1.0, 2.0),
-    autoContrast: clampD(input.autoContrast, 0, 1),
+    // Pinned to neutral (no UI any more — the in-cell tile recolour does their job, and
+    // a graded analysis photo only made the preview disagree with the export). Saved
+    // projects with other values re-plan with these. Same as the web.
+    colorBoost: 1.0,
+    autoContrast: 0,
     // Clamped to 0 EXCEPT the sentinels, which are negative on purpose — rounding them
     // away here would turn "Max 3" / "Unique" back into "unlimited" on every reload.
     // Passed through, not validated: `resolveTileSourceRect` clamps every crop at the
@@ -292,6 +301,11 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
       minOutputSaturation,
       maxOutputSaturation,
     ),
+    tileRecolor: clampD(input.tileRecolor, 0, 1),
+    shapeMatch: clampD(input.shapeMatch, 0, 5),
+    repeatSpacing: input.repeatSpacing.clamp(0, 3),
+    optimalPlacement: input.optimalPlacement,
+    fitLightToLibrary: input.fitLightToLibrary,
     ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
     ancientGrout: clampD(input.ancientGrout, 0, 4),
     ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),
@@ -311,6 +325,21 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     wordartGround: clampD(input.wordartGround, 0, 1),
     wordartVivid: clampD(input.wordartVivid, 0, 1),
     wordartEmpty: clampD(input.wordartEmpty, 0, 1),
+    // Collage: same bounds as the web (COLLAGE_BOUNDS in lib/mosaic/shared.ts).
+    collageFormat:
+        const ['portrait', 'square', 'landscape'].contains(input.collageFormat)
+        ? input.collageFormat
+        : 'portrait',
+    collageRotation: clampD(input.collageRotation, 0, 30),
+    collageOutline: clampD(input.collageOutline, 0, 1),
+    collageShadow: clampD(input.collageShadow, 0, 1),
+    collageBackground:
+        RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(input.collageBackground)
+        ? input.collageBackground
+        : '#18181b',
+    collageKinds: input.collageKinds,
+    collageHero: input.collageHero,
+    collageCuts: input.collageCuts,
     signalWeights: signalWeights,
   );
 }
@@ -577,6 +606,40 @@ double luminancePatternDistance(
     wSum += w[i];
   }
   return total / (wSum == 0 ? 1 : wSum);
+}
+
+/// Shape signal — keep identical to `shapeDistance` in foto-mozaik/lib/mosaic/shared.ts:
+/// 0 when the light/dark layout of the two 5×5 grids correlates perfectly, 1 when it is
+/// inverted. Scaled down for flat cells, whose "shape" is noise (full weight at an L
+/// spread of [_shapeFlatSd]).
+const double _shapeFlatSd = 6;
+
+double shapeDistance(
+  SubregionColors a,
+  SubregionColors b, [
+  List<double>? cropWeights,
+]) {
+  final w = cropWeights ?? subregionWeights;
+  var ws = 0.0, ma = 0.0, mb = 0.0;
+  for (var i = 0; i < 25; i++) {
+    ws += w[i];
+    ma += a[i].L * w[i];
+    mb += b[i].L * w[i];
+  }
+  if (!(ws > 0)) return 0;
+  ma /= ws;
+  mb /= ws;
+  var va = 0.0, vb = 0.0, cov = 0.0;
+  for (var i = 0; i < 25; i++) {
+    final da = a[i].L - ma, db = b[i].L - mb;
+    va += da * da * w[i];
+    vb += db * db * w[i];
+    cov += da * db * w[i];
+  }
+  final reliability = math.min(1.0, math.sqrt(va / ws) / _shapeFlatSd);
+  if (reliability <= 0) return 0;
+  final r = vb > 1e-9 && va > 1e-9 ? cov / math.sqrt(va * vb) : 0.0;
+  return ((1 - r) / 2) * reliability;
 }
 
 double chromaPatternDistance(

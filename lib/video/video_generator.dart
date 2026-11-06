@@ -46,6 +46,8 @@ Future<VideoResult> generateMosaicVideo({
     videoH: vh.toDouble(),
     caption: caption,
   );
+  // Tile recolour, same as the preview and the export.
+  await attachVideoRecolor(anim, plan, tileImages);
 
   // Built once and reused for every frame.
   final wall = await _buildWall(vw, vh);

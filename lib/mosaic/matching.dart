@@ -298,6 +298,7 @@ TileMatch selectBestTileMatch(MatchInput input) {
   }
 
   final w = settings.signalWeights ?? defaultSignalWeights();
+  final shapeW = settings.shapeMatch;
   final sal = clampD(input.saliency ?? 0, 0, 1);
   final colorRejectThreshold =
       _colorRejectThreshold * (1 - sal * _saliencyRejectScale);
@@ -466,6 +467,12 @@ TileMatch selectBestTileMatch(MatchInput input) {
     score +=
         chromaPatternDistance(region.subregionColors, td.colors, cw) *
         w.chromaPattern;
+    if (shapeW > 0) {
+      score +=
+          shapeDistance(region.subregionColors, td.colors, cw) *
+          shapeW *
+          structureBoost;
+    }
     if (score >= bestScore) continue;
 
     score +=
@@ -602,6 +609,7 @@ List<RegionCandidate> getTopKCandidates(
   if (tiles.isEmpty) return [];
 
   final w = settings.signalWeights ?? defaultSignalWeights();
+  final shapeW = settings.shapeMatch;
   final sal = clampD(saliency, 0, 1);
   final colorRejectThreshold =
       _colorRejectThreshold * (1 - sal * _saliencyRejectScale);
@@ -620,6 +628,14 @@ List<RegionCandidate> getTopKCandidates(
 
   List<TileDescriptor> tilesToEval;
   if (tiles.length > k * 1.5) {
+    // Crop-adjusted colour (cached per AR), matching the full scoring below and the
+    // renderer — a shortlist on whole-photo averages skews it. Same as web.
+    final resolvedForAR = preResolveTiles(
+      tiles,
+      jsRound(regionAR * 100) / 100,
+      anchorsPortraitTop(settings),
+      settings.tileCrops,
+    );
     final quickScores = <_ScoredItem>[];
     for (var ti = 0; ti < tiles.length; ti++) {
       final tile = tiles[ti];
@@ -633,9 +649,10 @@ List<RegionCandidate> getTopKCandidates(
         continue;
       }
       if (exclude != null && exclude(tile)) continue;
-      final dL = (rL - tile.averageLabColor.L) * w.brightnessEmphasis;
-      final da = rA - tile.averageLabColor.a;
-      final db = rB - tile.averageLabColor.b;
+      final e = resolvedForAR[ti];
+      final dL = (rL - e.avgL) * w.brightnessEmphasis;
+      final da = rA - e.avgA;
+      final db = rB - e.avgB;
       quickScores.add(_ScoredItem(ti, dL * dL + da * da + db * db));
     }
     _quickSelectTopK(quickScores, k);
@@ -689,6 +706,12 @@ List<RegionCandidate> getTopKCandidates(
     score +=
         chromaPatternDistance(region.subregionColors, td.colors, cw) *
         w.chromaPattern;
+    if (shapeW > 0) {
+      score +=
+          shapeDistance(region.subregionColors, td.colors, cw) *
+          shapeW *
+          structureBoost;
+    }
     score +=
         edgePatternDistance(region.subregionEdges, td.edges, cw) *
         w.edgePattern *
@@ -955,6 +978,7 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
   }
 
   final w = settings.signalWeights ?? defaultSignalWeights();
+  final shapeW = settings.shapeMatch;
   final sal = clampD(input.saliency ?? 0, 0, 1);
   final maxUses = resolveMaxTileUses(
     settings.maxTileUses,
@@ -1096,6 +1120,12 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
     score +=
         chromaPatternDistance(region.subregionColors, e.colors, null) *
         w.chromaPattern;
+    if (shapeW > 0) {
+      score +=
+          shapeDistance(region.subregionColors, e.colors, null) *
+          shapeW *
+          structureBoost;
+    }
     if (score >= bestScore) continue;
 
     score +=
@@ -1330,6 +1360,11 @@ double _visualScoreFast(
           structureBoost +
       chromaPatternDistance(region.subregionColors, td.colors, cw) *
           sw.chromaPattern +
+      (settings.shapeMatch > 0
+          ? shapeDistance(region.subregionColors, td.colors, cw) *
+                settings.shapeMatch *
+                structureBoost
+          : 0.0) +
       edgePatternDistance(region.subregionEdges, td.edges, cw) *
           sw.edgePattern *
           structureBoost +
@@ -1360,11 +1395,9 @@ const double _saCoolingRate = 0.97;
 const double _saMinTemp = 0.001;
 const int _saIterationsPerTempFactor = 4;
 const int _saMaxTotalIterations = 400000;
-const int _saMaxTotalIterationsMobile = 120000;
 
-/// Mutates [placements] in place. [isMobile] selects the lower iteration cap
-/// (web reads `isMobileDevice()`); defaults to false (full desktop budget) to
-/// match the web's primary path — callers on phones can opt into the mobile cap.
+/// Mutates [placements] in place. The iteration budget is the same on every device
+/// (web parity); [isMobile] no longer changes it.
 void optimizePlacementSwaps(
   List<MosaicPlacement> placements,
   Map<String, TileDescriptor> tileMap,
@@ -1552,11 +1585,7 @@ void optimizePlacementSwaps(
       ? _saIterationsPerTempFactor * 12
       : _saIterationsPerTempFactor;
   final iterCap = jsRound(
-    (isMinDetail
-            ? _saMaxTotalIterations * 2
-            : isMobile
-            ? _saMaxTotalIterationsMobile
-            : _saMaxTotalIterations) *
+    (isMinDetail ? _saMaxTotalIterations * 2 : _saMaxTotalIterations) *
         budgetFactor,
   ).toInt();
   final iterationsPerTemp = math.max(

@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/print_api.dart';
-import '../../mosaic/preview_painter.dart';
+import '../../mosaic/recolor_bake.dart';
 import '../../print/mockup_painter.dart';
 import '../../print/print_catalog.dart';
 import '../../print/print_order_draft.dart';
@@ -21,6 +21,7 @@ import '../../widgets/segmented_selector.dart';
 import 'crop_screen.dart';
 import 'real_size_loupe_screen.dart';
 import 'shipping_address_screen.dart';
+import '../../core/friendly_error.dart';
 
 /// Turn the current mosaic into wall art: pick a product type + orientation,
 /// frame the crop, and preview it as a realistic mockup. (Ordering/checkout is
@@ -37,8 +38,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
   String? _error;
   PrintType _type = PrintType.framedPrint;
   PrintOrientation _orientation = PrintOrientation.portrait;
-  PrintOptionChoice? _option =
-      printOption(PrintType.framedPrint)?.defaultChoice;
+  PrintOptionChoice? _option = printOption(
+    PrintType.framedPrint,
+  )?.defaultChoice;
 
   /// Chosen Gelato poster size code (posters only), e.g. `50x70`.
   String? _posterSize;
@@ -100,17 +102,21 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
       final scale = longer / math.max(plan.baseWidth, plan.baseHeight);
       final w = (plan.baseWidth * scale).round();
       final h = (plan.baseHeight * scale).round();
-      final rec = ui.PictureRecorder();
-      final canvas = ui.Canvas(
-          rec, ui.Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()));
-      MosaicPreviewPainter(
+      // The web's pipeline: tiles, in-cell tile recolour, tint, grade.
+      final tiles = s.tileImages;
+      final img = await bakeMosaicWindow(
         plan: plan,
-        tileImages: s.tileImages,
-        baseImage: s.base?.overlay,
-        tintStrength: s.settings.tintStrength,
+        tileCrops: plan.tileCrops,
+        imageFor: (p, _) => tiles[p.tileId],
+        win: Rect.fromLTWH(0, 0, plan.baseWidth, plan.baseHeight),
+        outW: w,
+        outH: h,
+        tileRecolor: s.settings.tileRecolor,
         outputSaturation: s.settings.outputSaturation,
-      ).paint(canvas, Size(w.toDouble(), h.toDouble()));
-      final img = await rec.endRecording().toImage(w, h);
+        tintStrength: s.settings.tintStrength,
+        overlay: s.base?.overlay,
+      );
+      if (img == null) throw StateError('Could not render the mosaic.');
       if (!mounted) {
         img.dispose();
         return;
@@ -121,7 +127,13 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
         _cropSrc = _centerCrop(img, printSpec(_type, _orientation).aspect);
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted)
+        setState(
+          () => _error = friendlyError(
+            e,
+            fallback: "Couldn't prepare the print preview.",
+          ),
+        );
     }
   }
 
@@ -185,16 +197,26 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
       crop.width / img.width,
       crop.height / img.height,
     );
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => RealSizeLoupeScreen(
-        plan: plan,
-        tileImages: studio.tileImages,
-        overlay: studio.base?.overlay,
-        tintStrength: studio.settings.tintStrength,
-        cropNormalized: cropN,
-        printLongEdgeCm: _longEdgeCm,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RealSizeLoupeScreen(
+          plan: plan,
+          tileImages: studio.tileImages,
+          overlay: studio.base?.overlay,
+          tintStrength: studio.settings.tintStrength,
+          cropNormalized: cropN,
+          printLongEdgeCm: _longEdgeCm,
+          // Sharp tile photos at real print size (the thumbnails blur there).
+          fetchTile: (id) async {
+            final controller = ref.read(studioControllerProvider.notifier);
+            for (final t in ref.read(studioControllerProvider).tiles) {
+              if (t.id == id) return controller.tilePhotoBytes(t.blobUrl);
+            }
+            return null;
+          },
+        ),
       ),
-    ));
+    );
   }
 
   Future<void> _adjustCrop() async {
@@ -203,15 +225,27 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
     final iw = img.width.toDouble(), ih = img.height.toDouble();
     final initial = _cropSrc == null
         ? null
-        : Rect.fromLTWH(_cropSrc!.left / iw, _cropSrc!.top / ih,
-            _cropSrc!.width / iw, _cropSrc!.height / ih);
-    final result = await Navigator.of(context).push<Rect>(MaterialPageRoute(
-      builder: (_) => CropScreen(
-          image: img, aspect: _aspect, initialCrop: initial),
-    ));
+        : Rect.fromLTWH(
+            _cropSrc!.left / iw,
+            _cropSrc!.top / ih,
+            _cropSrc!.width / iw,
+            _cropSrc!.height / ih,
+          );
+    final result = await Navigator.of(context).push<Rect>(
+      MaterialPageRoute(
+        builder: (_) =>
+            CropScreen(image: img, aspect: _aspect, initialCrop: initial),
+      ),
+    );
     if (result != null && mounted) {
-      setState(() => _cropSrc = ui.Rect.fromLTWH(result.left * iw,
-          result.top * ih, result.width * iw, result.height * ih));
+      setState(
+        () => _cropSrc = ui.Rect.fromLTWH(
+          result.left * iw,
+          result.top * ih,
+          result.width * iw,
+          result.height * ih,
+        ),
+      );
     }
   }
 
@@ -224,16 +258,20 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
             ? Center(
                 child: Padding(
                   padding: const EdgeInsets.all(AppSpacing.x6),
-                  child: Text(_error!,
-                      textAlign: TextAlign.center,
-                      style: AppTypography.body
-                          .copyWith(color: AppColors.textSecondary)),
+                  child: Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: AppTypography.body.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ),
               )
             : _mosaic == null
-                ? const Center(
-                    child: CircularProgressIndicator(color: AppColors.accent))
-                : _content(),
+            ? const Center(
+                child: CircularProgressIndicator(color: AppColors.accent),
+              )
+            : _content(),
       ),
     );
   }
@@ -257,11 +295,13 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
       if (live != null && live.priceCents > 0) return live.priceCents / 100;
       return printPriceEur(t, o);
     }
+
     // Exact poster price for a size+orientation, or null while it loads.
     double? posterPrice(String size, PrintOrientation o) {
       final p = gByKey[posterProductKey(size, o)];
       return (p != null && p.priceCents > 0) ? p.priceCents / 100 : null;
     }
+
     // Cheapest poster price for an orientation — the "from" price on the card.
     double? posterFromPrice(PrintOrientation o) {
       final prices = <double>[
@@ -269,6 +309,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
       ]..sort();
       return prices.isEmpty ? null : prices.first;
     }
+
     // Price for the current selection (poster uses the chosen size).
     final double? currentPrice = _isPoster
         ? (_posterSize == null ? null : posterPrice(_posterSize!, _orientation))
@@ -288,8 +329,7 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                 type: _type,
                 aspect: _aspect,
                 frameColor: _frameColor,
-                canvasWrap:
-                    _type == PrintType.canvas ? _option?.value : null,
+                canvasWrap: _type == PrintType.canvas ? _option?.value : null,
                 wall: ref.watch(wallImageProvider).asData?.value,
               ),
             ),
@@ -299,8 +339,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
         Container(
           decoration: const BoxDecoration(
             color: AppColors.surface,
-            borderRadius:
-                BorderRadius.vertical(top: Radius.circular(AppRadius.card)),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(AppRadius.card),
+            ),
           ),
           child: SafeArea(
             top: false,
@@ -353,8 +394,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         children: [
                           for (final s in posterSizesFor(_orientation))
                             Padding(
-                              padding:
-                                  const EdgeInsets.only(right: AppSpacing.x2),
+                              padding: const EdgeInsets.only(
+                                right: AppSpacing.x2,
+                              ),
                               child: _SizeChip(
                                 label: posterSizeLabelCm(s, _orientation),
                                 priceEur: posterPrice(s.size, _orientation),
@@ -369,8 +411,10 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                   // Product option (frame colour / canvas wrap / metal finish).
                   if (printOption(_type) case final opt?) ...[
                     const SizedBox(height: AppSpacing.x3),
-                    Text('${opt.label}: ${_option?.label ?? ''}',
-                        style: AppTypography.caption),
+                    Text(
+                      '${opt.label}: ${_option?.label ?? ''}',
+                      style: AppTypography.caption,
+                    ),
                     const SizedBox(height: AppSpacing.x2),
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -378,8 +422,9 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         children: [
                           for (final c in opt.choices)
                             Padding(
-                              padding:
-                                  const EdgeInsets.only(right: AppSpacing.x2),
+                              padding: const EdgeInsets.only(
+                                right: AppSpacing.x2,
+                              ),
                               child: _OptionChip(
                                 choice: c,
                                 selected: c.value == _option?.value,
@@ -430,9 +475,11 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
                         option: _option,
                         posterSize: _posterSize,
                       );
-                      Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => ShippingAddressScreen(draft: draft),
-                      ));
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ShippingAddressScreen(draft: draft),
+                        ),
+                      );
                     },
                   ),
                 ],
@@ -448,8 +495,11 @@ class _WallArtScreenState extends ConsumerState<WallArtScreen> {
 /// A product-option choice: a colour swatch (frame colours) or a labelled chip
 /// (canvas wrap, metal finish).
 class _OptionChip extends StatelessWidget {
-  const _OptionChip(
-      {required this.choice, required this.selected, required this.onTap});
+  const _OptionChip({
+    required this.choice,
+    required this.selected,
+    required this.onTap,
+  });
   final PrintOptionChoice choice;
   final bool selected;
   final VoidCallback onTap;
@@ -459,15 +509,20 @@ class _OptionChip extends StatelessWidget {
     if (choice.swatch != null) {
       return GestureDetector(
         onTap: onTap,
-        child: Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: choice.swatch,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: selected ? AppColors.accent : AppColors.border,
-              width: selected ? 2.5 : 1,
+        behavior: HitTestBehavior.opaque,
+        // A bigger target than the 30 px dot.
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: choice.swatch,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected ? AppColors.accent : AppColors.border,
+                width: selected ? 2.5 : 1,
+              ),
             ),
           ),
         ),
@@ -477,7 +532,9 @@ class _OptionChip extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+          horizontal: AppSpacing.x3,
+          vertical: AppSpacing.x2,
+        ),
         decoration: BoxDecoration(
           color: AppColors.surfaceRaised,
           borderRadius: BorderRadius.circular(AppRadius.chip),
@@ -493,12 +550,13 @@ class _OptionChip extends StatelessWidget {
 }
 
 class _TypeCard extends StatelessWidget {
-  const _TypeCard(
-      {required this.type,
-      required this.priceEur,
-      required this.selected,
-      required this.onTap,
-      this.pricePrefix = ''});
+  const _TypeCard({
+    required this.type,
+    required this.priceEur,
+    required this.selected,
+    required this.onTap,
+    this.pricePrefix = '',
+  });
   final PrintType type;
 
   /// Null while a live price is still loading.
@@ -526,16 +584,20 @@ class _TypeCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(type.label,
-                style: AppTypography.label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis),
             Text(
-                priceEur == null
-                    ? '—'
-                    : '$pricePrefix€${priceEur!.toStringAsFixed(0)}',
-                style: AppTypography.number(AppTypography.caption)
-                    .copyWith(color: AppColors.accent)),
+              type.label,
+              style: AppTypography.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              priceEur == null
+                  ? '—'
+                  : '$pricePrefix€${priceEur!.toStringAsFixed(0)}',
+              style: AppTypography.number(
+                AppTypography.caption,
+              ).copyWith(color: AppColors.accent),
+            ),
           ],
         ),
       ),
@@ -545,11 +607,12 @@ class _TypeCard extends StatelessWidget {
 
 /// A poster-size chip: the physical size label + its live price.
 class _SizeChip extends StatelessWidget {
-  const _SizeChip(
-      {required this.label,
-      required this.priceEur,
-      required this.selected,
-      required this.onTap});
+  const _SizeChip({
+    required this.label,
+    required this.priceEur,
+    required this.selected,
+    required this.onTap,
+  });
   final String label;
   final double? priceEur;
   final bool selected;
@@ -561,7 +624,9 @@ class _SizeChip extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.x3, vertical: AppSpacing.x2),
+          horizontal: AppSpacing.x3,
+          vertical: AppSpacing.x2,
+        ),
         decoration: BoxDecoration(
           color: AppColors.surfaceRaised,
           borderRadius: BorderRadius.circular(AppRadius.chip),
@@ -576,9 +641,12 @@ class _SizeChip extends StatelessWidget {
           children: [
             Text(label, style: AppTypography.caption),
             if (priceEur != null)
-              Text('€${priceEur!.toStringAsFixed(0)}',
-                  style: AppTypography.number(AppTypography.caption)
-                      .copyWith(color: AppColors.accent)),
+              Text(
+                '€${priceEur!.toStringAsFixed(0)}',
+                style: AppTypography.number(
+                  AppTypography.caption,
+                ).copyWith(color: AppColors.accent),
+              ),
           ],
         ),
       ),

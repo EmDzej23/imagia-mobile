@@ -49,7 +49,10 @@ class _CropScreenState extends State<CropScreen> {
       w = h * widget.aspect;
     }
     return Rect.fromCenter(
-        center: Offset(avail.width / 2, avail.height / 2), width: w, height: h);
+      center: Offset(avail.width / 2, avail.height / 2),
+      width: w,
+      height: h,
+    );
   }
 
   void _initTransform(Rect win) {
@@ -80,8 +83,12 @@ class _CropScreenState extends State<CropScreen> {
     final top = (win.top - _iy) / _scale / _ih;
     final w = win.width / _scale / _iw;
     final h = win.height / _scale / _ih;
-    return Rect.fromLTWH(left.clamp(0.0, 1.0), top.clamp(0.0, 1.0),
-        w.clamp(0.0, 1.0), h.clamp(0.0, 1.0));
+    return Rect.fromLTWH(
+      left.clamp(0.0, 1.0),
+      top.clamp(0.0, 1.0),
+      w.clamp(0.0, 1.0),
+      h.clamp(0.0, 1.0),
+    );
   }
 
   @override
@@ -93,63 +100,77 @@ class _CropScreenState extends State<CropScreen> {
         title: const Text('Adjust framing'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(
-                _lastWindow == null ? null : _normalizedCrop(_lastWindow!)),
-            child: Text('Done',
-                style: AppTypography.label.copyWith(color: AppColors.accent)),
+            onPressed: () => Navigator.of(
+              context,
+            ).pop(_lastWindow == null ? null : _normalizedCrop(_lastWindow!)),
+            child: Text(
+              'Done',
+              style: AppTypography.label.copyWith(color: AppColors.accent),
+            ),
           ),
         ],
       ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: LayoutBuilder(builder: (context, constraints) {
-            final avail = Size(constraints.maxWidth, constraints.maxHeight);
-            final win = _window(avail);
-            _lastWindow = win;
-            if (!_init) _initTransform(win);
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final avail = Size(constraints.maxWidth, constraints.maxHeight);
+              final win = _window(avail);
+              _lastWindow = win;
+              if (!_init) _initTransform(win);
 
-            return GestureDetector(
-              onScaleStart: (d) {
-                _startScale = _scale;
-                _startFocal = d.localFocalPoint;
-                _startIx = _ix;
-                _startIy = _iy;
-              },
-              onScaleUpdate: (d) {
-                setState(() {
-                  final minScale =
-                      math.max(win.width / _iw, win.height / _ih);
-                  final newScale = (_startScale * d.scale)
-                      .clamp(minScale, minScale * 6);
-                  final k = newScale / _startScale;
-                  _scale = newScale;
-                  _ix = d.localFocalPoint.dx - (_startFocal.dx - _startIx) * k;
-                  _iy = d.localFocalPoint.dy - (_startFocal.dy - _startIy) * k;
-                  _clamp(win);
-                });
-              },
-              child: CustomPaint(
-                size: avail,
-                painter: _CropPainter(
-                  image: widget.image,
-                  dst: Rect.fromLTWH(_ix, _iy, _iw * _scale, _ih * _scale),
-                  window: win,
-                ),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Text('Pinch to zoom · drag to position',
-                          style: AppTypography.caption
-                              .copyWith(color: Colors.white70)),
+              return GestureDetector(
+                onScaleStart: (d) {
+                  _startScale = _scale;
+                  _startFocal = d.localFocalPoint;
+                  _startIx = _ix;
+                  _startIy = _iy;
+                },
+                onScaleUpdate: (d) {
+                  setState(() {
+                    final minScale = math.max(
+                      win.width / _iw,
+                      win.height / _ih,
+                    );
+                    final newScale = (_startScale * d.scale).clamp(
+                      minScale,
+                      minScale * 6,
+                    );
+                    final k = newScale / _startScale;
+                    _scale = newScale;
+                    _ix =
+                        d.localFocalPoint.dx - (_startFocal.dx - _startIx) * k;
+                    _iy =
+                        d.localFocalPoint.dy - (_startFocal.dy - _startIy) * k;
+                    _clamp(win);
+                  });
+                },
+                child: CustomPaint(
+                  size: avail,
+                  painter: _CropPainter(
+                    image: widget.image,
+                    dst: Rect.fromLTWH(_ix, _iy, _iw * _scale, _ih * _scale),
+                    window: win,
+                  ),
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Text(
+                          'Pinch to zoom · drag to position',
+                          style: AppTypography.caption.copyWith(
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            );
-          }),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -159,8 +180,7 @@ class _CropScreenState extends State<CropScreen> {
 }
 
 class _CropPainter extends CustomPainter {
-  _CropPainter(
-      {required this.image, required this.dst, required this.window});
+  _CropPainter({required this.image, required this.dst, required this.window});
   final ui.Image image;
   final Rect dst;
   final Rect window;

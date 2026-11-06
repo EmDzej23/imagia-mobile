@@ -28,12 +28,14 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
 
   Future<void> _openVerify() async {
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => VerifyEmailScreen(
-        email: _email.text.trim(),
-        password: _password.text,
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VerifyEmailScreen(
+          email: _email.text.trim(),
+          password: _password.text,
+        ),
       ),
-    ));
+    );
   }
 
   @override
@@ -66,7 +68,10 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
           if (e2.emailNotVerified) {
             unawaited(_openVerify());
           } else if (mounted) {
-            setState(() => _error = 'An account with this email already exists. Sign in instead.');
+            setState(
+              () => _error =
+                  'An account with this email already exists. Sign in instead.',
+            );
           }
         }
       } else if (mounted) {
@@ -121,9 +126,10 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
               ),
               if (_error != null) ...[
                 const SizedBox(height: AppSpacing.x3),
-                Text(_error!,
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.error)),
+                Text(
+                  _error!,
+                  style: AppTypography.caption.copyWith(color: AppColors.error),
+                ),
               ],
               const SizedBox(height: AppSpacing.x6),
               PrimaryButton(

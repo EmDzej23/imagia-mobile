@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../mosaic/shared.dart'
     show getBaseTileId, isTileFlipped, saturationColorFilter;
+import '../mosaic/recolor_bake.dart';
+import '../mosaic/tile_recolor.dart';
 import '../mosaic/types.dart';
 
 /// Curated mobile animation styles. All output a 9:16 branded "poster": the
@@ -130,6 +132,29 @@ class VideoAnim {
   /// Output saturation grade over the finished mosaic — applied on EVERY frame so
   /// the clip is colour-matched to the still export from the first frame to the last.
   final double outputSaturation;
+
+  /// Per tile (same index as [tiles]/[states]): its recolour filter — only for the
+  /// plans the atlas below can't serve (honeycomb / cubes). Null = the plain photo.
+  List<ui.ColorFilter?>? cellFilters;
+
+  /// The web's in-cell tile recolour, pre-rendered ([attachVideoRecolor]): the whole
+  /// mosaic recoloured ([atlas], ~2× the video) and a sharp close-up of the area the
+  /// camera dives into ([closeUp]); each tile is drawn from its cell in one of them.
+  ui.Image? atlas;
+  List<ui.Rect?>? atlasRects;
+  ui.Image? closeUp;
+  List<ui.Rect?>? closeUpRects;
+
+  /// The recoloured source for tile [i] at camera [zoom], or null (draw the photo).
+  (ui.Image, ui.Rect)? recolorSource(int i, double zoom) {
+    final cu = closeUp, cr = closeUpRects;
+    if (zoom > 1.5 && cu != null && cr != null && i < cr.length && cr[i] != null) {
+      return (cu, cr[i]!);
+    }
+    final a = atlas, ar = atlasRects;
+    if (a != null && ar != null && i < ar.length && ar[i] != null) return (a, ar[i]!);
+    return null;
+  }
 
   /// Where the mosaic sits within the centre band (for the tint overlay + frame).
   final Rect contentRect;
@@ -394,8 +419,18 @@ void _drawTile(
   ui.Rect? overlaySrc,
   double overlayAlpha = 0,
   double bleed = 0,
+  ui.ColorFilter? filter,
+  (ui.Image, ui.Rect)? recolored,
 }) {
-  final src = _centerCrop(img, w / h);
+  // A recoloured source is already cropped (and toned) for its cell.
+  if (recolored != null) {
+    img = recolored.$1;
+    filter = null;
+    flipped = false;
+  }
+  final src = recolored?.$2 ?? _centerCrop(img, w / h);
+  // Tile recolour, as the colour matrix on the tile's own draw (see tile_recolor.dart).
+  _tilePaint.colorFilter = filter;
   // Sub-pixel seam guard. Neighbouring cells meet on a FRACTIONAL device pixel, so
   // the wall behind shows through the shared edge — and because the camera zoom moves
   // every frame, those seams strobe. That is the flicker between tiles. Overdrawing
@@ -417,6 +452,7 @@ void _drawTile(
   } else {
     canvas.drawImageRect(img, src, dst, _tilePaint);
   }
+  _tilePaint.colorFilter = null;
   // This tile's slice of the base overlay — glued to the tile (follows its
   // position/rotation/scale) but never mirrored, so when all tiles meet at the
   // end the overlay reconstructs exactly like the mosaic preview.
@@ -595,11 +631,14 @@ void _drawPoster(
     canvas.saveLayer(c, ui.Paint()..colorFilter = grade);
   }
   final bleed = 0.75 / math.max(1.0, s);
-  for (final t in anim.tiles) {
+  for (var i = 0; i < anim.tiles.length; i++) {
+    final t = anim.tiles[i];
     final img = tileImages[getBaseTileId(t.tileId)];
     if (img == null) continue;
     _drawTile(canvas, img, isTileFlipped(t.tileId), t.x, t.y, t.w, t.h, 0, 1,
-        bleed: bleed);
+        bleed: bleed,
+        filter: anim.cellFilters?[i],
+        recolored: anim.recolorSource(i, 1));
   }
   if (anim.tintStrength > 0 && overlay != null) {
     _drawTint(canvas, overlay, c, anim.tintStrength);
@@ -727,7 +766,8 @@ void _drawAnimatedTiles(
   // Device-pixel seam bleed converted to world units — the tiles are drawn inside
   // the camera transform, so it shrinks as the camera zooms in.
   final tileBleed = 0.75 / math.max(1.0, zoom);
-  for (final st in anim.states) {
+  for (var si = 0; si < anim.states.length; si++) {
+    final st = anim.states[si];
     final t = _tileEased(progress, st.stagger, anim.style);
     var scale = 1.0;
     if (st.startScale < 1) {
@@ -768,7 +808,9 @@ void _drawAnimatedTiles(
         overlay: perTileOverlay ? overlay : null,
         overlaySrc: overlaySrc,
         overlayAlpha: perTileOverlay ? anim.tintStrength : 0,
-        bleed: tileBleed);
+        bleed: tileBleed,
+        filter: anim.cellFilters?[si],
+        recolored: anim.recolorSource(si, zoom));
   }
 
   // Full-band overlay for the styles that don't carry it per-tile (deepZoom &
@@ -788,4 +830,104 @@ void _drawFadeOut(ui.Canvas canvas, double vw, double vh, double progress) {
     canvas.drawRect(ui.Rect.fromLTWH(0, 0, vw, vh),
         ui.Paint()..color = Color.fromRGBO(0, 0, 0, a));
   }
+}
+
+/// Prepare the web's in-cell tile recolour for the video ([VideoAnim.atlas] and
+/// [VideoAnim.closeUp]) — the same pipeline as the studio preview (recolor_bake.dart).
+/// Honeycomb / cube plans (drawn as rectangles here) keep the per-tile filter.
+Future<void> attachVideoRecolor(
+  VideoAnim anim,
+  SlimMosaicPlan plan,
+  Map<String, ui.Image> tileImages,
+) async {
+  final strength = plan.tileRecolor;
+  if (!(strength > 0)) return;
+  if (plan.hexagon || plan.placements.any((p) => p.quad != null)) {
+    await _attachFlatRecolor(anim, plan, tileImages);
+    return;
+  }
+  final c = anim.contentRect;
+  final fitScale = c.width / plan.baseWidth; // video px per base px
+  ui.Image? image(SlimPlacement p, double _) => tileImages[p.tileId];
+
+  Future<(ui.Image, List<ui.Rect?>)?> bake(ui.Rect win, double k) async {
+    final outW = (win.width * k).round(), outH = (win.height * k).round();
+    final img = await bakeMosaicWindow(
+      plan: plan,
+      tileCrops: plan.tileCrops,
+      imageFor: image,
+      win: win,
+      outW: outW,
+      outH: outH,
+      tileRecolor: strength,
+      outputSaturation: 1, // the video grades every frame itself
+    );
+    if (img == null) return null;
+    final kx = outW / win.width;
+    final rects = <ui.Rect?>[
+      for (final p in plan.placements)
+        () {
+          final x = (p.x - win.left) * kx, y = (p.y - win.top) * kx;
+          final w = p.width * kx, h = p.height * kx;
+          if (x < 0 || y < 0 || x + w > outW || y + h > outH) return null;
+          final dx = x.floorToDouble(), dy = y.floorToDouble();
+          return ui.Rect.fromLTRB(dx, dy, (x + w).ceilToDouble(), (y + h).ceilToDouble());
+        }(),
+    ];
+    return (img, rects);
+  }
+
+  // The whole mosaic at ~2× the video (capped).
+  final long = math.max(plan.baseWidth, plan.baseHeight);
+  final kAtlas = math.min(fitScale * 2, 4096 / long);
+  final whole = await bake(ui.Rect.fromLTWH(0, 0, plan.baseWidth, plan.baseHeight), kAtlas);
+  if (whole != null) {
+    anim.atlas = whole.$1;
+    anim.atlasRects = whole.$2;
+  }
+
+  // A sharp close-up where the camera starts zoomed in (deep zoom: 10×, others: 4×).
+  if (!anim.style.isInPlace) {
+    final zoom0 = anim.style.isZoomout ? 10.0 : 4.0;
+    final fx = anim.focusX ?? anim.videoW / 2, fy = anim.focusY ?? anim.videoH / 2;
+    // The opening view, with margin, in base px.
+    final vw = anim.videoW / zoom0 * 1.8, vh = anim.videoH / zoom0 * 1.8;
+    final win = ui.Rect.fromCenter(
+      center: Offset((fx - c.left) / fitScale, (fy - c.top) / fitScale),
+      width: vw / fitScale,
+      height: vh / fitScale,
+    ).intersect(ui.Rect.fromLTWH(0, 0, plan.baseWidth, plan.baseHeight));
+    if (!win.isEmpty) {
+      final k = math.min(fitScale * zoom0, 4096 / math.max(win.width, win.height));
+      final close = await bake(win, k);
+      if (close != null) {
+        anim.closeUp = close.$1;
+        anim.closeUpRects = close.$2;
+      }
+    }
+  }
+}
+
+/// Per-tile colour-matrix recolour (the old path) for plans the atlas can't serve.
+Future<void> _attachFlatRecolor(
+  VideoAnim anim,
+  SlimMosaicPlan plan,
+  Map<String, ui.Image> tileImages,
+) async {
+  final strength = plan.tileRecolor;
+  await ensureTileColorGrids(tileImages.values);
+  final tone = tileToning(strength).saturation;
+  final filters = List<ui.ColorFilter?>.filled(anim.tiles.length, null);
+  for (var i = 0; i < anim.tiles.length && i < plan.placements.length; i++) {
+    final p = plan.placements[i];
+    final region = p.regionAvgColor;
+    final t = anim.tiles[i];
+    final img = tileImages[getBaseTileId(t.tileId)];
+    if (region == null || img == null || t.w <= 0 || t.h <= 0) continue;
+    final mean = tileRegionMean(img, _centerCrop(img, t.w / t.h));
+    if (mean == null) continue;
+    final lin = tileRecolorLinear(region, mean, strength);
+    filters[i] = lin == null && tone >= 1 ? null : recolorColorFilter(lin, tone);
+  }
+  anim.cellFilters = filters;
 }

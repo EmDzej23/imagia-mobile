@@ -96,8 +96,22 @@ List<RhombCell> _hexRhombi(double cx, double cy, double s) {
     final vx = spec.v[0], vy = spec.v[1];
     return RhombCell(
       face: spec.face,
-      quad: [ox, oy, ox + ux, oy + uy, ox + ux + vx, oy + uy + vy, ox + vx, oy + vy],
-      ox: ox, oy: oy, ux: ux, uy: uy, vx: vx, vy: vy,
+      quad: [
+        ox,
+        oy,
+        ox + ux,
+        oy + uy,
+        ox + ux + vx,
+        oy + uy + vy,
+        ox + vx,
+        oy + vy,
+      ],
+      ox: ox,
+      oy: oy,
+      ux: ux,
+      uy: uy,
+      vx: vx,
+      vy: vy,
       // Centroid of a parallelogram is origin + (u + v) / 2.
       cx: ox + (ux + vx) / 2,
       cy: oy + (uy + vy) / 2,
@@ -112,7 +126,10 @@ List<RhombCell> _hexRhombi(double cx, double cy, double s) {
 /// on every side so the edges are filled rather than showing a ragged hexagonal border
 /// — the renderer clips to the canvas.
 List<RhombCell> buildRhombilleCells(
-    double width, double height, int cellsOnShort) {
+  double width,
+  double height,
+  int cellsOnShort,
+) {
   final shorter = math.min(width, height);
   // Hexagon circumradius from the requested cube count. A pointy-top hexagon is
   // sqrt(3)*s wide, so `cellsOnShort` cubes across the short edge means
@@ -157,7 +174,9 @@ List<RhombCell> buildRhombilleCells(
 /// match is then made against the part of the photo the rhombus actually covers, which
 /// is what matters; the corners it misses are a small fraction of the area.
 ({double x, double y, double width, double height}) sampleRect(
-    RhombCell cell, double side) {
+  RhombCell cell,
+  double side,
+) {
   final half = side / 2;
   return (x: cell.cx - half, y: cell.cy - half, width: side, height: side);
 }

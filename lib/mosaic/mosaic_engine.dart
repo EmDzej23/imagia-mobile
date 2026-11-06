@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'analyze.dart';
 import 'grid_layout.dart';
 import 'shared.dart';
+import 'local_recolor.dart' show labGridToRgb;
+import 'tone_fit.dart';
 import 'types.dart';
 
 /// Orchestration layer — the Dart equivalent of `foto-mozaik/lib/mosaic/browser.ts`.
@@ -20,10 +22,16 @@ import 'types.dart';
 /// `STUDIO_TILE_ANALYSIS_DIMENSION` in browser.ts).
 const int _studioTileAnalysisDimension = 120;
 
-Future<ui.Image> _decode(Uint8List bytes,
-    {int? targetWidth, int? targetHeight}) async {
-  final codec = await ui.instantiateImageCodec(bytes,
-      targetWidth: targetWidth, targetHeight: targetHeight);
+Future<ui.Image> _decode(
+  Uint8List bytes, {
+  int? targetWidth,
+  int? targetHeight,
+}) async {
+  final codec = await ui.instantiateImageCodec(
+    bytes,
+    targetWidth: targetWidth,
+    targetHeight: targetHeight,
+  );
   final frame = await codec.getNextFrame();
   return frame.image;
 }
@@ -40,8 +48,10 @@ Future<Uint8List> _rgba(ui.Image image) async {
 /// `baseBlur > 0`, else 200px); the preview painter then scales it *up* to the
 /// mosaic, and the bilinear upscale produces the blur. There is no continuous
 /// blur radius — any `baseBlur > 0` is "blurred", `0` is "sharp", exactly as web.
-Future<ui.Image> buildOverlayImage(Uint8List baseBytes,
-    {double baseBlur = 1}) async {
+Future<ui.Image> buildOverlayImage(
+  Uint8List baseBytes, {
+  double baseBlur = 1,
+}) async {
   final probe = await _decode(baseBytes);
   final w = probe.width, h = probe.height;
   probe.dispose();
@@ -60,17 +70,28 @@ Future<ui.Image> decodeThumbnail(Uint8List bytes, int maxSize) async {
   final scale = maxSize / (w > h ? w : h);
   if (scale >= 1) return probe;
   probe.dispose();
-  return _decode(bytes,
-      targetWidth: (w * scale).round(), targetHeight: (h * scale).round());
+  return _decode(
+    bytes,
+    targetWidth: (w * scale).round(),
+    targetHeight: (h * scale).round(),
+  );
 }
 
 /// Analyzes a single tile image into a [TileDescriptor]. Runs on the calling
 /// isolate (light per-tile work); decode is via `dart:ui`.
 Future<TileDescriptor> analyzeTile(
-    String id, String name, Uint8List bytes) async {
+  String id,
+  String name,
+  Uint8List bytes,
+) async {
   final probe = await _decode(bytes);
-  final descriptor =
-      await _analyzeFromProbe(id, name, bytes, probe.width, probe.height);
+  final descriptor = await _analyzeFromProbe(
+    id,
+    name,
+    bytes,
+    probe.width,
+    probe.height,
+  );
   probe.dispose();
   return descriptor;
 }
@@ -80,8 +101,12 @@ Future<TileDescriptor> analyzeTile(
 /// Cuts per-tile work from ~4 decodes to 2 — important when restoring a large
 /// library. Returns the descriptor + a [ui.Image] thumbnail (≤[thumbSize] px).
 Future<({TileDescriptor descriptor, ui.Image thumbnail})>
-    analyzeTileWithThumbnail(String id, String name, Uint8List bytes,
-        {int thumbSize = 200}) async {
+analyzeTileWithThumbnail(
+  String id,
+  String name,
+  Uint8List bytes, {
+  int thumbSize = 200,
+}) async {
   final probe = await _decode(bytes);
   final srcW = probe.width, srcH = probe.height;
 
@@ -96,9 +121,11 @@ Future<({TileDescriptor descriptor, ui.Image thumbnail})>
     thumbnail = probe;
   } else {
     probe.dispose();
-    thumbnail = await _decode(bytes,
-        targetWidth: math.max(1, (srcW * scale).round()),
-        targetHeight: math.max(1, (srcH * scale).round()));
+    thumbnail = await _decode(
+      bytes,
+      targetWidth: math.max(1, (srcW * scale).round()),
+      targetHeight: math.max(1, (srcH * scale).round()),
+    );
   }
   try {
     final descriptor = await _analyzeFromProbe(id, name, bytes, srcW, srcH);
@@ -110,18 +137,37 @@ Future<({TileDescriptor descriptor, ui.Image thumbnail})>
 }
 
 Future<TileDescriptor> _analyzeFromProbe(
-    String id, String name, Uint8List bytes, int srcWi, int srcHi) async {
+  String id,
+  String name,
+  Uint8List bytes,
+  int srcWi,
+  int srcHi,
+) async {
   final srcW = srcWi.toDouble();
   final srcH = srcHi.toDouble();
   final dims = getAnalysisDimensions(srcW, srcH, _studioTileAnalysisDimension);
-  final img = await _decode(bytes,
-      targetWidth: dims.sampleWidth, targetHeight: dims.sampleHeight);
+  final img = await _decode(
+    bytes,
+    targetWidth: dims.sampleWidth,
+    targetHeight: dims.sampleHeight,
+  );
   final rgba = await _rgba(img);
   img.dispose();
 
-  final integral = buildIntegralImage(rgba, dims.sampleWidth, dims.sampleHeight);
-  final region =
-      sampleRegionFromIntegral(0, 0, srcW, srcH, srcW, srcH, integral);
+  final integral = buildIntegralImage(
+    rgba,
+    dims.sampleWidth,
+    dims.sampleHeight,
+  );
+  final region = sampleRegionFromIntegral(
+    0,
+    0,
+    srcW,
+    srcH,
+    srcW,
+    srcH,
+    integral,
+  );
 
   return createTileDescriptor(
     id,
@@ -144,8 +190,17 @@ Future<TileDescriptor> _analyzeFromProbe(
 /// GPU-resizes an already-decoded image (no re-decode).
 
 class _PlanArgs {
-  _PlanArgs(this.rgba, this.sampleW, this.sampleH, this.sourceW, this.sourceH,
-      this.settings, this.tiles, this.faces, this.isMobile);
+  _PlanArgs(
+    this.rgba,
+    this.sampleW,
+    this.sampleH,
+    this.sourceW,
+    this.sourceH,
+    this.settings,
+    this.tiles,
+    this.faces,
+    this.isMobile,
+  );
   final Uint8List rgba;
   final int sampleW;
   final int sampleH;
@@ -172,20 +227,30 @@ SlimMosaicPlan _runLayout(_PlanArgs a) {
     autoContrast: s.autoContrast,
   );
 
+  // "Fit light to your photos": the matcher sees the photo's brightness fitted to the
+  // library's; the plan keeps the true photo colours (restored below). Web: browser.ts.
+  final matchAnalyzer = toneFitAnalyzer(analyzer, a.tiles, s.fitLightToLibrary);
   final placements = buildGridLayout(
     baseWidth: a.sourceW,
     baseHeight: a.sourceH,
-    analyzer: analyzer,
+    analyzer: matchAnalyzer,
     tiles: a.tiles,
     settings: s,
     faceRegions: a.faces,
     isMobile: a.isMobile,
   );
+  if (!identical(matchAnalyzer, analyzer)) {
+    restoreTruePhoto(placements, analyzer);
+  }
   return _toSlim(a.sourceW, a.sourceH, s, placements);
 }
 
-SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
-    MosaicSettings settings, List<MosaicPlacement> placements) {
+SlimMosaicPlan _toSlim(
+  double baseWidth,
+  double baseHeight,
+  MosaicSettings settings,
+  List<MosaicPlacement> placements,
+) {
   return SlimMosaicPlan(
     baseWidth: baseWidth,
     baseHeight: baseHeight,
@@ -194,6 +259,7 @@ SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
     tintStrength: settings.tintStrength,
     baseBlur: settings.baseBlur,
     outputSaturation: settings.outputSaturation,
+    tileRecolor: settings.tileRecolor,
     // Square cells are ambiguous about which part of a non-square tile to keep — anchor
     // portrait tiles to the top (faces) and leave landscape tiles centred.
     cropPortraitTop: settings.mosaicMode == 'square',
@@ -201,24 +267,29 @@ SlimMosaicPlan _toSlim(double baseWidth, double baseHeight,
     // every mode sends, so this flag is the only thing that distinguishes them.
     hexagon: settings.mosaicMode == 'hexagon',
     placements: placements
-        .map((p) => SlimPlacement(
-              index: p.index,
-              x: p.x,
-              y: p.y,
-              width: p.width,
-              height: p.height,
-              tileId: p.tileId,
-              regionAvgColor: [
-                p.averageColor.r,
-                p.averageColor.g,
-                p.averageColor.b
-              ],
-              // 3D cubes: the cell is a parallelogram, and x/y/width/height describe
-              // only the matcher's sample rect. Without these the export falls back to
-              // rectangles and silently loses the whole effect.
-              quad: p.quad,
-              face: p.face,
-            ))
+        .map(
+          (p) => SlimPlacement(
+            index: p.index,
+            x: p.x,
+            y: p.y,
+            width: p.width,
+            height: p.height,
+            tileId: p.tileId,
+            regionAvgColor: [
+              p.averageColor.r,
+              p.averageColor.g,
+              p.averageColor.b,
+            ],
+            regionGrid: labGridToRgb([
+              for (final c in p.subregionColors) [c.L, c.a, c.b],
+            ]),
+            // 3D cubes: the cell is a parallelogram, and x/y/width/height describe
+            // only the matcher's sample rect. Without these the export falls back to
+            // rectangles and silently loses the whole effect.
+            quad: p.quad,
+            face: p.face,
+          ),
+        )
         .toList(),
   );
 }
@@ -240,21 +311,23 @@ Future<SlimMosaicPlan> buildMosaicPlan({
 }) async {
   var settings = sanitizeSettings(rawSettings);
   if (previewDensity != null) {
-    settings = sanitizeSettings(MosaicSettings(
-      mosaicMode: settings.mosaicMode,
-      density: previewDensity.toDouble(),
-      outputWidth: settings.outputWidth,
-      reusePenalty: settings.reusePenalty,
-      aspectWeight: settings.aspectWeight,
-      detailWeight: settings.detailWeight,
-      minBlockSize: settings.minBlockSize,
-      maxBlockSize: settings.maxBlockSize,
-      tintStrength: settings.tintStrength,
-      baseBlur: settings.baseBlur,
-      colorBoost: settings.colorBoost,
-      autoContrast: settings.autoContrast,
-      signalWeights: settings.signalWeights,
-    ));
+    settings = sanitizeSettings(
+      MosaicSettings(
+        mosaicMode: settings.mosaicMode,
+        density: previewDensity.toDouble(),
+        outputWidth: settings.outputWidth,
+        reusePenalty: settings.reusePenalty,
+        aspectWeight: settings.aspectWeight,
+        detailWeight: settings.detailWeight,
+        minBlockSize: settings.minBlockSize,
+        maxBlockSize: settings.maxBlockSize,
+        tintStrength: settings.tintStrength,
+        baseBlur: settings.baseBlur,
+        colorBoost: settings.colorBoost,
+        autoContrast: settings.autoContrast,
+        signalWeights: settings.signalWeights,
+      ),
+    );
   }
 
   final probe = await _decode(baseBytes);
@@ -262,24 +335,38 @@ Future<SlimMosaicPlan> buildMosaicPlan({
   final srcH = probe.height.toDouble();
   probe.dispose();
 
-  // Analysis dimension: mirrors browser.ts. Mobile holds at 800 to protect
-  // memory; desktop tiers up with density.
-  final analysisDim = isMobile
-      ? 800
-      : settings.density > 200
-          ? 1600
-          : settings.density > 120
-              ? 1400
-              : 1000;
+  // Analysis dimension: mirrors browser.ts — the SAME on every device. Phones used to
+  // analyse at 800, so at higher densities each cell's 5×5 samples were 1–2 px and a
+  // phone chose different (and clearly worse) tiles than the web for the same photo —
+  // most visibly under "Max N", where cells must take photos past their best few.
+  final analysisDim = settings.density > 200
+      ? 1600
+      : settings.density > 120
+      ? 1400
+      : 1000;
   final dims = getAnalysisDimensions(srcW, srcH, analysisDim);
 
-  final img = await _decode(baseBytes,
-      targetWidth: dims.sampleWidth, targetHeight: dims.sampleHeight);
+  final img = await _decode(
+    baseBytes,
+    targetWidth: dims.sampleWidth,
+    targetHeight: dims.sampleHeight,
+  );
   final rgba = await _rgba(img);
   img.dispose();
 
-  final args = _PlanArgs(rgba, dims.sampleWidth, dims.sampleHeight, srcW, srcH,
-      settings, tiles, faces, isMobile);
+  final args = _PlanArgs(
+    rgba,
+    dims.sampleWidth,
+    dims.sampleHeight,
+    srcW,
+    srcH,
+    settings,
+    tiles,
+    faces,
+    isMobile,
+  );
 
-  return useIsolate ? await Isolate.run(() => _runLayout(args)) : _runLayout(args);
+  return useIsolate
+      ? await Isolate.run(() => _runLayout(args))
+      : _runLayout(args);
 }

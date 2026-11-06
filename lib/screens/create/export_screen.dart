@@ -17,6 +17,7 @@ import '../../theme/app_typography.dart';
 import '../../widgets/app_progress_bar.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/secondary_button.dart';
+import '../../core/friendly_error.dart';
 
 class ExportScreen extends ConsumerStatefulWidget {
   const ExportScreen({super.key});
@@ -62,10 +63,12 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   Future<File> _download(String url, String fileName) async {
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/$fileName';
-    final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 2),
-    ));
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(minutes: 2),
+      ),
+    );
     final full = _resolveUrl(url);
     // New mosaics download for their OWNER only (the server's restricted access),
     // so send the sign-in — as the preview and downloads screens do. Only to our
@@ -77,7 +80,8 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
       full,
       path,
       options: Options(
-          headers: token != null ? {'Authorization': 'Bearer $token'} : null),
+        headers: token != null ? {'Authorization': 'Bearer $token'} : null,
+      ),
     );
     return File(path);
   }
@@ -89,14 +93,18 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
       if (!await Gal.hasAccess()) await Gal.requestAccess();
       await Gal.putImage(file.path);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Saved to Photos')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Saved to Photos')));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Save failed: $e')),
+          SnackBar(
+            content: Text(
+              friendlyError(e, fallback: "Couldn't save. Please try again."),
+            ),
+          ),
         );
       }
     } finally {
@@ -112,7 +120,11 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Share failed: $e')),
+          SnackBar(
+            content: Text(
+              friendlyError(e, fallback: "Couldn't share. Please try again."),
+            ),
+          ),
         );
       }
     } finally {
@@ -142,8 +154,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle,
-                color: AppColors.success, size: 64),
+            const Icon(Icons.check_circle, color: AppColors.success, size: 64),
             const SizedBox(height: AppSpacing.x4),
             Text('Your mosaic is ready', style: AppTypography.title),
             const SizedBox(height: AppSpacing.x6),
@@ -166,9 +177,12 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
             const SizedBox(height: AppSpacing.x3),
             TextButton(
               onPressed: () => context.go('/'),
-              child: Text('Back to gallery',
-                  style: AppTypography.label
-                      .copyWith(color: AppColors.textSecondary)),
+              child: Text(
+                'Back to gallery',
+                style: AppTypography.label.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
             ),
           ],
         );
@@ -176,13 +190,15 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline,
-                color: AppColors.error, size: 64),
+            const Icon(Icons.error_outline, color: AppColors.error, size: 64),
             const SizedBox(height: AppSpacing.x4),
-            Text(render.error ?? 'Render failed',
-                textAlign: TextAlign.center,
-                style: AppTypography.body
-                    .copyWith(color: AppColors.textSecondary)),
+            Text(
+              render.error ?? 'Render failed',
+              textAlign: TextAlign.center,
+              style: AppTypography.body.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
             const SizedBox(height: AppSpacing.x6),
             PrimaryButton(
               label: 'Try again',
@@ -197,11 +213,17 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(render.message.isEmpty ? 'Rendering…' : render.message,
-                textAlign: TextAlign.center, style: AppTypography.title),
+            Text(
+              render.message.isEmpty ? 'Rendering…' : render.message,
+              textAlign: TextAlign.center,
+              style: AppTypography.title,
+            ),
             const SizedBox(height: AppSpacing.x2),
-            Text('High-resolution mosaics can take a minute.',
-                textAlign: TextAlign.center, style: AppTypography.caption),
+            Text(
+              'High-resolution mosaics can take a minute.',
+              textAlign: TextAlign.center,
+              style: AppTypography.caption,
+            ),
             const SizedBox(height: AppSpacing.x6),
             const SizedBox(
               width: double.infinity,

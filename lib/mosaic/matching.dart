@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -25,39 +26,75 @@ int _i32(int x) {
 }
 
 /// Replicates `Number(x.toFixed(4))`.
-double _toFixed4(double x) => double.parse(x.toStringAsFixed(4));
+///
+/// Arithmetic instead of a string round trip (8× faster; it runs for every scored
+/// candidate). The same value: `toStringAsFixed(4)` picks the integer n nearest to
+/// x·10⁴, and n / 10⁴ is the double that string parses to (both exact, one correctly
+/// rounded division). Only when x·10⁴ sits within rounding error of a half — where the
+/// computed product could round the other way — does it take the string path.
+double _toFixed4(double x) {
+  if (!(x.abs() < 1e15)) return _toFixed4Slow(x);
+  final y = x * 10000;
+  final f = y - y.floorToDouble();
+  if ((f - 0.5).abs() < 1e-6) return _toFixed4Slow(x);
+  return y.roundToDouble() / 10000;
+}
+
+double _toFixed4Slow(double x) => double.parse(x.toStringAsFixed(4));
 
 // ── Quickselect: find top-k smallest elements in O(n) ───────────────────────
 
-class _ScoredItem {
-  _ScoredItem(this.idx, this.score);
-  int idx;
-  double score;
+// The shortlist being selected: (index, score) pairs in two typed arrays reused across
+// calls — one object per tile per cell used to be allocated here (~1M per plan). The
+// partition is the same Lomuto scheme on the same values, so the same shortlist.
+// Fill with [_qsReset] / [_qsAdd], select, then read [_qsIdx] for the first k.
+var _qsIdx = Int32List(1024);
+var _qsScore = Float64List(1024);
+var _qsLen = 0;
+
+void _qsReset() => _qsLen = 0;
+
+void _qsAdd(int idx, double score) {
+  if (_qsLen == _qsIdx.length) {
+    _qsIdx = Int32List(_qsLen * 2)..setRange(0, _qsLen, _qsIdx);
+    _qsScore = Float64List(_qsLen * 2)..setRange(0, _qsLen, _qsScore);
+  }
+  _qsIdx[_qsLen] = idx;
+  _qsScore[_qsLen] = score;
+  _qsLen++;
 }
 
-int _quickSelectPartition(List<_ScoredItem> arr, int left, int right) {
-  final pivotScore = arr[right].score;
+int _quickSelectPartition(int left, int right) {
+  final idx = _qsIdx, sc = _qsScore;
+  final pivotScore = sc[right];
   var i = left;
   for (var j = left; j < right; j++) {
-    if (arr[j].score < pivotScore) {
-      final tmp = arr[i];
-      arr[i] = arr[j];
-      arr[j] = tmp;
+    final sj = sc[j];
+    if (sj < pivotScore) {
+      final ti = idx[i];
+      idx[i] = idx[j];
+      idx[j] = ti;
+      sc[j] = sc[i];
+      sc[i] = sj;
       i++;
     }
   }
-  final tmp = arr[i];
-  arr[i] = arr[right];
-  arr[right] = tmp;
+  final ti = idx[i];
+  idx[i] = idx[right];
+  idx[right] = ti;
+  final ts = sc[i];
+  sc[i] = sc[right];
+  sc[right] = ts;
   return i;
 }
 
-List<_ScoredItem> _quickSelectTopK(List<_ScoredItem> arr, int k) {
-  if (k >= arr.length) return arr;
+/// Moves the k lowest scores of the shortlist to its front (unordered).
+void _quickSelectTopK(int k) {
+  if (k >= _qsLen) return;
   var left = 0;
-  var right = arr.length - 1;
+  var right = _qsLen - 1;
   while (left < right) {
-    final pivotIndex = _quickSelectPartition(arr, left, right);
+    final pivotIndex = _quickSelectPartition(left, right);
     if (pivotIndex == k) {
       break;
     } else if (pivotIndex < k) {
@@ -66,7 +103,6 @@ List<_ScoredItem> _quickSelectTopK(List<_ScoredItem> arr, int k) {
       right = pivotIndex - 1;
     }
   }
-  return arr;
 }
 
 class TileMatch {
@@ -223,18 +259,52 @@ class ResolvedTile {
   LuminanceHistogram histogram = _zeroHist;
   SubregionEdgeOrientations? orientations;
   List<double>? cropWeights;
+
+  /// `_weightedEdgeMean` of [edges] / [contrast] under [cropWeights] — per tile and
+  /// cell shape, so kept with the rest of the resolved shape.
+  double edgeMean = 0;
+  double contrastMean = 0;
 }
 
 final LabColor _emptyLab = LabColor(0, 0, 0);
-final SubregionEdges _zero25 = List<double>.filled(25, 0);
-final LuminanceHistogram _zeroHist = List<double>.filled(8, 0.125);
+final SubregionEdges _zero25 = Float64List(25);
+final LuminanceHistogram _zeroHist = Float64List(8)..fillRange(0, 8, 0.125);
 final SubregionColors _zeroColors = List<LabColor>.filled(25, _emptyLab);
 
 /// Pre-allocated crop-weights buffer (avoids per-call allocation in the SA hot
 /// path), mirroring the web's `_cropWeightsBuf`.
-final List<double> _cropWeightsBuf = List<double>.filled(25, 0);
+final List<double> _cropWeightsBuf = Float64List(25);
 
 final ResolvedTile _scratch = ResolvedTile();
+
+/// [patternDistances] output scratch.
+final Float64List _pd = Float64List(5);
+
+/// What [_resolveTileInto] derives from a tile for one cell shape: the crop weights and
+/// the crop-weighted mean colour. Pure functions of (tile, cell aspect, top anchor,
+/// manual crop), recomputed millions of times by SA — so kept per tile, per shape.
+/// Same arithmetic, so bit-identical results (it was ~13% of a plan build on Android).
+class _Resolved {
+  _Resolved(
+    this.cellAR,
+    this.anchorTop,
+    this.crop,
+    this.cw,
+    this.l,
+    this.a,
+    this.b,
+    this.edgeMean,
+    this.contrastMean,
+  );
+  final double cellAR;
+  final bool anchorTop;
+  final TileCrop? crop;
+  final List<double>? cw;
+  final double l, a, b;
+  final double edgeMean, contrastMean;
+}
+
+final Expando<List<_Resolved>> _resolvedCache = Expando<List<_Resolved>>();
 
 void _resolveTileInto(
   ResolvedTile out,
@@ -243,23 +313,40 @@ void _resolveTileInto(
   bool anchorTop = false,
   Map<String, TileCrop>? crops,
 ]) {
-  final cw = computeCropWeights(
-    tile.aspectRatio,
-    cellAR,
-    _cropWeightsBuf,
-    anchorTop,
-    crops != null ? cropForTile(crops, tile.id, cellAR) : null,
-  );
-
-  final hasFullAnalysis =
-      tile.subregionColors != null && tile.subregionEdges != null;
+  final crop = crops != null ? cropForTile(crops, tile.id, cellAR) : null;
   out.colors = tile.subregionColors ?? _zeroColors;
   out.edges = tile.subregionEdges ?? _zero25;
   out.contrast = tile.contrastMap ?? _zero25;
   out.histogram = tile.tonalHistogram ?? _zeroHist;
   out.orientations = tile.subregionEdgeOrientations;
+
+  final cache = _resolvedCache[tile] ??= <_Resolved>[];
+  for (var i = 0; i < cache.length; i++) {
+    final r = cache[i];
+    if (r.cellAR == cellAR && r.anchorTop == anchorTop && identical(r.crop, crop)) {
+      out.cropWeights = r.cw;
+      out.avgL = r.l;
+      out.avgA = r.a;
+      out.avgB = r.b;
+      out.edgeMean = r.edgeMean;
+      out.contrastMean = r.contrastMean;
+      return;
+    }
+  }
+
+  final computed = computeCropWeights(
+    tile.aspectRatio,
+    cellAR,
+    _cropWeightsBuf,
+    anchorTop,
+    crop,
+  );
+  // Its own copy: the computation writes into a shared scratch buffer.
+  final cw = computed == null ? null : Float64List.fromList(computed);
   out.cropWeights = cw;
 
+  final hasFullAnalysis =
+      tile.subregionColors != null && tile.subregionEdges != null;
   if (!hasFullAnalysis || cw == null) {
     out.avgL = tile.averageLabColor.L;
     out.avgA = tile.averageLabColor.a;
@@ -278,6 +365,22 @@ void _resolveTileInto(
     out.avgA = sA / swt;
     out.avgB = sB / swt;
   }
+  out.edgeMean = _weightedEdgeMean(out.edges, cw);
+  out.contrastMean = _weightedEdgeMean(out.contrast, cw);
+  if (cache.length >= 16) cache.removeAt(0);
+  cache.add(
+    _Resolved(
+      cellAR,
+      anchorTop,
+      crop,
+      cw,
+      out.avgL,
+      out.avgA,
+      out.avgB,
+      out.edgeMean,
+      out.contrastMean,
+    ),
+  );
 }
 
 // ── Initial tile selection ──────────────────────────────────────────────────
@@ -337,7 +440,7 @@ TileMatch selectBestTileMatch(MatchInput input) {
   List<TileDescriptor> tilesToEvaluate;
 
   if (tiles.length > maxCandidates * 1.5 && !isMinDetail) {
-    final quickScores = <_ScoredItem>[];
+    _qsReset();
     for (var ti = 0; ti < tiles.length; ti++) {
       final tile = tiles[ti];
       final tileIsPortrait = tile.aspectRatio < 0.85;
@@ -357,15 +460,15 @@ TileMatch selectBestTileMatch(MatchInput input) {
       // alone, the nearest were all used up within a few hundred cells of a large
       // library; the full pass then skipped every one and fell back to a repeat while
       // hundreds of unused photos never made the list. (Web parity: selectBestTileMatch.)
-      if (_atUseCap(usageCounts, getBaseTileId(tile.id), maxUses))
+      if (maxUses > 0 && _atUseCap(usageCounts, getBaseTileId(tile.id), maxUses))
         qs += _cappedShortlistPenalty;
-      quickScores.add(_ScoredItem(ti, qs));
+      _qsAdd(ti, qs);
     }
-    _quickSelectTopK(quickScores, maxCandidates);
+    _quickSelectTopK(maxCandidates);
     tilesToEvaluate = [];
-    final limit = math.min(maxCandidates, quickScores.length);
+    final limit = math.min(maxCandidates, _qsLen);
     for (var i = 0; i < limit; i++) {
-      tilesToEvaluate.add(tiles[quickScores[i].idx]);
+      tilesToEvaluate.add(tiles[_qsIdx[i]]);
     }
   } else {
     tilesToEvaluate = tiles;
@@ -414,7 +517,7 @@ TileMatch selectBestTileMatch(MatchInput input) {
         varietyAdj += (unusedCount / tilePoolSize) * varietyStrength * 15;
       }
       if (usageCount > 0) {
-        final overuseFactor = math.max(0, usageCount / expectedUsage - 0.8);
+        final overuseFactor = math.max(0.0, usageCount / expectedUsage - 0.8);
         varietyAdj +=
             overuseFactor * overuseFactor * varietyStrength * _fairShareWeight;
       }
@@ -481,15 +584,15 @@ TileMatch selectBestTileMatch(MatchInput input) {
         structureBoost;
 
     score +=
-        ((region.edgeOrientation - tile.edgeOrientation).abs() / 2) *
+        (absD(region.edgeOrientation - tile.edgeOrientation) / 2) *
         _edgeOrientWeight *
         structureBoost;
 
     final tlb = tile.luminanceBalance;
     if (tlb != null) {
-      final lbV = (region.luminanceBalance.vertical - tlb.vertical).abs() / 2;
+      final lbV = absD(region.luminanceBalance.vertical - tlb.vertical) / 2;
       final lbH =
-          (region.luminanceBalance.horizontal - tlb.horizontal).abs() / 2;
+          absD(region.luminanceBalance.horizontal - tlb.horizontal) / 2;
       score += ((lbV + lbH) / 2) * _lumaBalanceWeight * structureBoost;
     }
 
@@ -510,7 +613,7 @@ TileMatch selectBestTileMatch(MatchInput input) {
         w.contrastPattern *
         structureBoost;
 
-    final tileEdgeMean = _weightedEdgeMean(td.edges, cw);
+    final tileEdgeMean = td.edgeMean;
     final textureExcess = tileEdgeMean - regionEdgeMean - texThreshold;
     if (textureExcess > 0) {
       final texMult = _textureExcessBase * (1.5 - sal * 0.7);
@@ -533,26 +636,26 @@ TileMatch selectBestTileMatch(MatchInput input) {
 
     if (regionChroma > _chromaMinRegion) {
       final tileChroma = math.sqrt(td.avgA * td.avgA + td.avgB * td.avgB);
-      final deficit = math.max(0, 1 - tileChroma / regionChroma);
+      final deficit = math.max(0.0, 1 - tileChroma / regionChroma);
       score += deficit * deficit * _chromaPreserveWeight;
       final excess = math.max(
-        0,
+        0.0,
         tileChroma / regionChroma - _chromaExcessScale,
       );
       score += excess * excess * _chromaExcessWeight;
     }
 
-    final tileContrastMean = _weightedEdgeMean(td.contrast, cw);
+    final tileContrastMean = td.contrastMean;
 
     if (rL < _darkRegionL) {
       final darkness = 1 - rL / _darkRegionL;
-      final flatness = math.max(0, _darkContrastMin - tileContrastMean);
+      final flatness = math.max(0.0, _darkContrastMin - tileContrastMean);
       score += flatness * darkness * _darkFlatWeight;
     }
 
     if (sal > 0.3) {
       final salFactor = (sal - 0.3) / 0.7;
-      final flatness = math.max(0, _salientContrastMin - tileContrastMean);
+      final flatness = math.max(0.0, _salientContrastMin - tileContrastMean);
       score += flatness * salFactor * _salientFlatWeight;
     }
 
@@ -636,7 +739,7 @@ List<RegionCandidate> getTopKCandidates(
       anchorsPortraitTop(settings),
       settings.tileCrops,
     );
-    final quickScores = <_ScoredItem>[];
+    _qsReset();
     for (var ti = 0; ti < tiles.length; ti++) {
       final tile = tiles[ti];
       final tp = tile.aspectRatio < 0.85,
@@ -653,12 +756,12 @@ List<RegionCandidate> getTopKCandidates(
       final dL = (rL - e.avgL) * w.brightnessEmphasis;
       final da = rA - e.avgA;
       final db = rB - e.avgB;
-      quickScores.add(_ScoredItem(ti, dL * dL + da * da + db * db));
+      _qsAdd(ti, dL * dL + da * da + db * db);
     }
-    _quickSelectTopK(quickScores, k);
+    _quickSelectTopK(k);
     tilesToEval = [];
-    for (var i = 0; i < math.min(k, quickScores.length); i++) {
-      tilesToEval.add(tiles[quickScores[i].idx]);
+    for (var i = 0; i < math.min(k, _qsLen); i++) {
+      tilesToEval.add(tiles[_qsIdx[i]]);
     }
   } else {
     tilesToEval = tiles.where((t) {
@@ -717,14 +820,14 @@ List<RegionCandidate> getTopKCandidates(
         w.edgePattern *
         structureBoost;
     score +=
-        ((region.edgeOrientation - tile.edgeOrientation).abs() / 2) *
+        (absD(region.edgeOrientation - tile.edgeOrientation) / 2) *
         _edgeOrientWeight *
         structureBoost;
     final tlb = tile.luminanceBalance;
     if (tlb != null) {
-      final lbV = (region.luminanceBalance.vertical - tlb.vertical).abs() / 2;
+      final lbV = absD(region.luminanceBalance.vertical - tlb.vertical) / 2;
       final lbH =
-          (region.luminanceBalance.horizontal - tlb.horizontal).abs() / 2;
+          absD(region.luminanceBalance.horizontal - tlb.horizontal) / 2;
       score += ((lbV + lbH) / 2) * _lumaBalanceWeight * structureBoost;
     }
     final orientations = td.orientations;
@@ -743,7 +846,7 @@ List<RegionCandidate> getTopKCandidates(
         w.contrastPattern *
         structureBoost;
 
-    final tileEdgeMean = _weightedEdgeMean(td.edges, cw);
+    final tileEdgeMean = td.edgeMean;
     final textureExcess = tileEdgeMean - regionEdgeMean - texThreshold;
     if (textureExcess > 0) {
       score +=
@@ -767,24 +870,24 @@ List<RegionCandidate> getTopKCandidates(
 
     if (regionChroma > _chromaMinRegion) {
       final tileChroma = math.sqrt(td.avgA * td.avgA + td.avgB * td.avgB);
-      final deficit = math.max(0, 1 - tileChroma / regionChroma);
+      final deficit = math.max(0.0, 1 - tileChroma / regionChroma);
       score += deficit * deficit * _chromaPreserveWeight;
       final excess = math.max(
-        0,
+        0.0,
         tileChroma / regionChroma - _chromaExcessScale,
       );
       score += excess * excess * _chromaExcessWeight;
     }
 
-    final tileContrastMean = _weightedEdgeMean(td.contrast, cw);
+    final tileContrastMean = td.contrastMean;
     if (rL < _darkRegionL) {
       final darkness = 1 - rL / _darkRegionL;
-      final flatness = math.max(0, _darkContrastMin - tileContrastMean);
+      final flatness = math.max(0.0, _darkContrastMin - tileContrastMean);
       score += flatness * darkness * _darkFlatWeight;
     }
     if (sal > 0.3) {
       score +=
-          math.max(0, _salientContrastMin - tileContrastMean) *
+          math.max(0.0, _salientContrastMin - tileContrastMean) *
           ((sal - 0.3) / 0.7) *
           _salientFlatWeight;
     }
@@ -1022,7 +1125,7 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
 
   List<int> candidates;
   if (resolved.length > _uniformMaxCandidates * 1.5) {
-    final quickScores = <_ScoredItem>[];
+    _qsReset();
     for (var ti = 0; ti < resolved.length; ti++) {
       final e = resolved[ti];
       final dL = (rL - e.avgL) * w.brightnessEmphasis;
@@ -1041,13 +1144,13 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
       // Capped photos rank last — see the same line in selectBestTileMatch.
       if (_atUseCap(usageCounts, e.baseId, maxUses))
         qs += _cappedShortlistPenalty;
-      quickScores.add(_ScoredItem(ti, qs));
+      _qsAdd(ti, qs);
     }
-    _quickSelectTopK(quickScores, _uniformMaxCandidates);
+    _quickSelectTopK(_uniformMaxCandidates);
     candidates = [];
-    final limit = math.min(_uniformMaxCandidates, quickScores.length);
+    final limit = math.min(_uniformMaxCandidates, _qsLen);
     for (var i = 0; i < limit; i++) {
-      candidates.add(quickScores[i].idx);
+      candidates.add(_qsIdx[i]);
     }
   } else {
     candidates = List<int>.generate(resolved.length, (i) => i);
@@ -1077,7 +1180,7 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
         varietyAdj += (unusedCount / tilePoolSize) * varietyStrength * 15;
       }
       if (usageCount > 0) {
-        final overuseFactor = math.max(0, usageCount / expectedUsage - 0.8);
+        final overuseFactor = math.max(0.0, usageCount / expectedUsage - 0.8);
         varietyAdj +=
             overuseFactor * overuseFactor * varietyStrength * _fairShareWeight;
       }
@@ -1134,14 +1237,14 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
         structureBoost;
 
     score +=
-        ((region.edgeOrientation - e.edgeOrientation).abs() / 2) *
+        (absD(region.edgeOrientation - e.edgeOrientation) / 2) *
         _edgeOrientWeight *
         structureBoost;
 
     final lbV =
-        (region.luminanceBalance.vertical - e.luminanceBalanceV).abs() / 2;
+        absD(region.luminanceBalance.vertical - e.luminanceBalanceV) / 2;
     final lbH =
-        (region.luminanceBalance.horizontal - e.luminanceBalanceH).abs() / 2;
+        absD(region.luminanceBalance.horizontal - e.luminanceBalanceH) / 2;
     score += ((lbV + lbH) / 2) * _lumaBalanceWeight * structureBoost;
 
     final orientations = e.orientations;
@@ -1182,21 +1285,21 @@ TileMatch selectBestTileUniform(UniformMatchInput input) {
         (0.5 + sal);
 
     if (regionChroma > _chromaMinRegion) {
-      final deficit = math.max(0, 1 - e.chroma / regionChroma);
+      final deficit = math.max(0.0, 1 - e.chroma / regionChroma);
       score += deficit * deficit * _chromaPreserveWeight;
-      final excess = math.max(0, e.chroma / regionChroma - _chromaExcessScale);
+      final excess = math.max(0.0, e.chroma / regionChroma - _chromaExcessScale);
       score += excess * excess * _chromaExcessWeight;
     }
 
     if (rL < _darkRegionL) {
       final darkness = 1 - rL / _darkRegionL;
-      final flatness = math.max(0, _darkContrastMin - e.contrastMean);
+      final flatness = math.max(0.0, _darkContrastMin - e.contrastMean);
       score += flatness * darkness * _darkFlatWeight;
     }
 
     if (sal > 0.3) {
       final salFactor = (sal - 0.3) / 0.7;
-      final flatness = math.max(0, _salientContrastMin - e.contrastMean);
+      final flatness = math.max(0.0, _salientContrastMin - e.contrastMean);
       score += flatness * salFactor * _salientFlatWeight;
     }
 
@@ -1254,6 +1357,18 @@ class RegionConstants {
   double saliency;
 }
 
+/// The pairing [_visualScoreFast] rejects outright (score 100, [ResolvedTile] left
+/// untouched): a tile whose orientation doesn't fit the cell.
+bool _orientationIllegal(TileDescriptor tile, RegionConstants rc) {
+  final tileIsPortrait = tile.aspectRatio < 0.85;
+  final tileIsLandscape = tile.aspectRatio > 1.18;
+  final tileIsSquare = !tileIsPortrait && !tileIsLandscape;
+  return (tileIsPortrait && rc.cellIsLandscape) ||
+      (tileIsLandscape && rc.cellIsPortrait) ||
+      (tileIsSquare && rc.cellIsLandscape) ||
+      (tileIsSquare && rc.cellIsPortrait);
+}
+
 double _visualScoreFast(
   RegionAnalysis region,
   TileDescriptor tile,
@@ -1261,15 +1376,7 @@ double _visualScoreFast(
   RegionConstants rc,
   ResolvedTile td,
 ) {
-  final tileIsPortrait = tile.aspectRatio < 0.85;
-  final tileIsLandscape = tile.aspectRatio > 1.18;
-  final tileIsSquare = !tileIsPortrait && !tileIsLandscape;
-  if ((tileIsPortrait && rc.cellIsLandscape) ||
-      (tileIsLandscape && rc.cellIsPortrait) ||
-      (tileIsSquare && rc.cellIsLandscape) ||
-      (tileIsSquare && rc.cellIsPortrait)) {
-    return 100;
-  }
+  if (_orientationIllegal(tile, rc)) return 100;
 
   final sw = settings.signalWeights ?? defaultSignalWeights();
   final structureBoost =
@@ -1298,7 +1405,7 @@ double _visualScoreFast(
 
   final tonalDist = histogramDistance(region.tonalHistogram, td.histogram);
 
-  final tileEdgeMean = _weightedEdgeMean(td.edges, cw);
+  final tileEdgeMean = td.edgeMean;
   final textureExcess = tileEdgeMean - rc.regionEdgeMean - rc.texThreshold;
   final texturePenalty = textureExcess > 0
       ? textureExcess *
@@ -1310,28 +1417,28 @@ double _visualScoreFast(
   var satPenalty = 0.0;
   if (rc.regionChroma > _chromaMinRegion) {
     final tileChroma = math.sqrt(td.avgA * td.avgA + td.avgB * td.avgB);
-    final deficit = math.max(0, 1 - tileChroma / rc.regionChroma);
+    final deficit = math.max(0.0, 1 - tileChroma / rc.regionChroma);
     satPenalty = deficit * deficit * _chromaPreserveWeight;
     final excess = math.max(
-      0,
+      0.0,
       tileChroma / rc.regionChroma - _chromaExcessScale,
     );
     satPenalty += excess * excess * _chromaExcessWeight;
   }
 
-  final tileContrastMean = _weightedEdgeMean(td.contrast, cw);
+  final tileContrastMean = td.contrastMean;
 
   var darkPenalty = 0.0;
   if (rc.regionL < _darkRegionL) {
     final darkness = 1 - rc.regionL / _darkRegionL;
-    final flatness = math.max(0, _darkContrastMin - tileContrastMean);
+    final flatness = math.max(0.0, _darkContrastMin - tileContrastMean);
     darkPenalty = flatness * darkness * _darkFlatWeight;
   }
 
   var salientPenalty = 0.0;
   if (rc.saliency > 0.3) {
     final salFactor = (rc.saliency - 0.3) / 0.7;
-    final flatness = math.max(0, _salientContrastMin - tileContrastMean);
+    final flatness = math.max(0.0, _salientContrastMin - tileContrastMean);
     salientPenalty = flatness * salFactor * _salientFlatWeight;
   }
 
@@ -1343,34 +1450,34 @@ double _visualScoreFast(
       : 0.0;
 
   final orientations = td.orientations;
+  final pd = _pd;
+  patternDistances(
+    region.subregionColors,
+    td.colors,
+    region.subregionEdges,
+    td.edges,
+    region.contrastMap,
+    td.contrast,
+    orientations != null ? region.subregionEdgeOrientations : null,
+    orientations,
+    cw,
+    pd,
+  );
   final orientPatternDist = orientations != null
-      ? edgeOrientationPatternDistance(
-              region.subregionEdgeOrientations,
-              orientations,
-              cw,
-            ) *
-            _edgeOrientPatternWeight *
-            structureBoost
+      ? pd[4] * _edgeOrientPatternWeight * structureBoost
       : 0.0;
 
   return colorD * colorD * 2.5 * sw.color * structureBoost +
       colorReject +
-      luminancePatternDistance(region.subregionColors, td.colors, cw) *
-          sw.luminancePattern *
-          structureBoost +
-      chromaPatternDistance(region.subregionColors, td.colors, cw) *
-          sw.chromaPattern +
+      pd[0] * sw.luminancePattern * structureBoost +
+      pd[1] * sw.chromaPattern +
       (settings.shapeMatch > 0
           ? shapeDistance(region.subregionColors, td.colors, cw) *
                 settings.shapeMatch *
                 structureBoost
           : 0.0) +
-      edgePatternDistance(region.subregionEdges, td.edges, cw) *
-          sw.edgePattern *
-          structureBoost +
-      contrastPatternDistance(region.contrastMap, td.contrast, cw) *
-          sw.contrastPattern *
-          structureBoost +
+      pd[2] * sw.edgePattern * structureBoost +
+      pd[3] * sw.contrastPattern * structureBoost +
       orientPatternDist +
       texturePenalty +
       satPenalty +
@@ -1395,6 +1502,14 @@ const double _saCoolingRate = 0.97;
 const double _saMinTemp = 0.001;
 const int _saIterationsPerTempFactor = 4;
 const int _saMaxTotalIterations = 400000;
+
+/// Cells × tiles up to which SA remembers its swap scores (~9 bytes each: 3M is
+/// ~27 MB). Above it — huge libraries — it recomputes them, as it always did.
+const int _saMemoMaxEntries = 3000000;
+
+/// Tests: override [_saMemoMaxEntries] (0 = never remember) to check that
+/// remembering changes nothing.
+int? debugSaMemoMaxEntries;
 
 /// Mutates [placements] in place. The iteration budget is the same on every device
 /// (web parity); [isMobile] no longer changes it.
@@ -1446,9 +1561,15 @@ void optimizePlacementSwaps(
     );
   }
 
-  final baseTileIds = List<String>.filled(n, '');
+  // Photos as small ints for the hot loop (string compares and map lookups were a
+  // large share of every iteration). Same decisions: equal ids ⇔ equal ints.
+  final baseIdNum = <String, int>{};
+  final baseTileIds = Int32List(n);
   for (var i = 0; i < n; i++) {
-    baseTileIds[i] = getBaseTileId(placements[i].tileId);
+    baseTileIds[i] = baseIdNum.putIfAbsent(
+      getBaseTileId(placements[i].tileId),
+      () => baseIdNum.length,
+    );
   }
 
   final td = ResolvedTile();
@@ -1480,6 +1601,75 @@ void optimizePlacementSwaps(
       tileChA[i] = td.avgA / 128;
       tileChB[i] = td.avgB / 128;
     }
+  }
+
+  // Swap scores, remembered. A score depends only on the cell and the tile, but SA
+  // asks for the same pairs over and over — 400K iterations, two scores each, out of
+  // a few hundred thousand distinct pairs — and recomputing them was the largest
+  // single cost of a plan on slow phones. A remembered score is the computed one, so
+  // the result is unchanged.
+  //
+  // The tile's colour the swap uses (td.avgL/A/B) depends on the tile and the cell's
+  // aspect only, so it's remembered per (tile, cell shape). An orientation-illegal
+  // pairing returns 100 WITHOUT updating td, so the caller then read the colour of
+  // the last legal pairing; last* carries exactly that.
+  final tIndex = HashMap<TileDescriptor, int>.identity();
+  for (final t in tileMap.values) {
+    tIndex.putIfAbsent(t, () => tIndex.length);
+  }
+  final nT = tIndex.length;
+  // The tile on each cell (null: not in the map) and its index in tIndex — swapped
+  // along with the cell's tile id.
+  final cellTile = List<TileDescriptor?>.generate(
+    n,
+    (i) => tileMap[placements[i].tileId],
+  );
+  final cellT = Int32List(n);
+  for (var i = 0; i < n; i++) {
+    final t = cellTile[i];
+    cellT[i] = t == null ? -1 : tIndex[t]!;
+  }
+  final arClass = Int32List(n);
+  final arIds = <double, int>{};
+  for (var i = 0; i < n; i++) {
+    arClass[i] = arIds.putIfAbsent(regionConsts[i].regionAR, () => arIds.length);
+  }
+  final nAR = arIds.length;
+  final useMemo = n * nT <= (debugSaMemoMaxEntries ?? _saMemoMaxEntries);
+  final memoScore = Float64List(useMemo ? n * nT : 0);
+  final memoHas = Uint8List(useMemo ? n * nT : 0);
+  final memoL = Float64List(useMemo ? nT * nAR : 0);
+  final memoA = Float64List(useMemo ? nT * nAR : 0);
+  final memoB = Float64List(useMemo ? nT * nAR : 0);
+  var lastL = td.avgL, lastA = td.avgA, lastB = td.avgB;
+
+  double scoreAt(int i, TileDescriptor tile, int t) {
+    if (!useMemo) {
+      final v = _visualScoreFast(placements[i], tile, settings, regionConsts[i], td);
+      lastL = td.avgL;
+      lastA = td.avgA;
+      lastB = td.avgB;
+      return v;
+    }
+    if (_orientationIllegal(tile, regionConsts[i])) return 100;
+    final k = i * nT + t;
+    final a = t * nAR + arClass[i];
+    if (memoHas[k] != 0) {
+      lastL = memoL[a];
+      lastA = memoA[a];
+      lastB = memoB[a];
+      return memoScore[k];
+    }
+    final v = _visualScoreFast(placements[i], tile, settings, regionConsts[i], td);
+    lastL = td.avgL;
+    lastA = td.avgA;
+    lastB = td.avgB;
+    memoScore[k] = v;
+    memoHas[k] = 1;
+    memoL[a] = lastL;
+    memoA[a] = lastA;
+    memoB[a] = lastB;
+    return v;
   }
 
   var medianW = 0.0;
@@ -1549,7 +1739,7 @@ void optimizePlacementSwaps(
         scaledPenalty * (0.7 + regionConsts[i].saliency * 0.6);
   }
 
-  double proximityPenalty(int idx, String baseId) {
+  double proximityPenalty(int idx, int baseId) {
     final idxs = nearbyIndices[idx];
     final proxs = nearbyProximities[idx];
     var maxProx = 0.0;
@@ -1647,9 +1837,10 @@ void optimizePlacementSwaps(
 
       if (baseTileIds[i] == baseTileIds[j]) continue;
 
-      final tileA = tileMap[placements[i].tileId];
-      final tileB = tileMap[placements[j].tileId];
+      final tileA = cellTile[i];
+      final tileB = cellTile[j];
       if (tileA == null || tileB == null) continue;
+      final tA = cellT[i], tB = cellT[j];
 
       final baseIdA = baseTileIds[i];
       final baseIdB = baseTileIds[j];
@@ -1663,26 +1854,14 @@ void optimizePlacementSwaps(
       final currentCost =
           (scores[i] + scores[j]) * importance + currentProxPenalty;
 
-      final swapScoreI = _visualScoreFast(
-        placements[i],
-        tileB,
-        settings,
-        regionConsts[i],
-        td,
-      );
-      final swapLumI = td.avgL / 100,
-          swapChAI = td.avgA / 128,
-          swapChBI = td.avgB / 128;
-      final swapScoreJ = _visualScoreFast(
-        placements[j],
-        tileA,
-        settings,
-        regionConsts[j],
-        td,
-      );
-      final swapLumJ = td.avgL / 100,
-          swapChAJ = td.avgA / 128,
-          swapChBJ = td.avgB / 128;
+      final swapScoreI = scoreAt(i, tileB, tB);
+      final swapLumI = lastL / 100,
+          swapChAI = lastA / 128,
+          swapChBI = lastB / 128;
+      final swapScoreJ = scoreAt(j, tileA, tA);
+      final swapLumJ = lastL / 100,
+          swapChAJ = lastA / 128,
+          swapChBJ = lastB / 128;
 
       final swapProxPenalty =
           proximityPenalty(i, baseIdB) + proximityPenalty(j, baseIdA);
@@ -1719,6 +1898,10 @@ void optimizePlacementSwaps(
         placements[i].tileName = placements[j].tileName;
         placements[j].tileId = tmpId;
         placements[j].tileName = tmpName;
+        cellTile[i] = tileB;
+        cellTile[j] = tileA;
+        cellT[i] = tB;
+        cellT[j] = tA;
         baseTileIds[i] = baseIdB;
         baseTileIds[j] = baseIdA;
         scores[i] = swapScoreI;
@@ -1749,6 +1932,9 @@ void balanceGlobalPalette(
   MosaicSettings settings, {
   List<Set<int>>? adjacency,
   Float64List? saliency,
+
+  /// Told each time a cell's `score` is written (cell, value).
+  void Function(int index, double score)? onScoreSet,
 }) {
   final n = placements.length;
   if (n < 10) return;
@@ -1916,6 +2102,7 @@ void balanceGlobalPalette(
     placement.tileId = candidate.id;
     placement.tileName = candidate.name;
     placement.score = candidateScore;
+    onScoreSet?.call(i, candidateScore);
     scores[i] = candidateScore;
   }
 }

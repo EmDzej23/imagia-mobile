@@ -16,6 +16,8 @@ import '../mosaic/mosaic_engine.dart';
 import '../mosaic/shared.dart';
 import '../mosaic/types.dart';
 import '../services/image_service.dart';
+import '../mosaic/tile_recolor.dart' show setTileColorGrid, tileColorGridOf;
+import '../services/tile_analysis_cache.dart';
 import 'auth_controller.dart';
 import 'library_providers.dart';
 import '../core/friendly_error.dart';
@@ -28,10 +30,15 @@ const int _maxTiles = 2000;
 const int _uploadConcurrency = 16;
 
 /// Restore fetches tiles via the server batch endpoint: [_restoreBatchSize]
-/// tiles per request (the server's max), [_restoreBatchConcurrency] requests in
-/// flight. One batched request replaces dozens of per-tile round-trips.
-const int _restoreBatchSize = 60;
+/// tiles per request, [_restoreBatchConcurrency] requests in flight. One batched
+/// request replaces dozens of per-tile round-trips. Not the server's max of 60: a
+/// tile can't be analysed until its whole batch has arrived, so with 60 the phone
+/// sat idle for the first ones and then had only two or three lanes of analysis.
+const int _restoreBatchSize = 20;
 const int _restoreBatchConcurrency = 6;
+
+/// The size restored tiles are fetched at (part of the analysis cache key).
+const int _restoreTileSize = 256;
 
 class BaseImage {
   BaseImage({
@@ -79,6 +86,7 @@ class StudioState {
     required this.settings,
     this.plan,
     this.isPlanning = false,
+    this.planIsDraft = false,
     this.isUploadingBase = false,
     this.isUploadingTiles = false,
     this.isRestoring = false,
@@ -98,6 +106,10 @@ class StudioState {
   final MosaicSettings settings;
   final SlimMosaicPlan? plan;
   final bool isPlanning;
+
+  /// [plan] is a slow device's early draft: the finished plan is still being built.
+  /// Shown, but not exported — the export must be the finished plan.
+  final bool planIsDraft;
   final bool isUploadingBase;
   final bool isUploadingTiles;
   final bool isRestoring;
@@ -135,6 +147,7 @@ class StudioState {
     MosaicSettings? settings,
     SlimMosaicPlan? plan,
     bool? isPlanning,
+    bool? planIsDraft,
     bool? isUploadingBase,
     bool? isUploadingTiles,
     bool? isRestoring,
@@ -155,6 +168,10 @@ class StudioState {
       settings: settings ?? this.settings,
       plan: clearPlan ? null : (plan ?? this.plan),
       isPlanning: isPlanning ?? this.isPlanning,
+      // A new (or no) plan is a finished one unless said otherwise.
+      planIsDraft:
+          planIsDraft ??
+          (plan != null || clearPlan ? false : this.planIsDraft),
       isUploadingBase: isUploadingBase ?? this.isUploadingBase,
       isUploadingTiles: isUploadingTiles ?? this.isUploadingTiles,
       isRestoring: isRestoring ?? this.isRestoring,
@@ -656,14 +673,19 @@ class StudioController extends Notifier<StudioState> {
     if (state.settings.mosaicMode == 'collage') return;
     final token = ++_planToken;
     state = state.copyWith(isPlanning: true, error: null);
+    final clock = Stopwatch()..start();
     try {
       final plan = await buildMosaicPlan(
         baseBytes: state.base!.bytes,
         tiles: state.tiles.map((t) => t.descriptor).toList(),
         rawSettings: state.settings,
         isMobile: true,
+        // No early draft: showing the first arrangement and then the finished one
+        // read as the preview reshuffling itself (user, 2026-11-10). One preview, once.
       );
       if (token != _planToken) return; // superseded by a newer build
+      // With the worker's "[plan]" line: the rest is decode + copying (`adb logcat`).
+      print('[plan] in studio after ${clock.elapsedMilliseconds} ms');
       // The engine knows nothing about crops (they do not affect matching), so the
       // fresh plan is handed the current ones before it reaches the painters.
       plan.tileCrops = state.tileCrops;
@@ -671,7 +693,7 @@ class StudioController extends Notifier<StudioState> {
       _scheduleAutoSave();
     } catch (e) {
       if (token != _planToken) return;
-      state = state.copyWith(isPlanning: false, error: friendlyError(e, fallback: "Couldn't build the preview. Please try again."));
+      state = state.copyWith(isPlanning: false, planIsDraft: false, error: friendlyError(e, fallback: "Couldn't build the preview. Please try again."));
     }
   }
 
@@ -833,52 +855,96 @@ class StudioController extends Notifier<StudioState> {
           uploadTotal: p.tiles.length,
           uploadDone: 0);
 
-      // Fetch tiles via the server batch endpoint (one request per ~60 tiles)
-      // and analyze each locally. Results stay index-aligned so the restored
-      // tile order matches the saved project (keeps planning deterministic).
-      // Aborts promptly if the restore is cancelled (back nav bumps the token).
+      // Tiles analysed on an earlier open come from the on-device cache: no request,
+      // no analysis, only the thumbnail decode. The rest are fetched through the
+      // server batch endpoint and analysed locally. Results stay index-aligned so
+      // the restored tile order matches the saved project (keeps planning
+      // deterministic). Aborts promptly if the restore is cancelled (back nav bumps
+      // the token).
       final results = List<TileAsset?>.filled(p.tiles.length, null);
+      final ids = [
+        // A saved id wins (web-created projects have one); otherwise derive the
+        // same stable id the web would.
+        for (final t in p.tiles) t.tileId ?? stableTileIdFromUrl(t.blobUrl),
+      ];
       var done = 0;
+      void progress() {
+        done++;
+        state = state.copyWith(uploadDone: done);
+      }
 
-      // Group tile indices into server-sized batches.
+      final cached = await Future.wait([
+        for (var i = 0; i < p.tiles.length; i++)
+          TileAnalysisCache.read(
+              p.tiles[i].blobUrl, _restoreTileSize, ids[i], p.tiles[i].fileName),
+      ]);
+      if (token != _restoreToken) return;
+      final hits = [for (var i = 0; i < cached.length; i++) if (cached[i] != null) i];
+      final misses = [for (var i = 0; i < cached.length; i++) if (cached[i] == null) i];
+
+      Future<void> restoreCached(int k) async {
+        final i = hits[k];
+        final c = cached[i]!;
+        try {
+          final thumb = await decodeTileThumbnail(c.thumbBytes);
+          if (token != _restoreToken) {
+            thumb.dispose();
+            return;
+          }
+          if (c.grid != null) setTileColorGrid(thumb, c.grid!);
+          final t = p.tiles[i];
+          results[i] = TileAsset(
+            id: ids[i],
+            descriptor: c.descriptor,
+            thumbnail: thumb,
+            blobUrl: t.blobUrl,
+            filename: t.fileName,
+          );
+        } catch (_) {}
+        progress();
+      }
+
+      // Group the misses into server-sized batches.
       final batches = <List<int>>[];
-      for (var s = 0; s < p.tiles.length; s += _restoreBatchSize) {
-        final e = (s + _restoreBatchSize).clamp(0, p.tiles.length);
-        batches.add([for (var i = s; i < e; i++) i]);
+      for (var s = 0; s < misses.length; s += _restoreBatchSize) {
+        final e = (s + _restoreBatchSize).clamp(0, misses.length);
+        batches.add(misses.sublist(s, e));
       }
 
       Future<void> restoreBatch(int b) async {
         final idxs = batches[b];
         final urls = [for (final i in idxs) p.tiles[i].blobUrl];
-        final bytesByUrl = await _tilesApi.tileThumbBatch(urls, maxSize: 256);
+        final bytesByUrl =
+            await _tilesApi.tileThumbBatch(urls, maxSize: _restoreTileSize);
         if (token != _restoreToken) return;
         for (final i in idxs) {
           final ref0 = p.tiles[i];
           final bytes = bytesByUrl[ref0.blobUrl];
           if (bytes != null) {
             try {
-              // A saved id wins (web-created projects have one); otherwise derive
-              // the same stable id the web would.
-              final id = ref0.tileId ?? stableTileIdFromUrl(ref0.blobUrl);
               final analyzed =
-                  await analyzeTileWithThumbnail(id, ref0.fileName, bytes);
+                  await analyzeTileWithThumbnail(ids[i], ref0.fileName, bytes);
               if (token != _restoreToken) return;
               results[i] = TileAsset(
-                id: id,
+                id: ids[i],
                 descriptor: analyzed.descriptor,
                 thumbnail: analyzed.thumbnail,
                 blobUrl: ref0.blobUrl,
                 filename: ref0.fileName,
               );
+              unawaited(TileAnalysisCache.write(ref0.blobUrl, _restoreTileSize,
+                  analyzed.descriptor, tileColorGridOf(analyzed.thumbnail), bytes));
             } catch (_) {}
           }
-          done++;
-          state = state.copyWith(uploadDone: done);
+          progress();
         }
       }
 
-      await _runPool(batches.length, _restoreBatchConcurrency,
-          () => token != _restoreToken, restoreBatch);
+      await Future.wait([
+        _runPool(hits.length, 8, () => token != _restoreToken, restoreCached),
+        _runPool(batches.length, _restoreBatchConcurrency,
+            () => token != _restoreToken, restoreBatch),
+      ]);
 
       if (token != _restoreToken) return; // cancelled — discard partial work
       state = state.copyWith(

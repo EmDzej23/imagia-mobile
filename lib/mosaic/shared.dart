@@ -153,7 +153,7 @@ MosaicSettings defaultSettings() => MosaicSettings(
   colorBoost: 1.0,
   autoContrast: 0,
   maxTileUses: 0, // unlimited
-  outputSaturation: 1, // no grade by default — same as web
+  outputSaturation: 1.1, // a light grade by default — same as web
   signalWeights: defaultSignalWeights(),
 );
 
@@ -306,6 +306,9 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     repeatSpacing: input.repeatSpacing.clamp(0, 3),
     optimalPlacement: input.optimalPlacement,
     fitLightToLibrary: input.fitLightToLibrary,
+    look: const ['bw', 'sepia', 'duotone', 'cinematic', 'pop'].contains(input.look)
+        ? input.look
+        : 'none',
     ancientStoneSize: clampD(input.ancientStoneSize, 7, 34),
     ancientGrout: clampD(input.ancientGrout, 0, 4),
     ancientIrregularity: clampD(input.ancientIrregularity, 0, 1),
@@ -325,6 +328,12 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     wordartGround: clampD(input.wordartGround, 0, 1),
     wordartVivid: clampD(input.wordartVivid, 0, 1),
     wordartEmpty: clampD(input.wordartEmpty, 0, 1),
+    wordartCoverage: clampD(input.wordartCoverage, 0, 1),
+    wordartSaturate: clampD(input.wordartSaturate, 1.25, 1.75),
+    wordartBrightness: clampD(input.wordartBrightness, 1, 1.75),
+    wordartTrueColor: input.wordartTrueColor,
+    wordartCaption: input.wordartCaption,
+    wordartTitleColor: input.wordartTitleColor,
     // Collage: same bounds as the web (COLLAGE_BOUNDS in lib/mosaic/shared.ts).
     collageFormat:
         const ['portrait', 'square', 'landscape'].contains(input.collageFormat)
@@ -467,14 +476,32 @@ TileDescriptor createTileDescriptor(
   );
 }
 
+/// `x.abs()` without the call: the scorer's distance loops run millions of times a
+/// plan, and on Android the method call was a measurable share of them. (Same value —
+/// a -0.0 only ever lands in a sum, where it changes nothing.)
+///
+/// `max(x, -x)`, not `x < 0 ? -x : x`: the sign of a difference is a coin toss, so the
+/// branch was mispredicted half the time — 4× slower on the orientation distance
+/// (100 of them per score). max compiles to a select, no branch.
+@pragma('vm:prefer-inline')
+double _abs(double x) => math.max(x, -x);
+
+/// [_abs] for the scorer outside this file.
+@pragma('vm:prefer-inline')
+double absD(double x) => math.max(x, -x);
+
 /// 5x5 center-weighted Gaussian subregion weights.
-const List<double> subregionWeights = [
+///
+/// The scorer's 25-value arrays are all [Float64List]s: one concrete list type lets the
+/// compiler inline their reads in the hot loops (a mix of growable, fixed and const
+/// lists made every read a call — slow on low-end Android).
+final List<double> subregionWeights = Float64List.fromList(const [
   0.5, 0.8, 1.0, 0.8, 0.5, //
   0.8, 1.2, 1.5, 1.2, 0.8,
   1.0, 1.5, 2.0, 1.5, 1.0,
   0.8, 1.2, 1.5, 1.2, 0.8,
   0.5, 0.8, 1.0, 0.8, 0.5,
-];
+]);
 final double subregionWeightSum = subregionWeights.fold(0.0, (s, w) => s + w);
 
 /// Which of a tile's 25 subregions will actually be SEEN in a cell of [cellAR].
@@ -564,7 +591,7 @@ List<double>? computeCropWeights(
     }
     weights = out;
   } else {
-    weights = List<double>.from(subregionWeights);
+    weights = Float64List.fromList(subregionWeights);
   }
 
   // Overlap of each 1/5 x 1/5 subregion with the visible rectangle, as a fraction of its
@@ -602,7 +629,7 @@ double luminancePatternDistance(
   var total = 0.0;
   for (var i = 0; i < 25; i++) {
     final dL = (a[i].L - b[i].L) * 2.0;
-    total += (dL.abs() / (maxLabDistance * 0.5)) * w[i];
+    total += (_abs(dL) / (maxLabDistance * 0.5)) * w[i];
     wSum += w[i];
   }
   return total / (wSum == 0 ? 1 : wSum);
@@ -659,6 +686,47 @@ double chromaPatternDistance(
   return total / (wSum == 0 ? 1 : wSum);
 }
 
+/// The luminance, chroma, edge, contrast and edge-orientation distances of one pair in
+/// a single pass — written to [out] in that order (orientation only when [ao]/[bo] are
+/// given, else 0). Each sum is the one its own function computes, term by term in the
+/// same order, so the values are identical; one pass reads the weights once instead of
+/// five times.
+void patternDistances(
+  SubregionColors ac,
+  SubregionColors bc,
+  SubregionEdges ae,
+  SubregionEdges be,
+  ContrastMap ak,
+  ContrastMap bk,
+  SubregionEdgeOrientations? ao,
+  SubregionEdgeOrientations? bo,
+  List<double>? cropWeights,
+  Float64List out,
+) {
+  final w = cropWeights ?? subregionWeights;
+  var wSum = 0.0, lum = 0.0, chroma = 0.0, edge = 0.0, contrast = 0.0;
+  for (var i = 0; i < 25; i++) {
+    final wi = w[i];
+    final ca = ac[i], cb = bc[i];
+    final dL = (ca.L - cb.L) * 2.0;
+    lum += (_abs(dL) / (maxLabDistance * 0.5)) * wi;
+    final da = ca.a - cb.a;
+    final db = ca.b - cb.b;
+    chroma += (math.sqrt(da * da + db * db) / maxLabDistance) * wi;
+    edge += _abs(ae[i] - be[i]) * wi;
+    contrast += _abs(ak[i] - bk[i]) * wi;
+    wSum += wi;
+  }
+  final div = wSum == 0 ? 1 : wSum;
+  out[0] = lum / div;
+  out[1] = chroma / div;
+  out[2] = edge / div;
+  out[3] = contrast / div;
+  out[4] = ao != null && bo != null
+      ? edgeOrientationPatternDistance(ao, bo, cropWeights)
+      : 0.0;
+}
+
 double edgePatternDistance(
   SubregionEdges a,
   SubregionEdges b, [
@@ -668,7 +736,7 @@ double edgePatternDistance(
   var wSum = 0.0;
   var total = 0.0;
   for (var i = 0; i < 25; i++) {
-    total += (a[i] - b[i]).abs() * w[i];
+    total += _abs(a[i] - b[i]) * w[i];
     wSum += w[i];
   }
   return total / (wSum == 0 ? 1 : wSum);
@@ -683,7 +751,7 @@ double contrastPatternDistance(
   var wSum = 0.0;
   var total = 0.0;
   for (var i = 0; i < 25; i++) {
-    total += (a[i] - b[i]).abs() * w[i];
+    total += _abs(a[i] - b[i]) * w[i];
     wSum += w[i];
   }
   return total / (wSum == 0 ? 1 : wSum);
@@ -700,10 +768,10 @@ double edgeOrientationPatternDistance(
   for (var i = 0; i < 25; i++) {
     final off = i * 4;
     final cellDist =
-        ((a[off] - b[off]).abs() +
-            (a[off + 1] - b[off + 1]).abs() +
-            (a[off + 2] - b[off + 2]).abs() +
-            (a[off + 3] - b[off + 3]).abs()) *
+        (_abs(a[off] - b[off]) +
+            _abs(a[off + 1] - b[off + 1]) +
+            _abs(a[off + 2] - b[off + 2]) +
+            _abs(a[off + 3] - b[off + 3])) *
         0.5;
     total += cellDist * w[i];
     wSum += w[i];
@@ -720,7 +788,7 @@ double luminanceBalanceDiff(LuminanceBalance a, LuminanceBalance b) {
 double histogramDistance(LuminanceHistogram a, LuminanceHistogram b) {
   var sum = 0.0;
   for (var i = 0; i < 8; i++) {
-    sum += (a[i] - b[i]).abs();
+    sum += _abs(a[i] - b[i]);
   }
   return sum / 2;
 }
@@ -794,7 +862,7 @@ TileCrop? cropForTile(
   return tileCrops[cropSlot(tileId, cellAR, shape)];
 }
 
-double difference(double left, double right) => (left - right).abs();
+double difference(double left, double right) => _abs(left - right);
 
 /// Helper to allocate a zeroed Float32List orientation buffer (length 100).
 Float32List zeroOrientations() => Float32List(100);

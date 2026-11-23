@@ -37,9 +37,13 @@ class ThumbCache {
 
   /// FNV-1a over the URL. Not cryptographic — it only has to be stable and
   /// filename-safe, and the URLs it keys contain tokens and slashes that are not.
+  /// Bump to drop every cached thumbnail. 2: the server now applies EXIF
+  /// orientation when it resizes, so older thumbnails of phone photos can be sideways.
+  static const int _version = 2;
+
   static String _key(String url) {
     var hash = 0xcbf29ce484222325;
-    for (final c in url.codeUnits) {
+    for (final c in '$_version|$url'.codeUnits) {
       hash ^= c;
       hash = (hash * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF;
     }

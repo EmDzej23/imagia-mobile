@@ -192,8 +192,11 @@ class RenderController extends Notifier<RenderUiState> {
     final Map<String, dynamic> params;
     Map<String, dynamic>? bakedLayout;
     if (isWord) {
-      final phrases =
-          parseTextPhrases(studio.textInput, uppercase: studio.textUppercase);
+      final phrases = usablePhrases(
+          parseTextPhrases(studio.textInput, uppercase: studio.textUppercase));
+      final trueColor = s.wordartTrueColor;
+      final saturate = trueColor ? 1.0 : s.wordartSaturate;
+      final brightness = trueColor ? 1.0 : s.wordartBrightness;
       final phraseList = phrases.isEmpty ? const ['WORD'] : phrases;
       final caption = s.wordartCaption.trim();
       final titleColor = s.wordartTitleColor.trim();
@@ -210,6 +213,9 @@ class RenderController extends Notifier<RenderUiState> {
         'seedNonce': studio.wordartSeedNonce,
         'caption': caption,
         'captionColor': titleColor.isEmpty ? null : titleColor,
+        'saturate': saturate,
+        'brightness': brightness,
+        'trueColor': trueColor,
       };
       // Bake the layout in-app (identical to the preview) so the 10K export reproduces THIS
       // exact arrangement instead of re-packing on the server (which diverges by engine).
@@ -222,7 +228,7 @@ class RenderController extends Notifier<RenderUiState> {
           final scale = previewLong / math.max(sw, sh);
           final lw = (sw * scale).round(), lh = (sh * scale).round();
           if (lw >= 2 && lh >= 2) {
-            final geo = buildWordArtGeometry(
+            final geo = await buildWordArtGeometryAsync(
               data.buffer.asUint8List(),
               sw,
               sh,
@@ -241,6 +247,9 @@ class RenderController extends Notifier<RenderUiState> {
                 seedNonce: studio.wordartSeedNonce,
                 caption: caption,
                 captionColor: titleColor.isEmpty ? null : titleColor,
+                saturate: saturate,
+                brightness: brightness,
+                trueColor: trueColor,
               ),
             );
             bakedLayout = wordArtLayoutJson(geo, lw, lh);

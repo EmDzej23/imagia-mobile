@@ -8,8 +8,10 @@ import 'package:flutter/material.dart';
 
 import 'hexagon.dart' show hexFromRect;
 import 'hires_tiles.dart';
+import 'looks.dart';
 import 'local_recolor.dart';
-import 'preview_painter.dart' show drawPlanWindow;
+import 'preview_painter.dart' show centerCropSrc, drawPlanWindow;
+import 'shared.dart' show CropShape, cropForTile;
 import 'types.dart';
 
 /// Sharp, recoloured copies of individual cells for the zoomed preview.
@@ -24,6 +26,11 @@ import 'types.dart';
 ///
 /// The recolour is per cell (the photo under it, the tile's own pixels), so a cell's
 /// copy matches the whole-mosaic picture's colours exactly.
+///
+/// Every copy remembers how much real detail went into it (the source pixels across the
+/// cell), not just its size. A copy made from the thumbnail while the sharp photo was
+/// still downloading is therefore replaced as soon as the photo arrives — even when the
+/// size it needs on screen has not changed.
 class CellRecolorCache extends ChangeNotifier {
   CellRecolorCache({this.pixelBudget = 40 * 1000 * 1000});
 
@@ -52,7 +59,11 @@ class CellRecolorCache extends ChangeNotifier {
     required double outputSaturation,
   }) {
     _thumbs = tileImages;
-    _hiRes = hiRes;
+    if (!identical(hiRes, _hiRes)) {
+      _hiRes?.version.removeListener(_onSharpArrived);
+      hiRes?.version.addListener(_onSharpArrived);
+      _hiRes = hiRes;
+    }
     final key = Object.hash(
       plan,
       tileRecolor,
@@ -68,6 +79,19 @@ class CellRecolorCache extends ChangeNotifier {
     _entries.clear();
     _pending.clear();
     _queue.clear();
+  }
+
+  bool _nudged = false;
+
+  /// A sharp photo landed: repaint, so the cells on screen ask again and the ones made
+  /// from a thumbnail get remade from it. One repaint per burst of arrivals.
+  void _onSharpArrived() {
+    if (_nudged || _disposed) return;
+    _nudged = true;
+    scheduleMicrotask(() {
+      _nudged = false;
+      if (!_disposed) notifyListeners();
+    });
   }
 
   /// The cell's bounding box in base px (honeycomb / cube cells reach past their
@@ -102,6 +126,10 @@ class CellRecolorCache extends ChangeNotifier {
     return (e.atlas.image, e.rect);
   }
 
+  /// The detail (source px across the cell) cell [index]'s copy was made from.
+  @visibleForTesting
+  double? qualityOf(int index) => _entries[index]?.quality;
+
   /// Ask for cell [index] at [needPx] (its long side on screen, device px). Cheap to
   /// call every frame: already-good, pending and out-of-range cells are skipped.
   void want(int index, double needPx) {
@@ -114,9 +142,15 @@ class CellRecolorCache extends ChangeNotifier {
     final p = plan.placements[index];
     final src = _sourceFor(p, needPx);
     if (src == null) return;
-    final tier = _tierFor(needPx, math.max(src.width, src.height).toDouble());
-    final have = _entries[index]?.tier ?? 0;
-    if (tier <= have) return;
+    final detail = _detail(plan, p, src);
+    final tier = _tierFor(needPx, detail);
+    final have = _entries[index];
+    // Good enough already: as big as needed, and made from all the detail there is now.
+    if (have != null &&
+        have.tier >= tier &&
+        have.quality >= math.min(tier.toDouble(), detail) * 0.97) {
+      return;
+    }
     final asked = _pending[index] ?? 0;
     if (tier <= asked) return;
     _pending[index] = tier;
@@ -125,26 +159,62 @@ class CellRecolorCache extends ChangeNotifier {
     scheduleMicrotask(_pump);
   }
 
+  /// The sharpest image of the cell's photo held right now (asking for a sharper one
+  /// when that is not enough). Never trades a sharp copy for the thumbnail.
   ui.Image? _sourceFor(SlimPlacement p, double needPx) {
     final thumb = _thumbs[p.tileId];
     final hr = _hiRes;
     if (hr == null || thumb == null) return thumb;
-    if (needPx > math.max(thumb.width, thumb.height)) {
-      final sharp = hr.get(p.tileId, needPx);
-      if (sharp == null) hr.want(p.tileId, needPx);
-      return sharp ?? thumb;
+    final sharp = hr.best(p.tileId);
+    final img = sharp != null && _long(sharp) > _long(thumb) ? sharp : thumb;
+    // The crop shows only part of the photo, so judge by the detail across the cell.
+    final plan = _plan;
+    final detail = plan == null ? _long(img).toDouble() : _detail(plan, p, img);
+    if (detail < needPx && !hr.exhausted(p.tileId)) {
+      // Ask in proportion: the cell needs needPx across a crop that is detail/long of
+      // the photo.
+      hr.want(p.tileId, needPx * _long(img) / math.max(1.0, detail));
     }
-    return thumb;
+    return img;
   }
 
+  static int _long(ui.Image img) => math.max(img.width, img.height);
+
+  /// Source pixels across the cell's long side when [img] is drawn into it — what the
+  /// copy can really show (a landscape photo in a square cell gives only its height).
+  static double _detail(SlimMosaicPlan plan, SlimPlacement p, ui.Image img) {
+    final box = cellBox(plan, p);
+    if (box.width <= 0 || box.height <= 0) return 0;
+    final Rect src;
+    if (p.quad != null) {
+      src = centerCropSrc(img, 1, crop: cropForTile(plan.tileCrops, p.tileId, 1));
+      return math.min(src.width, src.height);
+    }
+    src = centerCropSrc(
+      img,
+      box.width / box.height,
+      topCrop: plan.cropPortraitTop,
+      crop: cropForTile(
+        plan.tileCrops,
+        p.tileId,
+        p.width / p.height,
+        plan.hexagon ? CropShape.hex : null,
+      ),
+    );
+    return math.max(src.width, src.height);
+  }
+
+  /// Largest copy kept per cell (long side, px): the stored photos are ≤ 1024.
+  static const int _maxTier = 1024;
+
   /// Power-of-two long side for a need, no larger than the source can show.
-  static int _tierFor(double need, double srcLong) {
+  static int _tierFor(double need, double srcDetail) {
     var t = 64;
-    while (t < need && t < 512) {
+    while (t < need && t < _maxTier) {
       t *= 2;
     }
     var cap = 64;
-    while (cap < srcLong && cap < 512) {
+    while (cap < srcDetail && cap < _maxTier) {
       cap *= 2;
     }
     return math.min(t, cap);
@@ -160,19 +230,26 @@ class CellRecolorCache extends ChangeNotifier {
         while (_queue.isNotEmpty && batch.length < 24) {
           batch.add(_queue.removeLast());
         }
-        await _bake(batch);
+        final leftOver = await _bake(batch);
+        // Cells that did not fit this atlas go first next time.
+        for (final i in leftOver.reversed) {
+          if (!_queue.contains(i) && _pending.containsKey(i)) _queue.add(i);
+        }
       }
     } finally {
       _running = false;
     }
   }
 
-  Future<void> _bake(List<int> indices) async {
+  /// Bakes as many of [indices] as fit one atlas; returns the ones that did not fit.
+  Future<List<int>> _bake(List<int> indices) async {
     final plan = _plan, key = _key;
-    if (plan == null) return;
-    // Shelf-pack the cells into one atlas.
-    const atlasW = 2048, gap = 2;
+    if (plan == null) return const [];
+    // Shelf-pack the cells into one atlas. Its height is capped too: a GPU texture past
+    // ~4096 px fails to allocate on many Android phones, and nothing would be baked.
+    const atlasW = 2048, atlasMaxH = 2048, gap = 2;
     var x = 0, y = 0, rowH = 0;
+    final leftOver = <int>[];
     final slots =
         <
           (int, int, Rect, Rect)
@@ -184,12 +261,16 @@ class CellRecolorCache extends ChangeNotifier {
       final box = cellBox(plan, p);
       if (box.width <= 0 || box.height <= 0) continue;
       final a = box.width / box.height;
-      final w = (a >= 1 ? tier : tier * a).ceil(),
-          h = (a >= 1 ? tier / a : tier).ceil();
+      final w = math.min(atlasW, (a >= 1 ? tier : tier * a).ceil()),
+          h = math.min(atlasMaxH, (a >= 1 ? tier / a : tier).ceil());
       if (x + w > atlasW) {
         x = 0;
         y += rowH + gap;
         rowH = 0;
+      }
+      if (y + h > atlasMaxH) {
+        leftOver.add(i);
+        continue;
       }
       slots.add((
         i,
@@ -200,7 +281,7 @@ class CellRecolorCache extends ChangeNotifier {
       x += w + gap;
       rowH = math.max(rowH, h);
     }
-    if (slots.isEmpty) return;
+    if (slots.isEmpty) return leftOver;
     final atlasH = y + rowH;
 
     // Draw each cell alone into its slot (a one-cell plan, so no neighbour can paint
@@ -208,6 +289,8 @@ class CellRecolorCache extends ChangeNotifier {
     final rec = ui.PictureRecorder();
     final canvas = Canvas(rec);
     final cells = <RecolorCell>[];
+    // The detail each copy is really made from (its source may still be a thumbnail).
+    final quality = <int, double>{};
     for (final (i, tier, slot, box) in slots) {
       final p = plan.placements[i];
       final single = SlimMosaicPlan(
@@ -233,7 +316,13 @@ class CellRecolorCache extends ChangeNotifier {
         k,
         box.topLeft,
         slot.size,
-        imageFor: (q, needPx) => _sourceFor(q, needPx) ?? _thumbs[q.tileId],
+        imageFor: (q, needPx) {
+          final img = _sourceFor(q, needPx) ?? _thumbs[q.tileId];
+          quality[i] = img == null
+              ? 0
+              : math.min(tier.toDouble(), _detail(plan, q, img));
+          return img;
+        },
       );
       canvas.restore();
       for (final c in drawn) {
@@ -246,7 +335,7 @@ class CellRecolorCache extends ChangeNotifier {
     pic.dispose();
     final bd = await raw.toByteData(format: ui.ImageByteFormat.rawRgba);
     raw.dispose();
-    if (bd == null || _disposed || key != _key) return;
+    if (bd == null || _disposed || key != _key) return leftOver;
     final data = bd.buffer.asUint8List();
     final strength = _strength, sat = _saturation;
     final out = await _recolorOffThread(
@@ -256,8 +345,9 @@ class CellRecolorCache extends ChangeNotifier {
       cells,
       strength,
       sat,
+      plan.look,
     );
-    if (_disposed || key != _key) return;
+    if (_disposed || key != _key) return leftOver;
     final buffer = await ui.ImmutableBuffer.fromUint8List(out);
     final desc = ui.ImageDescriptor.raw(
       buffer,
@@ -272,21 +362,24 @@ class CellRecolorCache extends ChangeNotifier {
     buffer.dispose();
     if (_disposed || key != _key) {
       frame.image.dispose();
-      return;
+      return leftOver;
     }
     final atlas = _Atlas(frame.image);
     for (final (i, tier, slot, _) in slots) {
       if ((_pending[i] ?? 0) == tier) _pending.remove(i);
+      final q = quality[i] ?? 0;
       final old = _entries[i];
-      if (old != null && old.tier >= tier) continue; // never trade down
+      // Never trade down: a copy replaces one only if it shows more.
+      if (old != null && old.tier >= tier && old.quality >= q) continue;
       old?.atlas.release();
       atlas.retain();
       // Inset half a pixel so filtered sampling never reads the next slot.
-      _entries[i] = _Entry(atlas, slot.deflate(0.5), tier, ++_clock);
+      _entries[i] = _Entry(atlas, slot.deflate(0.5), tier, q, ++_clock);
     }
     if (atlas.refs == 0) atlas.image.dispose();
     _evict();
     notifyListeners();
+    return leftOver;
   }
 
   void _evict() {
@@ -310,6 +403,7 @@ class CellRecolorCache extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _hiRes?.version.removeListener(_onSharpArrived);
     for (final e in _entries.values) {
       e.atlas.release();
     }
@@ -328,9 +422,11 @@ Future<Uint8List> _recolorOffThread(
   List<RecolorCell> cells,
   double strength,
   double sat,
+  String look,
 ) {
   return Isolate.run(() {
     applyLocalRecolor(data, w, h, cells, strength, outputSaturation: sat);
+    applyLookToPixels(data, 4, look); // after the grade, like the web
     return data;
   });
 }
@@ -346,10 +442,13 @@ class _Atlas {
 }
 
 class _Entry {
-  _Entry(this.atlas, this.rect, this.tier, this.used);
+  _Entry(this.atlas, this.rect, this.tier, this.quality, this.used);
   final _Atlas atlas;
   final Rect rect;
   final int tier;
+
+  /// Source pixels across the cell this copy was made from (≤ [tier]).
+  final double quality;
   int used;
 }
 
@@ -393,7 +492,8 @@ class RecoloredZoomPainter extends CustomPainter {
     // 2. Sharp copies of the cells that need more detail than that.
     final hrPerBase = hr.width / plan.baseWidth;
     final screenPerBase = s * devicePixelRatio;
-    if (screenPerBase <= hrPerBase * 1.15) return;
+    // From the first magnified pixel: the whole-mosaic picture is never stretched.
+    if (screenPerBase <= hrPerBase) return;
     for (var i = 0; i < plan.placements.length; i++) {
       final p = plan.placements[i];
       // Quick cull on the sample rect, generous for shaped cells.

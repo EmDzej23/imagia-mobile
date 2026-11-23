@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'analyze.dart';
 import 'hexagon.dart';
+import 'layout_batch.dart';
 import 'matching.dart';
 import 'no_touch.dart';
 import 'optimal_placement.dart';
@@ -416,6 +417,21 @@ const int _maxPlacements = 6500;
 const int _optimalAssignmentMaxRegions = 4000;
 const int _lowCountSeedAttempts = 3;
 
+/// Stage timing: when set, called after each stage of a layout with its name (the
+/// worker logs them — see mosaic_engine.dart).
+void Function(String stage)? gridLayoutTrace;
+
+/// Does [mode] anneal best-of-N seeds (Vogel start) — when it is small enough? The
+/// uniform grids skip Vogel (see `modeSkipsVogel` in [buildGridLayout]).
+bool modeAnnealsSeeds(String mode) =>
+    mode != 'square' &&
+    mode != 'landscape' &&
+    mode != 'portrait' &&
+    mode != 'hexagon';
+
+/// Helper isolates [buildGridLayoutParallel] can use: one per seed after the first.
+const int annealSeedHelpers = _lowCountSeedAttempts - 1;
+
 /// Average cells one photo occupies in `original` mode.
 ///
 /// MEASURED on the web bench, not assumed: with the fill-first layout the mix is
@@ -465,6 +481,11 @@ class _GridDims {
 /// Builds the full mosaic plan placement list. [isMobile] selects the SA
 /// iteration cap (false = full desktop budget, matching the web's Node-side
 /// reference; the engine passes true on phones).
+/// Builds the mosaic plan: cells, first match, then the improvement passes.
+///
+/// When the layout anneals best-of-[_lowCountSeedAttempts] seeds, the seeds are
+/// independent of each other: [buildGridLayoutParallel] runs them on other isolates
+/// and gives the same plan.
 List<MosaicPlacement> buildGridLayout({
   required double baseWidth,
   required double baseHeight,
@@ -473,7 +494,455 @@ List<MosaicPlacement> buildGridLayout({
   required MosaicSettings settings,
   List<FaceRect> faceRegions = const [],
   bool isMobile = false,
+  void Function(List<MosaicPlacement> placements)? onDraft,
 }) {
+  final stage = _prepareGridLayout(
+    baseWidth: baseWidth,
+    baseHeight: baseHeight,
+    analyzer: analyzer,
+    tiles: tiles,
+    settings: settings,
+    faceRegions: faceRegions,
+    isMobile: isMobile,
+    onDraft: onDraft,
+  );
+  gridLayoutTrace?.call('fill');
+  if (stage.seeded) {
+    final job = stage.seedJob();
+    final outcomes = <AnnealSeedOutcome>[];
+    for (var attempt = 0; attempt < _lowCountSeedAttempts; attempt++) {
+      if (attempt > 0) job.restoreStart();
+      outcomes.add(runAnnealSeed(job, attempt));
+    }
+    job.takeBest(outcomes);
+  } else {
+    stage.annealOnce();
+  }
+  return _finishGridLayout(stage);
+}
+
+/// [buildGridLayout] with seeds 1.. of the best-of-N annealing run by [runSeeds]
+/// (another isolate, say) while this one runs seed 0. Same plan: each seed starts from
+/// the same tiles, and the per-cell scores they write are replayed in seed order.
+Future<List<MosaicPlacement>> buildGridLayoutParallel({
+  required double baseWidth,
+  required double baseHeight,
+  required ImageAnalyzer analyzer,
+  required List<TileDescriptor> tiles,
+  required MosaicSettings settings,
+  List<FaceRect> faceRegions = const [],
+  bool isMobile = false,
+  void Function(List<MosaicPlacement> placements)? onDraft,
+  required Future<List<AnnealSeedOutcome>> Function(
+    AnnealSeedJob job,
+    List<int> attempts,
+  )
+  runSeeds,
+
+  /// Works out the optimiser's candidates ([computePlacementCandidates]) elsewhere
+  /// while this isolate anneals; null result = not available (computed here).
+  Future<PlacementCandidates?> Function(CandidatesJob job)? runCandidates,
+
+  /// Computes a scoring batch of the layout, e.g. split across isolates. Default: here.
+  Future<void> Function(LayoutBatch batch)? runBatch,
+}) async {
+  final stage = await _prepareGridLayoutWith(
+    baseWidth: baseWidth,
+    baseHeight: baseHeight,
+    analyzer: analyzer,
+    tiles: tiles,
+    settings: settings,
+    faceRegions: faceRegions,
+    isMobile: isMobile,
+    onDraft: onDraft,
+    runBatch: runBatch ?? (b) async => b.computeHere(),
+  );
+  // The optimiser's candidates depend on the cells and photos only: worked out on a
+  // helper while the passes before it run here. They are only usable when every photo
+  // ends up in use, which a library of at most one photo per 4 cells reliably does
+  // (coverage) — past that, sending them over would be wasted work.
+  final candidates =
+      runCandidates != null &&
+          settings.optimalPlacement &&
+          stage.placements.length >= 2 &&
+          stage.eligibleTiles.length * 4 <= stage.placements.length &&
+          !stage.placements.any((p) => p.quad != null)
+      ? runCandidates(
+          CandidatesJob(
+            stage.placements,
+            stage.eligibleTiles,
+            stage.settings,
+            stage.saliency,
+          ),
+        )
+      : null;
+  gridLayoutTrace?.call('fill+send');
+  if (stage.seeded) {
+    final job = stage.seedJob();
+    // Sent (copied) before seed 0 moves anything.
+    final others = runSeeds(job, [
+      for (var a = 1; a < _lowCountSeedAttempts; a++) a,
+    ]);
+    gridLayoutTrace?.call('seeds sent');
+    final first = runAnnealSeed(job, 0);
+    gridLayoutTrace?.call('seed 0');
+    final rest = await others;
+    gridLayoutTrace?.call('seeds 1-2 waited');
+    for (final o in rest) {
+      o.replayScores(job.placements);
+    }
+    job.takeBest([first, ...rest]);
+  } else {
+    stage.annealOnce();
+  }
+  return candidates == null
+      ? _finishGridLayout(stage)
+      : _finishGridLayoutWith(stage, candidates);
+}
+
+/// What [computePlacementCandidates] needs — plain data, for another isolate.
+class CandidatesJob {
+  CandidatesJob(this.placements, this.tiles, this.settings, this.saliency);
+  final List<MosaicPlacement> placements;
+  final List<TileDescriptor> tiles;
+  final MosaicSettings settings;
+  final Float64List saliency;
+
+  PlacementCandidates run() =>
+      computePlacementCandidates(placements, tiles, settings, saliency);
+}
+
+/// Everything the passes after the annealing need.
+class _GridStage {
+  _GridStage({
+    required this.placements,
+    required this.tiles,
+    required this.eligibleTiles,
+    required this.tileMap,
+    required this.settings,
+    required this.adjacency,
+    required this.saliency,
+    required this.saBudgetFactor,
+    required this.isMobile,
+    required this.seeded,
+  });
+  final List<MosaicPlacement> placements;
+  final List<TileDescriptor> tiles;
+  final List<TileDescriptor> eligibleTiles;
+  final Map<String, TileDescriptor> tileMap;
+  final MosaicSettings settings;
+  final List<Set<int>> adjacency;
+  final Float64List saliency;
+  final double saBudgetFactor;
+  final bool isMobile;
+
+  /// Best-of-N seeded annealing from the Vogel start (else one run).
+  final bool seeded;
+
+  AnnealSeedJob seedJob() => AnnealSeedJob(
+    placements: placements,
+    tileMap: tileMap,
+    settings: settings,
+    adjacency: adjacency,
+    saliency: saliency,
+    budgetFactor: saBudgetFactor,
+    isMobile: isMobile,
+  );
+
+  void annealOnce() {
+    optimizePlacementSwaps(
+      placements,
+      tileMap,
+      settings,
+      adjacency: adjacency,
+      saliency: saliency,
+      budgetFactor: saBudgetFactor,
+      isMobile: isMobile,
+    );
+    balanceGlobalPalette(
+      placements,
+      tileMap,
+      settings,
+      adjacency: adjacency,
+      saliency: saliency,
+    );
+  }
+}
+
+/// One attempt of the best-of-N annealing: everything it reads, all plain data, so it
+/// can be sent to another isolate. [placements] hold the start (Vogel) tiles.
+class AnnealSeedJob {
+  AnnealSeedJob({
+    required this.placements,
+    required this.tileMap,
+    required this.settings,
+    required this.adjacency,
+    required this.saliency,
+    required this.budgetFactor,
+    required this.isMobile,
+  }) : startIds = [for (final p in placements) p.tileId],
+       startNames = [for (final p in placements) p.tileName];
+  final List<MosaicPlacement> placements;
+  final Map<String, TileDescriptor> tileMap;
+  final MosaicSettings settings;
+  final List<Set<int>> adjacency;
+  final Float64List saliency;
+  final double budgetFactor;
+  final bool isMobile;
+  final List<String> startIds;
+  final List<String> startNames;
+
+  /// Back to the start tiles (scores are left as the last attempt wrote them).
+  void restoreStart() {
+    for (var i = 0; i < placements.length; i++) {
+      placements[i].tileId = startIds[i];
+      placements[i].tileName = startNames[i];
+    }
+  }
+
+  /// The tiles of the best attempt — the first of equals, as the loop always kept.
+  void takeBest(List<AnnealSeedOutcome> outcomes) {
+    var best = outcomes.first;
+    for (final o in outcomes.skip(1)) {
+      if (o.score < best.score) best = o;
+    }
+    for (var i = 0; i < placements.length; i++) {
+      placements[i].tileId = best.tileIds[i];
+      placements[i].tileName = best.tileNames[i];
+    }
+  }
+}
+
+/// What one attempt ended with: its tiles, its reconstruction score, and the per-cell
+/// scores palette balance wrote (in order — a later attempt's write wins).
+class AnnealSeedOutcome {
+  AnnealSeedOutcome(
+    this.tileIds,
+    this.tileNames,
+    this.score,
+    this.scoreCells,
+    this.scoreValues,
+  );
+  final List<String> tileIds;
+  final List<String> tileNames;
+  final double score;
+  final Int32List scoreCells;
+  final Float64List scoreValues;
+
+  void replayScores(List<MosaicPlacement> placements) {
+    for (var k = 0; k < scoreCells.length; k++) {
+      placements[scoreCells[k]].score = scoreValues[k];
+    }
+  }
+}
+
+/// Runs attempt [attempt] from the job's current tiles, in place.
+AnnealSeedOutcome runAnnealSeed(AnnealSeedJob job, int attempt) {
+  final placements = job.placements;
+  optimizePlacementSwaps(
+    placements,
+    job.tileMap,
+    job.settings,
+    adjacency: job.adjacency,
+    saliency: job.saliency,
+    budgetFactor: job.budgetFactor,
+    seedOffset: attempt,
+    isMobile: job.isMobile,
+  );
+  final cells = <int>[];
+  final values = <double>[];
+  balanceGlobalPalette(
+    placements,
+    job.tileMap,
+    job.settings,
+    adjacency: job.adjacency,
+    saliency: job.saliency,
+    onScoreSet: (i, v) {
+      cells.add(i);
+      values.add(v);
+    },
+  );
+  final score = _scoreMosaicReconstruction(
+    placements,
+    job.tileMap,
+    job.saliency,
+    job.adjacency,
+  );
+  return AnnealSeedOutcome(
+    [for (final p in placements) p.tileId],
+    [for (final p in placements) p.tileName],
+    score,
+    Int32List.fromList(cells),
+    Float64List.fromList(values),
+  );
+}
+
+List<MosaicPlacement> _finishGridLayout(_GridStage stage) {
+  final radius = _coverageAndSpacing(stage);
+  return _optimiseAndFinish(stage, radius);
+}
+
+/// [_finishGridLayout] with the optimiser's candidates worked out elsewhere meanwhile.
+Future<List<MosaicPlacement>> _finishGridLayoutWith(
+  _GridStage stage,
+  Future<PlacementCandidates?> candidates,
+) async {
+  final radius = _coverageAndSpacing(stage);
+  return _optimiseAndFinish(stage, radius, precomputed: await candidates);
+}
+
+/// Coverage, then repeat spacing; the spacing radius.
+int _coverageAndSpacing(_GridStage stage) {
+  gridLayoutTrace?.call('anneal');
+  final placements = stage.placements;
+  final eligibleTiles = stage.eligibleTiles;
+  final tileMap = stage.tileMap;
+  final settings = stage.settings;
+  final saliency = stage.saliency;
+
+  // Every tile in the library appears at least once. Runs last so nothing can evict
+  // what it places; each hole is filled from a cell whose tile is used elsewhere, so
+  // it can never open a new one. A no-op when the library is already fully used.
+  ensureTileCoverage(
+    placements,
+    eligibleTiles,
+    tileMap,
+    settings,
+    saliency: saliency,
+  );
+
+  // No photo again within `repeatSpacing` cells of itself, then every photo where it
+  // fits best over the whole mosaic (counts and spacing kept). Same as web.
+  final spacing = enforceRepeatSpacing(
+    placements,
+    eligibleTiles,
+    settings,
+    settings.repeatSpacing,
+  );
+  return spacing.radius;
+}
+
+List<MosaicPlacement> _optimiseAndFinish(
+  _GridStage stage,
+  int spacingRadius, {
+  PlacementCandidates? precomputed,
+}) {
+  gridLayoutTrace?.call(
+    precomputed != null ? 'spacing (candidates ready)' : 'spacing',
+  );
+  final placements = stage.placements;
+  final tiles = stage.tiles;
+  final eligibleTiles = stage.eligibleTiles;
+  final tileMap = stage.tileMap;
+  final settings = stage.settings;
+  final adjacency = stage.adjacency;
+  final saliency = stage.saliency;
+  if (settings.optimalPlacement) {
+    optimizePlacementAssignment(
+      placements,
+      eligibleTiles,
+      settings,
+      saliency,
+      spacingRadius,
+      precomputed: precomputed,
+    );
+  }
+
+  // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
+  // coverage specifically, because coverage places rare photos wherever it can and is
+  // the one pass that can reintroduce a twin. It only ever swaps two cells' tiles, so
+  // the coverage guarantee it just established survives intact.
+  gridLayoutTrace?.call('optimal');
+  if (strictNoTouchingTwins) {
+    enforceNoTouchingTwins(
+      placements,
+      tileMap,
+      adjacency,
+      saliency,
+      resolveMaxTileUses(settings.maxTileUses, tiles.length, placements.length),
+    );
+  }
+
+  return placements;
+}
+
+/// A value a layout step generator hands back to its caller.
+class _Box<T> {
+  T? value;
+}
+
+/// The layout up to the annealing, computed here.
+_GridStage _prepareGridLayout({
+  required double baseWidth,
+  required double baseHeight,
+  required ImageAnalyzer analyzer,
+  required List<TileDescriptor> tiles,
+  required MosaicSettings settings,
+  List<FaceRect> faceRegions = const [],
+  bool isMobile = false,
+  void Function(List<MosaicPlacement> placements)? onDraft,
+}) {
+  final out = _Box<_GridStage>();
+  for (final batch in _prepareGridLayoutSteps(
+    baseWidth: baseWidth,
+    baseHeight: baseHeight,
+    analyzer: analyzer,
+    tiles: tiles,
+    settings: settings,
+    faceRegions: faceRegions,
+    isMobile: isMobile,
+    onDraft: onDraft,
+    out: out,
+  )) {
+    batch.computeHere();
+  }
+  return out.value!;
+}
+
+/// [_prepareGridLayout] with its scoring batches handed to [runBatch] (which may split
+/// them across isolates) — the same layout.
+Future<_GridStage> _prepareGridLayoutWith({
+  required double baseWidth,
+  required double baseHeight,
+  required ImageAnalyzer analyzer,
+  required List<TileDescriptor> tiles,
+  required MosaicSettings settings,
+  required List<FaceRect> faceRegions,
+  required bool isMobile,
+  void Function(List<MosaicPlacement> placements)? onDraft,
+  required Future<void> Function(LayoutBatch batch) runBatch,
+}) async {
+  final out = _Box<_GridStage>();
+  final steps = _prepareGridLayoutSteps(
+    baseWidth: baseWidth,
+    baseHeight: baseHeight,
+    analyzer: analyzer,
+    tiles: tiles,
+    settings: settings,
+    faceRegions: faceRegions,
+    isMobile: isMobile,
+    onDraft: onDraft,
+    out: out,
+  ).iterator;
+  while (steps.moveNext()) {
+    await runBatch(steps.current);
+  }
+  return out.value!;
+}
+
+/// The layout up to the annealing as steps: it yields each big scoring batch
+/// ([LayoutBatch]) and reads the batch's result once resumed; the stage lands in [out].
+Iterable<LayoutBatch> _prepareGridLayoutSteps({
+  required double baseWidth,
+  required double baseHeight,
+  required ImageAnalyzer analyzer,
+  required List<TileDescriptor> tiles,
+  required MosaicSettings settings,
+  List<FaceRect> faceRegions = const [],
+  bool isMobile = false,
+  void Function(List<MosaicPlacement> placements)? onDraft,
+  required _Box<_GridStage> out,
+}) sync* {
   // Variety is pinned in sanitizeSettings — see fixedReusePenalty. The adaptive
   // per-library value that used to be derived here is gone: it existed to soften a
   // neighbour-duplicate penalty strong enough to ban local reuse, and once that was
@@ -651,18 +1120,24 @@ List<MosaicPlacement> buildGridLayout({
         growable: false,
       );
       final usageCounts = <String, int>{};
-      final baselinePool = tilePools[_anyOrientationAR] ?? tiles;
-      final baselines = _computeBaselines(
-        M,
-        N,
-        cellW,
-        cellH,
-        analyzer,
-        baselinePool,
-        settings,
-      );
-
       final isBlocks = mode == 'blocks';
+      // Only `blocks` reads these; `original` works out its own in _fillFirstLayout
+      // (computing them here too was a whole extra scoring pass for nothing).
+      final baselinesBox = _Box<List<List<double>>>();
+      if (isBlocks) {
+        yield* _computeBaselines(
+          M,
+          N,
+          cellW,
+          cellH,
+          analyzer,
+          tilePools[_anyOrientationAR] ?? tiles,
+          settings,
+          baselinesBox,
+        );
+      }
+      final baselines = baselinesBox.value ?? const <List<double>>[];
+
       final colorErrors = <String, LabColor>{};
 
       // GEOMETRY IS DECIDED WITH THE REUSE CAP OFF.
@@ -689,7 +1164,7 @@ List<MosaicPlacement> buildGridLayout({
       // keeps the shapes-first path: its whole premise is that every cell is covered by a
       // block shape, and fill-first would leave it a 1x1 mosaic.
       if (!isBlocks) {
-        _fillFirstLayout(
+        yield* _fillFirstLayout(
           M,
           N,
           cellW,
@@ -712,7 +1187,7 @@ List<MosaicPlacement> buildGridLayout({
       } else {
         // Shape aspects are cols/rows x the CELL aspect, so the menu is derived per build
         // rather than taken from the module constants (which assume square cells).
-        _placeMultiCellShapes(
+        yield* _placeMultiCellShapes(
           M,
           N,
           cellW,
@@ -756,6 +1231,7 @@ List<MosaicPlacement> buildGridLayout({
         );
       }
 
+      gridLayoutTrace?.call('fill D');
       if (isMinimumDetailOriginalMode(settings)) {
         // Cap-free like the rest of the geometry: this pass MERGES cells, so under a
         // cap it is one more place where a setting about repeats decides cell size.
@@ -814,7 +1290,11 @@ List<MosaicPlacement> buildGridLayout({
     }
   }
 
+  gridLayoutTrace?.call('layout done');
   final tileMap = {for (final t in tiles) t.id: t};
+  // Every cell has a photo now; the passes below only improve the choice. A slow
+  // device can show this first (it must copy what it needs: the passes mutate these).
+  onDraft?.call(placements);
 
   // Hexagons need their own neighbour rule. Their stored rect is the SAMPLE window —
   // 59% of the drawn cell — so two neighbours' rects never touch, and the rect test
@@ -858,11 +1338,7 @@ List<MosaicPlacement> buildGridLayout({
   // `original`/`blocks` keep Vogel — their FACE error gets worse without it.
   // `rhombille` is deliberately excluded: it measured neutral, so there is no evidence
   // to justify changing how that mode looks.
-  final modeSkipsVogel =
-      mode == 'square' ||
-      mode == 'landscape' ||
-      mode == 'portrait' ||
-      mode == 'hexagon';
+  final modeSkipsVogel = !modeAnnealsSeeds(mode);
   // Size and mode are kept apart on purpose, so dropping Vogel for a mode does not
   // silently also quadruple this device's annealing — the budget below keys off SIZE
   // only and is unchanged for every mode.
@@ -881,132 +1357,27 @@ List<MosaicPlacement> buildGridLayout({
   final defaultSaBudget =
       (withinOptimalSize ? 0.5 : 1.0) * (optimiserRuns ? 0.2 : 1.0);
   final saBudgetFactor = settings.saBudgetFactor ?? defaultSaBudget;
+  gridLayoutTrace?.call('adjacency+saliency');
   if (isOptimalPath) {
     try {
-      _vogelAssign(placements, tiles, settings, saliency);
+      yield* _vogelAssign(placements, tiles, settings, saliency);
     } catch (_) {
       // Fall back to greedy result.
     }
-
-    final n = placements.length;
-    final vogelTileIds = List<String>.generate(n, (i) => placements[i].tileId);
-    final vogelTileNames = List<String>.generate(
-      n,
-      (i) => placements[i].tileName,
-    );
-
-    var bestScore = double.infinity;
-    final bestTileIds = List<String>.filled(n, '');
-    final bestTileNames = List<String>.filled(n, '');
-
-    for (var attempt = 0; attempt < _lowCountSeedAttempts; attempt++) {
-      if (attempt > 0) {
-        for (var i = 0; i < n; i++) {
-          placements[i].tileId = vogelTileIds[i];
-          placements[i].tileName = vogelTileNames[i];
-        }
-      }
-
-      optimizePlacementSwaps(
-        placements,
-        tileMap,
-        settings,
-        adjacency: adjacency,
-        saliency: saliency,
-        budgetFactor: saBudgetFactor,
-        seedOffset: attempt,
-        isMobile: isMobile,
-      );
-      balanceGlobalPalette(
-        placements,
-        tileMap,
-        settings,
-        adjacency: adjacency,
-        saliency: saliency,
-      );
-
-      final score = _scoreMosaicReconstruction(
-        placements,
-        tileMap,
-        saliency,
-        adjacency,
-      );
-      if (score < bestScore) {
-        bestScore = score;
-        for (var i = 0; i < n; i++) {
-          bestTileIds[i] = placements[i].tileId;
-          bestTileNames[i] = placements[i].tileName;
-        }
-      }
-    }
-
-    for (var i = 0; i < n; i++) {
-      placements[i].tileId = bestTileIds[i];
-      placements[i].tileName = bestTileNames[i];
-    }
-  } else {
-    optimizePlacementSwaps(
-      placements,
-      tileMap,
-      settings,
-      adjacency: adjacency,
-      saliency: saliency,
-      budgetFactor: saBudgetFactor,
-      isMobile: isMobile,
-    );
-    balanceGlobalPalette(
-      placements,
-      tileMap,
-      settings,
-      adjacency: adjacency,
-      saliency: saliency,
-    );
   }
-
-  // Every tile in the library appears at least once. Runs last so nothing can evict
-  // what it places; each hole is filled from a cell whose tile is used elsewhere, so
-  // it can never open a new one. A no-op when the library is already fully used.
-  ensureTileCoverage(
-    placements,
-    eligibleTiles,
-    tileMap,
-    settings,
+  gridLayoutTrace?.call('vogel');
+  out.value = _GridStage(
+    placements: placements,
+    tiles: tiles,
+    eligibleTiles: eligibleTiles,
+    tileMap: tileMap,
+    settings: settings,
+    adjacency: adjacency,
     saliency: saliency,
+    saBudgetFactor: saBudgetFactor,
+    isMobile: isMobile,
+    seeded: isOptimalPath,
   );
-
-  // No photo again within `repeatSpacing` cells of itself, then every photo where it
-  // fits best over the whole mosaic (counts and spacing kept). Same as web.
-  final spacing = enforceRepeatSpacing(
-    placements,
-    eligibleTiles,
-    settings,
-    settings.repeatSpacing,
-  );
-  if (settings.optimalPlacement) {
-    optimizePlacementAssignment(
-      placements,
-      eligibleTiles,
-      settings,
-      saliency,
-      spacing.radius,
-    );
-  }
-
-  // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
-  // coverage specifically, because coverage places rare photos wherever it can and is
-  // the one pass that can reintroduce a twin. It only ever swaps two cells' tiles, so
-  // the coverage guarantee it just established survives intact.
-  if (strictNoTouchingTwins) {
-    enforceNoTouchingTwins(
-      placements,
-      tileMap,
-      adjacency,
-      saliency,
-      resolveMaxTileUses(settings.maxTileUses, tiles.length, placements.length),
-    );
-  }
-
-  return placements;
 }
 
 _GridDims _computeGrid(double baseWidth, double baseHeight, double density) {
@@ -1119,50 +1490,7 @@ Map<double, List<TileDescriptor>> _buildTilePools(
 }
 
 // scoring-pool.ts sync equivalents (the worker output is bit-identical).
-Float64List _scoreRegionsSync(
-  List<RegionAnalysis> regions,
-  List<TileDescriptor> tiles,
-  MosaicSettings settings,
-) {
-  final out = Float64List(regions.length);
-  final emptyUsage = <String, int>{};
-  for (var i = 0; i < regions.length; i++) {
-    out[i] = selectBestTileMatch(
-      MatchInput(
-        region: regions[i],
-        tiles: tiles,
-        settings: settings,
-        usageCounts: emptyUsage,
-      ),
-    ).score;
-  }
-  return out;
-}
-
-Float64List _scoreMultiPoolRegionsSync(
-  List<RegionAnalysis> regions,
-  Float32List saliencies,
-  List<int> poolIndex,
-  List<List<TileDescriptor>> pools,
-  MosaicSettings settings,
-) {
-  final out = Float64List(regions.length);
-  final emptyUsage = <String, int>{};
-  for (var i = 0; i < regions.length; i++) {
-    out[i] = selectBestTileMatch(
-      MatchInput(
-        region: regions[i],
-        tiles: pools[poolIndex[i]],
-        settings: settings,
-        usageCounts: emptyUsage,
-        saliency: saliencies[i],
-      ),
-    ).score;
-  }
-  return out;
-}
-
-List<List<double>> _computeBaselines(
+Iterable<LayoutBatch> _computeBaselines(
   int M,
   int N,
   double cellW,
@@ -1170,7 +1498,8 @@ List<List<double>> _computeBaselines(
   ImageAnalyzer analyzer,
   List<TileDescriptor> allTiles,
   MosaicSettings settings,
-) {
+  _Box<List<List<double>>> out,
+) sync* {
   const maxSample = 60;
   List<TileDescriptor> sample;
   if (allTiles.length <= maxSample) {
@@ -1208,7 +1537,9 @@ List<List<double>> _computeBaselines(
     }
   }
 
-  final flatScores = _scoreRegionsSync(regions, sample, settings);
+  final batch = RegionScoreBatch(regions, null, null, [sample], settings);
+  yield batch;
+  final flatScores = batch.result!;
 
   final scores = List<List<double>>.generate(N, (r) {
     final row = List<double>.filled(M, 0);
@@ -1217,7 +1548,7 @@ List<List<double>> _computeBaselines(
     }
     return row;
   });
-  return scores;
+  out.value = scores;
 }
 
 List<List<double>> _computeCellSaliency(
@@ -1648,7 +1979,7 @@ const double _upgradeMargin = 2.5;
 /// library, 0.142 -> 0.113 on a 50/50 mixed one, discarded photos 35 -> 8.
 ///
 /// Must match `fillFirstLayout` in foto-mozaik/lib/mosaic/grid-layout.ts.
-void _fillFirstLayout(
+Iterable<LayoutBatch> _fillFirstLayout(
   int M,
   int N,
   double cellW,
@@ -1667,14 +1998,15 @@ void _fillFirstLayout(
   List<CellShape> fillShapes,
   Map<String, LabColor> colorErrors,
   double cellAR,
-) {
+) sync* {
   // `_fillRemainingCells` orders cells by baseline detail, so it needs real baselines
   // even though this pass does not use them to gate shapes.
   final baselinePool =
       tilePools[_anyOrientationAR] ??
       _poolForShape(tilePools, cellAR) ??
       const <TileDescriptor>[];
-  final baselines = _computeBaselines(
+  final baselinesBox = _Box<List<List<double>>>();
+  yield* _computeBaselines(
     M,
     N,
     cellW,
@@ -1682,7 +2014,10 @@ void _fillFirstLayout(
     analyzer,
     baselinePool,
     settings,
+    baselinesBox,
   );
+  final baselines = baselinesBox.value!;
+  gridLayoutTrace?.call('baselines');
 
   // ── Phase A: the whole picture in the FULL fill menu ──────────────────────
   //
@@ -1749,6 +2084,7 @@ void _fillFirstLayout(
     }
   }
 
+  gridLayoutTrace?.call('fill A');
   // ── Phase B: shortlist candidates ─────────────────────────────────────────
   final regions = <RegionAnalysis>[];
   final positions = <({int col, int row, CellShape shape, double gain})>[];
@@ -1797,13 +2133,16 @@ void _fillFirstLayout(
   }
   if (regions.isEmpty) return;
 
-  final batch = _scoreMultiPoolRegionsSync(
+  gridLayoutTrace?.call('fill B sample ${regions.length}');
+  final scoring = RegionScoreBatch(
     regions,
     Float32List.fromList(saliencyList),
     poolIndexList,
     poolList,
     settings,
   );
+  yield scoring;
+  final batch = scoring.result!;
 
   // Rank by OPTIMISTIC net gain — the shortlist only has to be generous, because every
   // entry is verified for real below.
@@ -1818,6 +2157,7 @@ void _fillFirstLayout(
       ? shortlist.sublist(0, cap)
       : shortlist;
 
+  gridLayoutTrace?.call('fill B score');
   // ── Phase C: verify each candidate for real, then commit ──────────────────
   final dead = <int>{};
   for (final entry in candidates) {
@@ -1966,6 +2306,7 @@ void _fillFirstLayout(
     );
   }
 
+  gridLayoutTrace?.call('fill C verify');
   // ── Phase D: compact ──────────────────────────────────────────────────────
   // Tombstones must not survive: everything downstream (adjacency, SA, palette
   // balance, coverage) assumes a densely-indexed array.
@@ -2005,7 +2346,7 @@ void _fillFirstLayout(
   );
 }
 
-void _placeMultiCellShapes(
+Iterable<LayoutBatch> _placeMultiCellShapes(
   int M,
   int N,
   double cellW,
@@ -2023,7 +2364,7 @@ void _placeMultiCellShapes(
   int placementCount,
   List<CellShape>? shapesOverride,
   Map<String, LabColor>? colorErrors,
-) {
+) sync* {
   final regions = <RegionAnalysis>[];
   final positions =
       <({int col, int row, CellShape shape, double avgBaseline})>[];
@@ -2087,13 +2428,15 @@ void _placeMultiCellShapes(
   final candidates = <_ShapeCandidate>[];
   if (regions.isNotEmpty) {
     final saliencies = Float32List.fromList(saliencyList);
-    final scores = _scoreMultiPoolRegionsSync(
+    final scoring = RegionScoreBatch(
       regions,
       saliencies,
       poolIndexList,
       poolList,
       settings,
     );
+    yield scoring;
+    final scores = scoring.result!;
     for (var i = 0; i < regions.length; i++) {
       final pos = positions[i];
       final perCellImprovement = pos.avgBaseline - scores[i];
@@ -2521,26 +2864,22 @@ void _fillRemainingCells(
   }
 }
 
-void _vogelAssign(
+Iterable<LayoutBatch> _vogelAssign(
   List<MosaicPlacement> placements,
   List<TileDescriptor> tiles,
   MosaicSettings settings,
   Float64List placementSaliency,
-) {
+) sync* {
   if (placements.isEmpty || tiles.isEmpty) return;
 
   final n = placements.length;
   final K = math.min(80, tiles.length);
 
-  final candidateLists = List<List<RegionCandidate>>.filled(n, const []);
+  final topK = TopKBatch(placements, tiles, settings, placementSaliency, K);
+  yield topK;
+  if (topK.failed) throw StateError('Vogel candidates failed');
+  final candidateLists = topK.result!;
   for (var i = 0; i < n; i++) {
-    candidateLists[i] = getTopKCandidates(
-      placements[i],
-      tiles,
-      settings,
-      placementSaliency[i],
-      K,
-    );
     if (candidateLists[i].isEmpty) return;
   }
 

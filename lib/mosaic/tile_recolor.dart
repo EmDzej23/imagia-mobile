@@ -65,9 +65,12 @@ TileRecolor? tileRecolorLinear(
   final mul = <double>[1, 1, 1];
   final add = <double>[0, 0, 0];
   var changed = k < 1;
+  // Only [toneChroma] of the move's colour, all of its brightness (web parity).
+  final mv = [for (var c = 0; c < 3; c++) s * (region[c].clamp(0.0, 255.0) - src[c])];
+  if (toneChroma < 1) chromaScale(mv, toneChroma);
   for (var c = 0; c < 3; c++) {
     final from = src[c];
-    final to = from + s * (region[c].clamp(0.0, 255.0) - from);
+    final to = from + mv[c];
     if (k >= 1 && (to - from).abs() < 0.5) continue;
     changed = true;
     final md = from > 0 ? to / from : double.infinity;
@@ -83,7 +86,22 @@ TileRecolor? tileRecolorLinear(
 
 /// Tile toning — keep identical to TILE_TONE_* / tileToning in shared.ts: the tile keeps
 /// 60% of its own colour and 82% of its contrast at full effect (slider ≥ 0.5).
-const double _toneSaturation = 0.6, _toneContrast = 0.82;
+// Contrast 1 since 2026-11-10 (tiles keep their own blacks and detail; web parity).
+const double _toneSaturation = 0.6, _toneContrast = 1;
+
+/// How much of the recolour's COLOUR shift a tile gets — its brightness shift stays
+/// whole (recolour version 3, 2026-11-11; TILE_TONE_CHROMA in shared.ts). With the whole
+/// shift a strong target colour clipped a tile's other channels to one flat colour.
+const double toneChroma = 0.5;
+
+/// Scale the colour part of an RGB move by [chroma] in place, keeping its brightness
+/// (Rec.601 luma) — identical to chromaScale in shared.ts / render-service recolor.ts.
+void chromaScale(List<double> mv, double chroma, [int o = 0]) {
+  final y = 0.299 * mv[o] + 0.587 * mv[o + 1] + 0.114 * mv[o + 2];
+  mv[o] = y + chroma * (mv[o] - y);
+  mv[o + 1] = y + chroma * (mv[o + 1] - y);
+  mv[o + 2] = y + chroma * (mv[o + 2] - y);
+}
 
 ({double saturation, double contrast}) tileToning(double strength) {
   final f = (strength / 0.5).clamp(0.0, 1.0);
@@ -219,6 +237,45 @@ List<double>? tileRegionMean(ui.Image img, Rect src) {
     }
   }
   return n == 0 ? null : [r / n, gg / n, b / n];
+}
+
+/// [img]'s colour grid, if it has one (to keep it in the analysis cache).
+Uint8List? tileColorGridOf(ui.Image img) => _grids[img];
+
+/// Give [img] a colour grid kept from an earlier analysis of the same photo.
+void setTileColorGrid(ui.Image img, Uint8List grid) {
+  if (grid.length == _grid * _grid * 4) _grids[img] = grid;
+}
+
+/// Give [img] its colour grid from pixels already read off the same photo ([rgba],
+/// [w]×[h], any size): a box average into the 16×16 grid, no GPU read-back.
+void primeTileColorGrid(ui.Image img, Uint8List rgba, int w, int h) {
+  if (w < 1 || h < 1 || rgba.length < w * h * 4) return;
+  final g = Uint8List(_grid * _grid * 4);
+  for (var gy = 0; gy < _grid; gy++) {
+    final y0 = gy * h ~/ _grid, y1 = math.max(y0 + 1, (gy + 1) * h ~/ _grid);
+    for (var gx = 0; gx < _grid; gx++) {
+      final x0 = gx * w ~/ _grid, x1 = math.max(x0 + 1, (gx + 1) * w ~/ _grid);
+      var r = 0, gg = 0, b = 0, n = 0;
+      for (var y = y0; y < y1 && y < h; y++) {
+        var o = (y * w + x0) * 4;
+        for (var x = x0; x < x1 && x < w; x++, o += 4) {
+          r += rgba[o];
+          gg += rgba[o + 1];
+          b += rgba[o + 2];
+          n++;
+        }
+      }
+      final i = (gy * _grid + gx) * 4;
+      if (n > 0) {
+        g[i] = (r / n).round();
+        g[i + 1] = (gg / n).round();
+        g[i + 2] = (b / n).round();
+      }
+      g[i + 3] = 255;
+    }
+  }
+  _grids[img] = g;
 }
 
 /// Compute the colour grids of [imgs] that are missing (for renderers that need them

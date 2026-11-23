@@ -1,3 +1,5 @@
+import 'export_paywall_sheet.dart';
+import '../../api/funnel_api.dart';
 import 'dart:math' as math;
 import 'dart:async';
 import 'dart:ui' as ui;
@@ -8,9 +10,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/config.dart';
 import '../../mosaic/hires_tiles.dart';
+import '../../mosaic/mosaic_engine.dart' show releaseLayoutWorker;
 import '../../mosaic/preview_painter.dart';
 import '../../mosaic/cell_recolor_cache.dart';
+import '../../mosaic/snapshot_paint.dart';
 import '../../mosaic/recolor_bake.dart';
+import '../../mosaic/looks.dart';
 import '../../mosaic/shared.dart'
     show
         evenTileUses,
@@ -95,6 +100,12 @@ const bool _showAdvancedWordart = false;
 
 /// "Empty space" is hidden for now (its default still applies). Flip to true to restore.
 const bool _showEmptySpace = false;
+
+/// Word art looks its best from about this many phrases; fewer reads repetitive.
+const int _wordsTarget = 8;
+
+/// Amber for word-art warnings (too-long phrase, words not applied yet).
+const Color _warnColor = Color(0xFFF2D28B);
 
 class StudioScreen extends ConsumerStatefulWidget {
   const StudioScreen({super.key});
@@ -264,14 +275,32 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   /// Centre of the visible window, in BASE pixels. Null until first use = centred.
   Offset? _focusBase;
 
-  /// Upper bound on pinch zoom.
-  ///
-  /// Deep enough that a single cell can more than fill the screen. Note the real
-  /// detail ceiling is lower than this: the strip's tile images are decoded at 256 px
-  /// (see `tileThumbBatch`), so past roughly 10-12x it is those thumbnails being
-  /// magnified rather than new detail appearing. Zooming further is still useful for
-  /// placing and inspecting a specific cell, which is why the cap is not set there.
+  /// Upper bound on pinch zoom, whatever the mosaic.
   static const double _maxZoom = 40;
+
+  /// How big a typical cell may get on screen, in device px. The stored tile photos
+  /// are 600–1024 px (phone uploads keep a 600 px short side), so past this a cell can
+  /// only be a stretched photo — the zoom stops where the tiles stop getting sharper.
+  static const double _maxCellPx = 800;
+
+  /// Median cell long side (base px) of the plan the zoom cap was last worked out for.
+  SlimMosaicPlan? _cellSizePlan;
+  double _medianCell = 0;
+
+  /// The zoom past which a typical cell would outgrow its photo (never below 4×, so
+  /// coarse mosaics still zoom; never above [_maxZoom]).
+  double _zoomCap(SlimMosaicPlan plan, double fitScale, double dpr) {
+    if (!identical(plan, _cellSizePlan)) {
+      final sizes = [
+        for (final p in plan.placements) math.max(p.width, p.height),
+      ]..sort();
+      _medianCell = sizes.isEmpty ? 0 : sizes[sizes.length ~/ 2];
+      _cellSizePlan = plan;
+    }
+    final atFit = _medianCell * fitScale * dpr;
+    if (!(atFit > 0)) return _maxZoom;
+    return (_maxCellPx / atFit).clamp(4.0, _maxZoom);
+  }
 
   void _resetZoom() {
     if (_zoom == 1 && _focusBase == null) return;
@@ -320,6 +349,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
   // Word-art phrases list is collapsible so a long list doesn't create a big
   // scroll through the controls panel.
   bool _wordsExpanded = true;
+  /// "More settings" in the word-art panel (open by default, like the web).
+  bool _wordMoreOpen = true;
+  /// Unapplied phrase edits (null = none) and the applied text they were made on.
+  String? _wordsDraft;
+  String _wordsDraftFor = '';
 
   // Tiles strip geometry (must match the ListView item + separator below).
   static const double _tileExtent = 56;
@@ -367,7 +401,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
 
   /// The whole mosaic with the web's in-cell tile recolour, rendered once per plan /
   /// look change — the fitted view and the zoom both just show (and move) it.
-  final HrRecolorCache _hrRecolor = HrRecolorCache();
+  ///
+  /// 2048 px covers the fitted preview on any phone with room to spare; past that the
+  /// zoom draws each cell's own sharp copy anyway ([_cellCache]). 4096 cost ~3× the
+  /// time and memory on every change (~1.6 s of recolouring per change on Android).
+  final HrRecolorCache _hrRecolor = HrRecolorCache(longSide: 2048);
 
   /// Sharp recoloured copies of the cells on screen while zoomed — drawn every frame,
   /// rendered once each (cell_recolor_cache.dart).
@@ -402,6 +440,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     _hrRecolor.removeListener(_onHrRecolor);
     _hrRecolor.dispose();
     _cellCache.dispose();
+    // The layout worker keeps the photo's analysis (~150–200 MB) between builds.
+    releaseLayoutWorker();
     super.dispose();
   }
 
@@ -409,13 +449,6 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     await pickCropAndSetBase(context, ref);
     _controller.buildPlan();
   }
-
-  /// Number of non-empty phrases in the shared word-art text state.
-  int _wordPhraseCount(String textInput) => textInput
-      .split('\n')
-      .map((s) => s.trim())
-      .where((s) => s.isNotEmpty)
-      .length;
 
   /// Word-art controls: phrases + type-look sliders. The word colours come from
   /// the photo (no picker) — the picture is composed entirely of the words; only
@@ -426,21 +459,39 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     MosaicSettings settings,
     void Function(MosaicSettings) update,
   ) {
+    // Editing the chips only touches a local draft — re-packing the words is the
+    // expensive part, so it happens once, on "Show my words in the picture".
+    // Sliders stay live. A change from outside (project load) drops the draft.
+    if (studio.textInput != _wordsDraftFor) {
+      _wordsDraftFor = studio.textInput;
+      _wordsDraft = null;
+    }
+    final draft = _wordsDraft ?? studio.textInput;
+    final pendingWords = draft != studio.textInput;
+    final phraseCount = usablePhrases(parseTextPhrases(draft)).length;
+    final trueColor = settings.wordartTrueColor;
+    // Percent of the slider's own range, as the web shows it.
+    String pct(double v, double min, double max) =>
+        '${((v - min) / (max - min) * 100).round()}%';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: AppSpacing.x4),
+        Text(
+          'Your portrait, written in words. Add names, places and memories — '
+          'each one becomes part of the picture.',
+          style: AppTypography.caption,
+        ),
+        const SizedBox(height: AppSpacing.x3),
         InkWell(
           onTap: () => setState(() => _wordsExpanded = !_wordsExpanded),
           child: Row(
             children: [
-              Text('Words', style: AppTypography.label),
-              if (_wordPhraseCount(studio.textInput) > 0) ...[
+              Text('Your words', style: AppTypography.label),
+              if (phraseCount > 0) ...[
                 const SizedBox(width: AppSpacing.x1),
-                Text(
-                  '(${_wordPhraseCount(studio.textInput)})',
-                  style: AppTypography.caption,
-                ),
+                Text('($phraseCount)', style: AppTypography.caption),
               ],
               const Spacer(),
               Icon(
@@ -454,36 +505,45 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
         if (_wordsExpanded) ...[
           const SizedBox(height: AppSpacing.x1),
           Text(
-            'Add a word or phrase at a time — the picture is composed from '
-            'them, coloured from your photo.',
+            "Ideas: their name, nicknames, places you've been, dates, song "
+            'lines, inside jokes.',
             style: AppTypography.caption,
           ),
           const SizedBox(height: AppSpacing.x2),
           _PhraseChipsField(
-            textInput: studio.textInput,
-            onChanged: _controller.setTextInput,
+            textInput: draft,
+            onChanged: (v) => setState(() => _wordsDraft = v),
           ),
-        ],
-        const SizedBox(height: AppSpacing.x2),
-        Row(
-          children: [
-            Expanded(child: Text('UPPERCASE', style: AppTypography.caption)),
-            Switch(
-              value: studio.textUppercase,
-              onChanged: _controller.setTextUppercase,
+          const SizedBox(height: AppSpacing.x2),
+          Text(
+            phraseCount >= _wordsTarget
+                ? '✓ $phraseCount words — looking rich'
+                : '$phraseCount of $_wordsTarget words — add '
+                      '${_wordsTarget - phraseCount} more for the best look',
+            style: AppTypography.caption.copyWith(
+              color: phraseCount >= _wordsTarget ? AppColors.success : _warnColor,
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: AppSpacing.x2),
+          if (pendingWords) ...[
+            Text(
+              "Your new words aren't in the picture yet.",
+              style: AppTypography.caption.copyWith(color: _warnColor),
+            ),
+            const SizedBox(height: AppSpacing.x2),
+            PrimaryButton(
+              label: '✨ Show my words in the picture',
+              onPressed: () {
+                FocusScope.of(context).unfocus();
+                _controller.setTextInput(draft);
+              },
+            ),
+          ] else if (phraseCount > 0)
+            Center(
+              child: Text('Words applied', style: AppTypography.caption),
+            ),
+        ],
         const SizedBox(height: AppSpacing.x3),
-        _CaptionField(
-          base: studio.base?.thumbnail,
-          caption: settings.wordartCaption,
-          captionColor: settings.wordartTitleColor,
-          onCaptionChanged: (v) => update(settings.copyWith(wordartCaption: v)),
-          onColorChanged: (v) =>
-              update(settings.copyWith(wordartTitleColor: v)),
-        ),
-        const SizedBox(height: AppSpacing.x2),
         LabeledSlider(
           label: 'Word size',
           value: settings.wordartDensity,
@@ -492,69 +552,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
           valueLabel: settings.wordartDensity.toStringAsFixed(0),
           onChanged: (v) => update(settings.copyWith(wordartDensity: v)),
         ),
-        // Advanced controls (flow tilt / contrast / palette / ground / vividness)
-        // are hidden — their values are now fixed defaults (see MosaicSettings).
-        // Flip [_showAdvancedWordart] to true to bring the sliders back.
-        if (_showAdvancedWordart) ...[
-          LabeledSlider(
-            label: 'Flow tilt',
-            value: settings.wordartRotation,
-            min: 0,
-            max: 80,
-            valueLabel: '${settings.wordartRotation.toStringAsFixed(0)}°',
-            onChanged: (v) => update(settings.copyWith(wordartRotation: v)),
-          ),
-          LabeledSlider(
-            label: 'Contrast',
-            value: settings.wordartContrast,
-            min: -1,
-            max: 1,
-            valueLabel: settings.wordartContrast.toStringAsFixed(2),
-            onChanged: (v) => update(settings.copyWith(wordartContrast: v)),
-          ),
-          LabeledSlider(
-            label: 'Palette',
-            value: settings.wordartPalette,
-            min: 2,
-            max: 64,
-            valueLabel: settings.wordartPalette.round() >= 64
-                ? 'Full'
-                : settings.wordartPalette.toStringAsFixed(0),
-            onChanged: (v) => update(settings.copyWith(wordartPalette: v)),
-          ),
-          LabeledSlider(
-            label: 'Ground',
-            value: settings.wordartGround,
-            min: 0,
-            max: 1,
-            valueLabel: settings.wordartGround.toStringAsFixed(2),
-            onChanged: (v) => update(settings.copyWith(wordartGround: v)),
-          ),
-          LabeledSlider(
-            label: 'Vividness',
-            value: settings.wordartVivid,
-            min: 0,
-            max: 1,
-            valueLabel: settings.wordartVivid.toStringAsFixed(2),
-            onChanged: (v) => update(settings.copyWith(wordartVivid: v)),
-          ),
-        ],
-        if (_showEmptySpace)
-          LabeledSlider(
-            label: 'Empty space',
-            value: settings.wordartEmpty,
-            min: 0,
-            max: 1,
-            valueLabel: '${(settings.wordartEmpty * 100).round()}%',
-            onChanged: (v) => update(settings.copyWith(wordartEmpty: v)),
-          ),
-        LabeledSlider(
-          label: 'Coverage',
-          value: settings.wordartCoverage,
-          min: 0,
-          max: 1,
-          valueLabel: '${(settings.wordartCoverage * 100).round()}%',
-          onChanged: (v) => update(settings.copyWith(wordartCoverage: v)),
+        Text(
+          'Largest word size; smaller words fill in around it.',
+          style: AppTypography.caption,
         ),
         const SizedBox(height: AppSpacing.x3),
         OutlinedButton.icon(
@@ -567,11 +567,161 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
             minimumSize: const Size.fromHeight(AppSpacing.touchTarget),
           ),
         ),
+        const SizedBox(height: AppSpacing.x3),
+        InkWell(
+          onTap: () => setState(() => _wordMoreOpen = !_wordMoreOpen),
+          child: Row(
+            children: [
+              Text('More settings', style: AppTypography.label),
+              const Spacer(),
+              Icon(
+                _wordMoreOpen ? Icons.expand_less : Icons.expand_more,
+                size: 20,
+                color: AppColors.textSecondary,
+              ),
+            ],
+          ),
+        ),
+        if (_wordMoreOpen) ...[
+          const SizedBox(height: AppSpacing.x2),
+          Row(
+            children: [
+              Expanded(child: Text('UPPERCASE', style: AppTypography.caption)),
+              Switch(
+                value: studio.textUppercase,
+                onChanged: _controller.setTextUppercase,
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.x2),
+          _CaptionField(
+            base: studio.base?.thumbnail,
+            caption: settings.wordartCaption,
+            captionColor: settings.wordartTitleColor,
+            onCaptionChanged: (v) =>
+                update(settings.copyWith(wordartCaption: v)),
+            onColorChanged: (v) =>
+                update(settings.copyWith(wordartTitleColor: v)),
+          ),
+          const SizedBox(height: AppSpacing.x2),
+          // Advanced controls (flow tilt / contrast / palette / ground / vividness)
+          // are hidden — their values are fixed defaults (see MosaicSettings).
+          // Flip [_showAdvancedWordart] to true to bring the sliders back.
+          if (_showAdvancedWordart) ...[
+            LabeledSlider(
+              label: 'Flow tilt',
+              value: settings.wordartRotation,
+              min: 0,
+              max: 80,
+              valueLabel: '${settings.wordartRotation.toStringAsFixed(0)}°',
+              onChanged: (v) => update(settings.copyWith(wordartRotation: v)),
+            ),
+            LabeledSlider(
+              label: 'Contrast',
+              value: settings.wordartContrast,
+              min: -1,
+              max: 1,
+              valueLabel: settings.wordartContrast.toStringAsFixed(2),
+              onChanged: (v) => update(settings.copyWith(wordartContrast: v)),
+            ),
+            LabeledSlider(
+              label: 'Palette',
+              value: settings.wordartPalette,
+              min: 2,
+              max: 64,
+              valueLabel: settings.wordartPalette.round() >= 64
+                  ? 'Full'
+                  : settings.wordartPalette.toStringAsFixed(0),
+              onChanged: (v) => update(settings.copyWith(wordartPalette: v)),
+            ),
+            LabeledSlider(
+              label: 'Ground',
+              value: settings.wordartGround,
+              min: 0,
+              max: 1,
+              valueLabel: settings.wordartGround.toStringAsFixed(2),
+              onChanged: (v) => update(settings.copyWith(wordartGround: v)),
+            ),
+            LabeledSlider(
+              label: 'Vividness',
+              value: settings.wordartVivid,
+              min: 0,
+              max: 1,
+              valueLabel: settings.wordartVivid.toStringAsFixed(2),
+              onChanged: (v) => update(settings.copyWith(wordartVivid: v)),
+            ),
+          ],
+          if (_showEmptySpace)
+            LabeledSlider(
+              label: 'Empty space',
+              value: settings.wordartEmpty,
+              min: 0,
+              max: 1,
+              valueLabel: '${(settings.wordartEmpty * 100).round()}%',
+              onChanged: (v) => update(settings.copyWith(wordartEmpty: v)),
+            ),
+          LabeledSlider(
+            label: 'Coverage',
+            value: settings.wordartCoverage,
+            min: 0,
+            max: 1,
+            valueLabel: '${(settings.wordartCoverage * 100).round()}%',
+            onChanged: (v) => update(settings.copyWith(wordartCoverage: v)),
+          ),
+          Text(
+            'Packs whole phrases into the gaps so the subject fills in denser '
+            '(0% = sparse). The background stays bare.',
+            style: AppTypography.caption,
+          ),
+          const SizedBox(height: AppSpacing.x2),
+          Row(
+            children: [
+              Expanded(
+                child: Text('True photo colours', style: AppTypography.label),
+              ),
+              Switch(
+                value: trueColor,
+                onChanged: (v) =>
+                    update(settings.copyWith(wordartTrueColor: v)),
+              ),
+            ],
+          ),
+          Text(
+            'Each word takes the exact colour of the photo under it. Turn off '
+            'to boost saturation and brightness.',
+            style: AppTypography.caption,
+          ),
+          if (!trueColor) ...[
+            const SizedBox(height: AppSpacing.x2),
+            LabeledSlider(
+              label: 'Saturation',
+              value: settings.wordartSaturate,
+              min: 1.25,
+              max: 1.75,
+              valueLabel: pct(settings.wordartSaturate, 1.25, 1.75),
+              onChanged: (v) => update(settings.copyWith(wordartSaturate: v)),
+            ),
+            LabeledSlider(
+              label: 'Brightness',
+              value: settings.wordartBrightness,
+              min: 1,
+              max: 1.75,
+              valueLabel: pct(settings.wordartBrightness, 1, 1.75),
+              onChanged: (v) =>
+                  update(settings.copyWith(wordartBrightness: v)),
+            ),
+            Text(
+              "Boost the words' colour (background untouched). Applies to the "
+              'preview and the download.',
+              style: AppTypography.caption,
+            ),
+          ],
+        ],
       ],
     );
   }
 
-  /// Two-level mode selector: top-level group (Photos / Shapes / Words), then a
+  /// Two-level mode selector: top-level group (Photos / Words / Collage / Shapes), then a
   /// sub-choice — a photo layout, a shape style, or nothing for words. Mirrors
   /// the web mode grouping. The shape row flattens the curved flag + motif into
   /// one choice (Cut stone = ancient; Cobblestone / ♥ / 🏀 / 🌸 = ancient-curved).
@@ -663,10 +813,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
           onSelected: selectGroup,
           options: [
             const SegmentOption('photo', '🖼 Photos'),
-            const SegmentOption('shape', '🪨 Shapes'),
             const SegmentOption('word', '🔤 Words'),
             if (collageOn || mode == 'collage')
               const SegmentOption('collage', '✂️ Collage'),
+            const SegmentOption('shape', '🪨 Shapes'),
           ],
         ),
         if (group == 'photo') ...[
@@ -1023,38 +1173,17 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
     _controller.setTileCrop(tile.id, result.cleared ? null : result.crop);
   }
 
-  void _onExport(BuildContext context, bool canRender) {
-    if (canRender) {
-      ref.read(renderControllerProvider.notifier).reset();
-      context.push('/create/export');
-      return;
+  Future<void> _onExport(BuildContext context, bool canRender) async {
+    final mode = ref.read(studioControllerProvider).settings.mosaicMode;
+    trackFunnel(ref, 'download_click', mode: mode, meta: {'hasTokens': canRender});
+    if (!canRender) {
+      // No tokens: the paywall sheet (their design, what they get, one-tap purchase).
+      // A purchase there continues straight to the export.
+      final unlocked = await showExportPaywall(context, ref);
+      if (!unlocked || !context.mounted) return;
     }
-    // No tokens — explain and offer to buy.
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceRaised,
-        title: Text('You’re out of tokens', style: AppTypography.title),
-        content: Text(
-          'A full-quality export costs 1 token. Building and previewing your '
-          'mosaic is free — you only spend a token when you export.',
-          style: AppTypography.body,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Not now'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              context.push('/account');
-            },
-            child: const Text('Buy tokens'),
-          ),
-        ],
-      ),
-    );
+    ref.read(renderControllerProvider.notifier).reset();
+    context.push('/create/export');
   }
 
   void _showTokenInfo(BuildContext context) {
@@ -1319,7 +1448,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                 setState(() {
                                   if (d.scale != 1.0) {
                                     _zoom = (_zoomAtGestureStart * d.scale)
-                                        .clamp(1.0, _maxZoom);
+                                        .clamp(
+                                          1.0,
+                                          _zoomCap(
+                                            plan,
+                                            fit!.scale,
+                                            MediaQuery.devicePixelRatioOf(
+                                              context,
+                                            ),
+                                          ),
+                                        );
                                   }
                                   // Pan in BASE pixels so a drag tracks the finger at
                                   // every zoom level.
@@ -1366,6 +1504,9 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                                     ? WordArtPreview(
                                         base: studio.base!,
                                         params: wordartParamsFromState(studio),
+                                        placeholderWords: usablePhrases(
+                                          parseTextPhrases(studio.textInput),
+                                        ).isEmpty,
                                       )
                                     : Center(
                                         child: Text(
@@ -1380,7 +1521,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                               else if (plan != null && zoomed)
                                 // The web's in-cell recolour over the live painter;
                                 // sharp tiles as the zoom needs them.
-                                (settings.tileRecolor > 0 &&
+                                ((settings.tileRecolor > 0 ||
+                                            hasLook(plan.look)) &&
                                         settings.tintStrength == 0 &&
                                         _hrRecolor.image != null)
                                     // Recoloured, and each cell on screen sharp
@@ -1706,6 +1848,43 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                             ),
                           ],
                         ),
+                        // "Cinematic look" (looks.dart; web: the same checkbox).
+                        // Matching and the picture both go through it, so it
+                        // rebuilds the plan; the server grades the export the same.
+                        const SizedBox(height: AppSpacing.x3),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Cinematic look',
+                                    style: AppTypography.caption,
+                                  ),
+                                  const SizedBox(height: AppSpacing.x1),
+                                  Text(
+                                    'Gives the whole mosaic one film-style grade '
+                                    '— cool teal shadows, warm highlights — so '
+                                    'every photo sits in the same palette.',
+                                    style: AppTypography.caption.copyWith(
+                                      color: AppColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: settings.look == 'cinematic',
+                              onChanged: (v) => update(
+                                settings.copyWith(
+                                  look: v ? 'cinematic' : 'none',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                         // Breathing room before the sliders start —
                         // a switch butted straight against a slider
                         // track reads as one control with two parts.
@@ -1874,7 +2053,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                 : _StudioActionBar(
                     rendering: rendering,
                     printAllowed: isPrintRegionAllowed(),
-                    onExport: rendering
+                    // A draft is still being finished: export the finished plan.
+                    onExport: rendering || studio.planIsDraft
                         ? null
                         : () => _onExport(context, canRender),
                     // The reel generator draws every cell as a RECTANGLE. That is right
@@ -1885,13 +2065,16 @@ class _StudioScreenState extends ConsumerState<StudioScreen>
                     // path either, so this is parity, not a regression.
                     onVideo:
                         (settings.mosaicMode == 'rhombille' ||
-                            settings.mosaicMode == 'hexagon')
+                            settings.mosaicMode == 'hexagon' ||
+                            studio.planIsDraft)
                         ? null
                         : () {
                             ref.read(videoControllerProvider.notifier).reset();
                             context.push('/create/video');
                           },
-                    onPrint: () => context.push('/create/wallart'),
+                    onPrint: studio.planIsDraft
+                        ? null
+                        : () => context.push('/create/wallart'),
                   )),
     );
   }
@@ -1915,6 +2098,8 @@ class _PhraseChipsField extends StatefulWidget {
 class _PhraseChipsFieldState extends State<_PhraseChipsField> {
   final TextEditingController _draft = TextEditingController();
   final FocusNode _focus = FocusNode();
+  /// The last add was refused: a phrase had more than [maxPhraseWords] words.
+  bool _rejected = false;
 
   // Same splitting as the renderer, so a project saved with a whole pasted list
   // in one phrase shows as separate chips.
@@ -1923,14 +2108,20 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
   void _add(String raw) {
     final phrases = _phrases;
     var added = false;
+    final tooLong = <String>[];
     // A paste may hold a whole list ("a • b • c", one per line, …) — add each
-    // new, non-duplicate phrase.
+    // new, non-duplicate phrase. Too-long ones stay in the field to be shortened.
     for (final s in splitPhrases(raw)) {
+      if (isPhraseTooLong(s)) {
+        tooLong.add(s);
+        continue;
+      }
       if (phrases.any((p) => p.toLowerCase() == s.toLowerCase())) continue;
       phrases.add(s);
       added = true;
     }
-    _draft.clear();
+    _draft.text = tooLong.join(' • ');
+    setState(() => _rejected = tooLong.isNotEmpty);
     if (added) widget.onChanged(phrases.join('\n'));
   }
 
@@ -1951,6 +2142,7 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
   @override
   Widget build(BuildContext context) {
     final phrases = _phrases;
+    final tooLongCount = phrases.where(isPhraseTooLong).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1960,16 +2152,54 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
             runSpacing: AppSpacing.x2,
             children: [
               for (var i = 0; i < phrases.length; i++)
-                Chip(
-                  label: Text(phrases[i], style: AppTypography.caption),
-                  onDeleted: () => _removeAt(i),
-                  deleteIcon: const Icon(Icons.close, size: 15),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                  backgroundColor: AppColors.background,
-                  side: const BorderSide(color: AppColors.border),
-                ),
+                // Too-long phrases (older projects) stay listed but crossed out —
+                // they're left out of the picture.
+                isPhraseTooLong(phrases[i])
+                    ? Chip(
+                        avatar: const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 15,
+                          color: _warnColor,
+                        ),
+                        label: Text(
+                          phrases[i],
+                          style: AppTypography.caption.copyWith(
+                            color: _warnColor,
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                        ),
+                        onDeleted: () => _removeAt(i),
+                        deleteIcon: const Icon(Icons.close, size: 15),
+                        materialTapTargetSize:
+                            MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        backgroundColor: AppColors.background,
+                        side: BorderSide(
+                          color: _warnColor.withValues(alpha: 0.5),
+                        ),
+                      )
+                    : Chip(
+                        label: Text(phrases[i], style: AppTypography.caption),
+                        onDeleted: () => _removeAt(i),
+                        deleteIcon: const Icon(Icons.close, size: 15),
+                        materialTapTargetSize:
+                            MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        backgroundColor: AppColors.background,
+                        side: const BorderSide(color: AppColors.border),
+                      ),
             ],
+          ),
+          const SizedBox(height: AppSpacing.x2),
+        ],
+        if (tooLongCount > 0) ...[
+          Text(
+            tooLongCount == 1
+                ? '1 phrase has more than $maxPhraseWords words and is left out '
+                      'of the picture (⚠). Shorten or remove it.'
+                : '$tooLongCount phrases have more than $maxPhraseWords words '
+                      'and are left out of the picture (⚠). Shorten or remove them.',
+            style: AppTypography.caption.copyWith(color: _warnColor),
           ),
           const SizedBox(height: AppSpacing.x2),
         ],
@@ -1980,6 +2210,9 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
               child: TextField(
                 controller: _draft,
                 focusNode: _focus,
+                onChanged: (_) {
+                  if (_rejected) setState(() => _rejected = false);
+                },
                 textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.sentences,
                 style: AppTypography.body,
@@ -2014,6 +2247,17 @@ class _PhraseChipsFieldState extends State<_PhraseChipsField> {
               child: const Text('Add'),
             ),
           ],
+        ),
+        const SizedBox(height: AppSpacing.x1),
+        Text(
+          _rejected
+              ? 'A phrase can have at most $maxPhraseWords words — shorten it '
+                    'and add again.'
+              : 'Up to $maxPhraseWords words per phrase · paste a list (one per '
+                    'line or a • b • c)',
+          style: AppTypography.caption.copyWith(
+            color: _rejected ? _warnColor : null,
+          ),
         ),
       ],
     );
@@ -2424,23 +2668,44 @@ class _PlanLayerState extends State<_PlanLayer>
     super.dispose();
   }
 
-  Widget _paint(double appear) => CustomPaint(
-    painter: MosaicPreviewPainter(
+  Widget _paint(double appear) {
+    MosaicPreviewPainter painter(double a) => MosaicPreviewPainter(
       plan: widget.plan,
       tileImages: widget.tileImages,
       baseImage: widget.baseImage,
       tintStrength: widget.tintStrength,
       outputSaturation: widget.outputSaturation,
       tileRecolor: widget.tileRecolor,
+      appear: a,
+    );
+    final plan = widget.plan;
+    // Honeycomb / 3D-cube cells are not rectangles: they reveal tile by tile.
+    if (appear < 1 &&
+        (plan.hexagon || plan.placements.any((p) => p.quad != null))) {
+      return CustomPaint(painter: painter(appear));
+    }
+    // The finished picture is drawn once into an image — not re-drawn tile by tile
+    // every frame something else on screen moves — and the reveal plays from slices
+    // of it (snapshot_paint.dart).
+    return SnapshotPaint(
+      painter: painter(1),
       appear: appear,
-    ),
-  );
+      pieces: (size) => previewCellRects(plan, size),
+      place: revealCell,
+    );
+  }
 
   /// The settled picture: the live painter, with the web's in-cell tile recolour
   /// rendered over the mosaic's rect (recolor_bake.dart).
   Widget _settled() {
-    if (!(widget.tileRecolor > 0)) return _paint(1);
+    // A look is a per-pixel grade: only the baked picture carries it.
+    if (!(widget.tileRecolor > 0) && !hasLook(widget.plan.look)) {
+      return _paint(1);
+    }
     final plan = widget.plan;
+    // Once the recoloured picture exists it covers the whole mosaic: painting every
+    // tile underneath it too only cost GPU time (and colour-grid work) for nothing.
+    final covered = widget.hr != null;
     return LayoutBuilder(
       builder: (context, c) {
         final fit = computeMosaicFit(
@@ -2451,7 +2716,7 @@ class _PlanLayerState extends State<_PlanLayer>
         return Stack(
           fit: StackFit.expand,
           children: [
-            _paint(1),
+            if (!covered) _paint(1),
             Positioned(
               left: fit.ox,
               top: fit.oy,
@@ -2576,7 +2841,7 @@ class _StudioActionBar extends StatelessWidget {
 
   /// Null when the current mode has no video path — see the note at the call site.
   final VoidCallback? onVideo;
-  final VoidCallback onPrint;
+  final VoidCallback? onPrint;
 
   @override
   Widget build(BuildContext context) {
@@ -2942,6 +3207,7 @@ class _StudioView {
         identical(a.settings, b.settings) &&
         identical(a.plan, b.plan) &&
         a.isPlanning == b.isPlanning &&
+        a.planIsDraft == b.planIsDraft &&
         a.isUploadingBase == b.isUploadingBase &&
         a.isUploadingTiles == b.isUploadingTiles &&
         a.isRestoring == b.isRestoring &&

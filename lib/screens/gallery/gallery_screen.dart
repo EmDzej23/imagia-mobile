@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -124,7 +123,7 @@ class _ProjectGrid extends ConsumerWidget {
 class _ProjectCard extends ConsumerWidget {
   const _ProjectCard({required this.project, required this.thumbs});
   final ProjectSummary project;
-  final AsyncValue<Map<String, Uint8List>> thumbs;
+  final AsyncValue<ProjectThumbs> thumbs;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -259,7 +258,7 @@ class _ProjectCard extends ConsumerWidget {
 class _CardImage extends StatelessWidget {
   const _CardImage({required this.project, required this.thumbs});
   final ProjectSummary project;
-  final AsyncValue<Map<String, Uint8List>> thumbs;
+  final AsyncValue<ProjectThumbs> thumbs;
 
   @override
   Widget build(BuildContext context) {
@@ -276,7 +275,8 @@ class _CardImage extends StatelessWidget {
     if (url == null) {
       child = placeholder();
     } else {
-      final bytes = thumbs.asData?.value[url];
+      final got = thumbs.asData?.value;
+      final bytes = got?.bytes[url];
       if (bytes != null) {
         child = LayoutBuilder(
           builder: (context, c) => Image.memory(
@@ -291,7 +291,7 @@ class _CardImage extends StatelessWidget {
                 : null,
           ),
         );
-      } else if (thumbs.isLoading) {
+      } else if (thumbs.isLoading || (got != null && !got.done)) {
         child = const GradientShimmerBox();
       } else {
         child = placeholder();

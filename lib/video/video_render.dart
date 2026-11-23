@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../mosaic/shared.dart'
     show getBaseTileId, isTileFlipped, saturationColorFilter;
 import '../mosaic/recolor_bake.dart';
+import '../mosaic/looks.dart';
 import '../mosaic/tile_recolor.dart';
 import '../mosaic/types.dart';
 
@@ -841,7 +842,8 @@ Future<void> attachVideoRecolor(
   Map<String, ui.Image> tileImages,
 ) async {
   final strength = plan.tileRecolor;
-  if (!(strength > 0)) return;
+  // The atlas also carries the look (bakeMosaicWindow applies plan.look).
+  if (!(strength > 0) && !hasLook(plan.look)) return;
   if (plan.hexagon || plan.placements.any((p) => p.quad != null)) {
     await _attachFlatRecolor(anim, plan, tileImages);
     return;

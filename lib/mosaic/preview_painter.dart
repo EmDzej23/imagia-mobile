@@ -12,6 +12,23 @@ import 'local_recolor.dart';
 import 'tile_recolor.dart';
 import 'types.dart';
 
+/// The image to draw a tile from when it spans [need] device px on screen: the
+/// sharpest copy held ([hr]), or the [thumb] — asking [hr] for a sharper copy when that
+/// is not enough. Never trades a sharp copy already held for the thumbnail, so a cell
+/// does not blur back while a still sharper one loads.
+ui.Image sharperTile(HiResTiles hr, String tileId, ui.Image thumb, double need) {
+  final thumbLong = math.max(thumb.width, thumb.height);
+  final sharp = hr.best(tileId);
+  final img =
+      sharp != null && math.max(sharp.width, sharp.height) > thumbLong
+          ? sharp
+          : thumb;
+  if (need > math.max(img.width, img.height) && !hr.exhausted(tileId)) {
+    hr.want(tileId, need);
+  }
+  return img;
+}
+
 /// Deterministic pseudo-random in [0, 1) from an int — used to scatter the
 /// tile-reveal order so the mosaic "assembles" rather than wiping in.
 double _hash01(int n) {
@@ -393,6 +410,37 @@ void _drawCell(
   if (hex != null) canvas.restore();
 }
 
+/// Cell [i] of the reveal at progress [appear] (< 1): its tile fades in, grows and
+/// drifts home from a scattered direction, in a scattered order. Null = not yet shown.
+({Rect rect, double opacity})? revealCell(int i, Rect dst, double appear) {
+  const window = MosaicPreviewPainter._tileWindow;
+  final start = _hash01(i) * (1 - window);
+  final lt = ((appear - start) / window).clamp(0.0, 1.0);
+  if (lt <= 0) return null;
+  final e = Curves.easeOutCubic.transform(lt);
+  final scale = 0.55 + 0.45 * e;
+  final ang = _hash01(i * 2 + 1) * 2 * math.pi;
+  final dist = (1 - e) * dst.width * 1.3;
+  return (
+    rect: Rect.fromCenter(
+      center: dst.center.translate(math.cos(ang) * dist, math.sin(ang) * dist),
+      width: dst.width * scale,
+      height: dst.height * scale,
+    ),
+    opacity: e,
+  );
+}
+
+/// The cells of [plan] where [MosaicPreviewPainter] draws them in [size].
+List<Rect> previewCellRects(SlimMosaicPlan plan, Size size) {
+  final fit = computeMosaicFit(size, plan.baseWidth, plan.baseHeight);
+  final s = fit.scale;
+  return [
+    for (final p in plan.placements)
+      Rect.fromLTWH(fit.ox + p.x * s, fit.oy + p.y * s, p.width * s, p.height * s),
+  ];
+}
+
 class MosaicPreviewPainter extends CustomPainter {
   MosaicPreviewPainter({
     required this.plan,
@@ -472,22 +520,10 @@ class MosaicPreviewPainter extends CustomPainter {
       var drawRect = dst;
       double opacity = 1;
       if (animating) {
-        final start = _hash01(i) * (1 - _tileWindow);
-        final lt = ((appear - start) / _tileWindow).clamp(0.0, 1.0);
-        if (lt <= 0) continue; // not yet revealed
-        final e = Curves.easeOutCubic.transform(lt);
-        opacity = e;
-        final scale = 0.55 + 0.45 * e;
-        final ang = _hash01(i * 2 + 1) * 2 * math.pi;
-        final dist = (1 - e) * dst.width * 1.3;
-        drawRect = Rect.fromCenter(
-          center: dst.center.translate(
-            math.cos(ang) * dist,
-            math.sin(ang) * dist,
-          ),
-          width: dst.width * scale,
-          height: dst.height * scale,
-        );
+        final r = revealCell(i, dst, appear);
+        if (r == null) continue; // not yet revealed
+        drawRect = r.rect;
+        opacity = r.opacity;
       }
 
       final img = tileImages[p.tileId];
@@ -639,14 +675,7 @@ class MosaicZoomPainter extends CustomPainter {
         // larger than their sample rect, so they need a bit more.
         final shapeK = p.quad != null ? 2.0 : (plan.hexagon ? 1.6 : 1.0);
         final need = math.max(dw, dh) * shapeK * devicePixelRatio;
-        if (need > math.max(thumb.width, thumb.height) * 1.25) {
-          final sharp = hr.get(p.tileId, need);
-          if (sharp != null) {
-            img = sharp;
-          } else {
-            hr.want(p.tileId, need);
-          }
-        }
+        img = sharperTile(hr, p.tileId, thumb, need);
       }
       if (img == null) {
         final c = p.regionAvgColor;

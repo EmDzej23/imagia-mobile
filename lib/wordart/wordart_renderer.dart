@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 
+import 'parse_texts.dart' show isPhraseTooLong;
+
 /// Word-art (tile-less) renderer — a typographic portrait. Dart port of the web
 /// renderer `foto-mozaik/lib/wordart/wordart-renderer.ts`. Words are the ONLY
 /// ink (no background fill beyond a photo-derived ground): they land only where
@@ -86,6 +88,9 @@ class WordArtParams {
     this.seedNonce = 0,
     this.caption = '',
     this.captionColor,
+    this.saturate = 1,
+    this.brightness = 1,
+    this.trueColor = false,
   });
 
   /// Phrases — each kept whole per placement (multi-word phrases wrap).
@@ -130,6 +135,15 @@ class WordArtParams {
   /// (the base photo's colour at the title's position).
   final String? captionColor;
 
+  /// Final WORD-colour boost replicating CSS `saturate()` / `brightness()` (ground
+  /// untouched). 1 = no boost. Baked into the ink colours so every output matches.
+  final double saturate;
+  final double brightness;
+
+  /// Words take the exact (footprint-averaged) photo colour: no vividness lift, tone
+  /// push or legibility margin. Callers pass saturate/brightness 1 with it.
+  final bool trueColor;
+
   @override
   bool operator ==(Object other) =>
       other is WordArtParams &&
@@ -144,7 +158,10 @@ class WordArtParams {
       other.coverage == coverage &&
       other.seedNonce == seedNonce &&
       other.caption == caption &&
-      other.captionColor == captionColor;
+      other.captionColor == captionColor &&
+      other.saturate == saturate &&
+      other.brightness == brightness &&
+      other.trueColor == trueColor;
 
   @override
   int get hashCode => Object.hash(
@@ -160,6 +177,9 @@ class WordArtParams {
         seedNonce,
         caption,
         captionColor,
+        saturate,
+        brightness,
+        trueColor,
       );
 
   static bool _listEq(List<String> a, List<String> b) {
@@ -236,11 +256,55 @@ double _applyContrast(double n, double k) {
       : 1 - 0.5 * math.pow(2 * (1 - n), e).toDouble();
 }
 
+/// Vividness boost on an rgb triplet — replicates CSS `saturate(s) brightness(b)`.
+List<double> _vividBoost(double r, double g, double b, double s, double bright) => [
+      ((0.213 + 0.787 * s) * r + (0.715 - 0.715 * s) * g + (0.072 - 0.072 * s) * b) *
+          bright,
+      ((0.213 - 0.213 * s) * r + (0.715 + 0.285 * s) * g + (0.072 - 0.072 * s) * b) *
+          bright,
+      ((0.213 - 0.213 * s) * r + (0.715 - 0.715 * s) * g + (0.072 + 0.928 * s) * b) *
+          bright,
+    ];
+
+/// sRGB 0..255 ↔ linear light 0..1.
+double _toLin(double v) {
+  final c = v / 255;
+  return c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+}
+
+int _toSrgb(double l) {
+  final c = l <= 0
+      ? 0.0
+      : l >= 1
+          ? 1.0
+          : l <= 0.0031308
+              ? l * 12.92
+              : 1.055 * math.pow(l, 1 / 2.4) - 0.055;
+  return (c * 255).round();
+}
+
+/// How much of a word-covered area is actually ink (letters + stroke) — the rest is
+/// the ground showing between and inside the letters.
+const double _inkCover = 0.4;
+
+/// "True photo colours" ink: the colour that, seen together with the ground showing
+/// through the letters, adds up to the photo's own colour (mixed in linear light, as
+/// the eye does). Where the photo is brighter than the words can reach, the ink clips
+/// to the lightest it can be. Mirrors the web `trueInk`.
+Color _trueInk(double r, double g, double b, List<int> ground) {
+  const c = _inkCover;
+  int ch(double t, int gr) => _toSrgb((_toLin(t) - (1 - c) * _toLin(gr.toDouble())) / c);
+  return Color.fromARGB(255, ch(r, ground[0]), ch(g, ground[1]), ch(b, ground[2]));
+}
+
 /// The word's ink colour — close to the real sampled photo colour, saturated by
 /// [vivid], nudged by [tone]/[lift], then pushed to keep [_readMargin] of
-/// luminance contrast from the ground [bgLum] so it stays legible.
+/// luminance contrast from the ground [bgLum] so it stays legible. A [trueGround]
+/// switches to [_trueInk]; [boostSat]/[boostBright] apply the final word boost.
 Color _inkColor(double r, double g, double b, double vivid, double tone,
-    bool dark, double bgLum, double lift) {
+    bool dark, double bgLum, double lift,
+    [double boostSat = 1, double boostBright = 1, List<int>? trueGround]) {
+  if (trueGround != null) return _trueInk(r, g, b, trueGround);
   final lum = 0.299 * r + 0.587 * g + 0.114 * b;
   final sat = 1 + 1.6 * vivid;
   var nr = lum + (r - lum) * sat;
@@ -274,6 +338,14 @@ Color _inkColor(double r, double g, double b, double vivid, double tone,
       ng *= m;
       nb *= m;
     }
+  }
+  // Clamp BEFORE boosting so the maths matches a CSS filter on the drawn colour.
+  if (boostSat != 1 || boostBright != 1) {
+    final v = _vividBoost(_c255(nr).toDouble(), _c255(ng).toDouble(),
+        _c255(nb).toDouble(), boostSat, boostBright);
+    nr = v[0];
+    ng = v[1];
+    nb = v[2];
   }
   return Color.fromARGB(255, _c255(nr), _c255(ng), _c255(nb));
 }
@@ -379,17 +451,126 @@ List<_Line> _wrapToLines(
   return out;
 }
 
+/// Where and how big the photo title sits (output coords). Shared by the packing
+/// pass and [buildWordArtCaptionMask] so both agree on the title box.
+class _CaptionBox {
+  _CaptionBox(this.text, this.size, this.cx, this.cy, this.w, this.h);
+  final String text;
+  final double size, cx, cy, w, h;
+}
+
+/// The title — one large horizontal phrase in the bottom-left, always upper-cased —
+/// or null when there is none. Mirrors the web renderer's caption sizing.
+_CaptionBox? _captionBox(WordArtParams p, double w, double h) {
+  final text = p.caption.trim().replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
+  if (text.isEmpty) return null;
+  final longSide = math.max(w, h);
+  final maxWord = math.max(16.0, p.density * (longSide / _referenceLong));
+  final tp = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: const TextStyle(
+          fontFamily: 'Inter', fontWeight: FontWeight.w900, fontSize: 100),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  final capUnitW = math.max(1e-3, tp.width / 100.0);
+  final pad = longSide * 0.04;
+  final targetW = w * 0.42; // aim ~42% of the width
+  final maxCapW = w - 2 * pad; // never overflow the margins
+  var capSize = maxWord * 1.8; // clearly larger than the words…
+  if (capUnitW * capSize > targetW) capSize = targetW / capUnitW; // …fit the target…
+  capSize = math.max(capSize, maxWord * 1.05); // …never smaller than a word…
+  if (capUnitW * capSize > maxCapW) capSize = maxCapW / capUnitW; // …hard width cap.
+  capSize = math.max(8.0, capSize);
+  final capW = capUnitW * capSize;
+  final capH = capSize * _lineInk;
+  return _CaptionBox(
+      text, capSize, pad + capW / 2, h - pad - capH / 2, capW, capH);
+}
+
+/// The title's letters rasterised (white on black, fattened) over its box, at
+/// [scale] mask px per output px. Lets the title-fill pass pack small words into
+/// the title's negative space without touching a letter.
+class WordArtCaptionMask {
+  const WordArtCaptionMask(this.mw, this.mh, this.scale, this.rgba);
+  final int mw, mh;
+  final double scale;
+  final Uint8List rgba;
+}
+
+/// Rasterises the title mask — the async half of the title fill (reading pixels
+/// back is async in Flutter; the packing pass itself is sync). Null when there's no
+/// title or the fill is off (coverage 0).
+Future<WordArtCaptionMask?> buildWordArtCaptionMask(
+    WordArtParams p, double w, double h) async {
+  if (p.coverage <= 0 || w < 2 || h < 2) return null;
+  final cap = _captionBox(p, w, h);
+  if (cap == null) return null;
+  final mScale = math.min(1.0, 600 / math.max(cap.w, cap.h));
+  final mw = math.max(1, (cap.w * mScale).round());
+  final mh = math.max(1, (cap.h * mScale).round());
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  canvas.drawRect(Rect.fromLTWH(0, 0, mw.toDouble(), mh.toDouble()),
+      Paint()..color = const Color(0xFF000000));
+  canvas.translate(mw / 2, mh / 2);
+  canvas.scale(mScale, mScale);
+  // Drawn exactly as WordArtPainter draws the title, but with a fatter stroke so the
+  // fill words keep clear of the ink.
+  TextPainter painter(Paint? fg) => TextPainter(
+        text: TextSpan(
+          text: cap.text,
+          style: TextStyle(
+            fontFamily: 'Inter',
+            fontWeight: FontWeight.w900,
+            fontSize: cap.size,
+            color: fg == null ? const Color(0xFFFFFFFF) : null,
+            foreground: fg,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout();
+  final stroke = painter(Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = cap.size * _inkStroke * 2.2
+    ..strokeJoin = StrokeJoin.round
+    ..color = const Color(0xFFFFFFFF));
+  stroke.paint(canvas, Offset(-stroke.width / 2, -stroke.height / 2));
+  final fill = painter(null);
+  fill.paint(canvas, Offset(-fill.width / 2, -fill.height / 2));
+  final img = await rec.endRecording().toImage(mw, mh);
+  try {
+    final data = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) return null;
+    return WordArtCaptionMask(mw, mh, mScale, data.buffer.asUint8List());
+  } finally {
+    img.dispose();
+  }
+}
+
+/// [buildWordArtGeometry] with the title fill: rasterises the title mask first.
+/// Use this wherever the result is shown or exported.
+Future<WordArtGeometry> buildWordArtGeometryAsync(
+    Uint8List rgba, int sw, int sh, double w, double h, WordArtParams p) async {
+  final mask = await buildWordArtCaptionMask(p, w, h);
+  return buildWordArtGeometry(rgba, sw, sh, w, h, p, captionMask: mask);
+}
+
 /// Pure packing pass. [rgba] is the pre-sampled base buffer (sw×sh) — it is NOT
-/// re-sampled here. [w]/[h] are the OUTPUT dimensions.
+/// re-sampled here. [w]/[h] are the OUTPUT dimensions. Without a [captionMask] the
+/// title gets no fill words (see [buildWordArtGeometryAsync]).
 WordArtGeometry buildWordArtGeometry(
-    Uint8List rgba, int sw, int sh, double w, double h, WordArtParams p) {
+    Uint8List rgba, int sw, int sh, double w, double h, WordArtParams p,
+    {WordArtCaptionMask? captionMask}) {
   if (w < 2 || h < 2) {
     return const WordArtGeometry(ground: Color(0xFF000000), placements: []);
   }
 
   final phrases = p.phrases
       .map((s) => s.trim().replaceAll(RegExp(r'\s+'), ' '))
-      .where((s) => s.isNotEmpty)
+      .where((s) => s.isNotEmpty && !isPhraseTooLong(s))
       .toList();
   if (phrases.isEmpty) phrases.add('WORD');
 
@@ -487,6 +668,10 @@ WordArtGeometry buildWordArtGeometry(
   mg *= f;
   mb *= f;
   final ground = Color.fromARGB(255, _c255(mr), _c255(mg), _c255(mb));
+  final boostSat = p.saturate;
+  final boostBright = p.brightness;
+  final List<int>? trueGround =
+      p.trueColor ? [_c255(mr), _c255(mg), _c255(mb)] : null;
 
   final k0 = p.palette;
   final palette =
@@ -589,6 +774,24 @@ WordArtGeometry buildWordArtGeometry(
         if (arr == null) continue;
         for (final bi in arr) {
           if (obbOverlap(o, boxes[bi])) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Like collides but ignores one box (the title's own reservation, so the title
+  // fill can pack INSIDE the title box while still avoiding every other word).
+  bool collidesExcept(_Obb o, int exceptIdx) {
+    final ex = envX(o), ey = envY(o);
+    final i0 = ((o.cx - ex) / bucket).floor(), i1 = ((o.cx + ex) / bucket).floor();
+    final j0 = ((o.cy - ey) / bucket).floor(), j1 = ((o.cy + ey) / bucket).floor();
+    for (var ix = i0; ix <= i1; ix++) {
+      for (var iy = j0; iy <= j1; iy++) {
+        final arr = hash[bkey(ix, iy)];
+        if (arr == null) continue;
+        for (final bi in arr) {
+          if (bi != exceptIdx && obbOverlap(o, boxes[bi])) return true;
         }
       }
     }
@@ -783,7 +986,8 @@ WordArtGeometry buildWordArtGeometry(
         cg = pcol[1];
         cb = pcol[2];
       }
-      final col = _inkColor(cr, cg, cb, cellVivid, tone, dark, bgLum, cellLift);
+      final col = _inkColor(cr, cg, cb, cellVivid, tone, dark, bgLum, cellLift,
+          boostSat, boostBright, trueGround);
       placements.add(WordArtPlacement(
         cx: px,
         cy: py,
@@ -799,65 +1003,15 @@ WordArtGeometry buildWordArtGeometry(
   }
 
   // Optional photo title — one large horizontal word reserved in the bottom-left; the fill
-  // packs around its box (inserted BEFORE the loop). Always upper-cased.
-  final caption =
-      p.caption.trim().replaceAll(RegExp(r'\s+'), ' ').toUpperCase();
-  if (caption.isNotEmpty) {
-    double measureCap(String str) {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: str,
-          style: const TextStyle(
-              fontFamily: 'Inter', fontWeight: FontWeight.w900, fontSize: 100),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      return tp.width / 100.0;
-    }
-
-    final capUnitW = math.max(1e-3, measureCap(caption));
-    final pad = longSide * 0.04;
-    final targetW = w * 0.42;
-    final maxCapW = w - 2 * pad;
-    var capSize = maxWord * 1.8;
-    if (capUnitW * capSize > targetW) capSize = targetW / capUnitW;
-    capSize = math.max(capSize, maxWord * 1.05);
-    if (capUnitW * capSize > maxCapW) capSize = maxCapW / capUnitW;
-    capSize = math.max(8.0, capSize);
-
-    final capW = capUnitW * capSize;
-    final capH = capSize * _lineInk;
-    final capCx = pad + capW / 2;
-    final capCy = h - pad - capH / 2;
-    final capMargin = capSize * _inkStroke * 0.5 + 1;
-    insert(_Obb(capCx, capCy, capW / 2 + capMargin, capH / 2 + capMargin, 1, 0));
-
-    Color capCol;
-    final chosen = _parseCssColor(p.captionColor);
-    if (chosen != null) {
-      capCol = chosen;
-    } else {
-      final cj = (by(capCy) * sw + bx(capCx)) * 4;
-      var ccr = base[cj].toDouble(),
-          ccg = base[cj + 1].toDouble(),
-          ccb = base[cj + 2].toDouble();
-      if (palette != null) {
-        final pc = _nearest(palette, ccr, ccg, ccb);
-        ccr = pc[0];
-        ccg = pc[1];
-        ccb = pc[2];
-      }
-      capCol = _inkColor(ccr, ccg, ccb, vivid, 1, dark, bgLum, 0);
-    }
-    placements.add(WordArtPlacement(
-      cx: capCx,
-      cy: capCy,
-      size: capSize,
-      angle: 0,
-      weight: 900,
-      lines: [caption],
-      color: capCol,
-    ));
+  // packs around its box (inserted BEFORE the loop). It's ADDED LAST (after the title
+  // fill below) so it paints on top of its fill words, as on the web.
+  final cap = _captionBox(p, w, h);
+  var capBoxIdx = -1;
+  if (cap != null) {
+    // Margin absorbs the app↔server glyph-rasteriser difference (same as the web).
+    final capMargin = cap.size * 0.05 + 1;
+    capBoxIdx = boxes.length;
+    insert(_Obb(cap.cx, cap.cy, cap.w / 2 + capMargin, cap.h / 2 + capMargin, 1, 0));
   }
 
   final attempts = ((w * h) / (minWord * minWord) * _attemptFactor).ceil();
@@ -959,6 +1113,163 @@ WordArtGeometry buildWordArtGeometry(
         placeWordAt(px, py, tone, vivid, 0, 0, covSizes, true);
       }
     }
+  }
+
+  // TITLE-FILL PASS: pack small whole phrases into the title's negative space (between
+  // and around the letters, inside the counters) so the title doesn't read as a sticker
+  // over the picture. The glyph mask keeps fill words clear of the letters, and
+  // collidesExcept() lets them pack INSIDE the title's reserved box. Mirrors the web.
+  final mask = captionMask;
+  if (cap != null && coverage > 0 && mask != null) {
+    final ax0 = cap.cx - cap.w / 2, ay0 = cap.cy - cap.h / 2;
+    final ax1 = cap.cx + cap.w / 2, ay1 = cap.cy + cap.h / 2;
+    final mScale = mask.scale, mw = mask.mw, mh = mask.mh, md = mask.rgba;
+    // Small clearance (mask px) so fill words don't kiss the letter edges.
+    final clr = math.max(1, (cap.size * 0.02 * mScale).round());
+    bool onInk(double px, double py) {
+      final ix = ((px - ax0) * mScale).round(), iy = ((py - ay0) * mScale).round();
+      for (var oy = -clr; oy <= clr; oy += clr) {
+        for (var ox = -clr; ox <= clr; ox += clr) {
+          final jx = ix + ox, jy = iy + oy;
+          if (jx < 0 || jy < 0 || jx >= mw || jy >= mh) return true;
+          if (md[(jy * mw + jx) * 4] > 128) return true;
+        }
+      }
+      return false;
+    }
+
+    final fMin = math.max(6.0, minWord * 0.5);
+    final fTop = math.max(fMin + 1, cap.size * 0.3);
+    final fSizes = <double>[];
+    for (var s = fTop; s >= fMin; s *= _scaleStep) {
+      fSizes.add(s);
+    }
+    final fStep = math.max(fMin, fMin * 1.1);
+    final fRnd = _makeRng(8123 + p.seedNonce * 271);
+    for (var gy = ay0 + fStep * 0.5; gy < ay1; gy += fStep) {
+      for (var gx = ax0 + fStep * 0.5; gx < ax1; gx += fStep) {
+        final px = gx + (fRnd() - 0.5) * fStep, py = gy + (fRnd() - 0.5) * fStep;
+        if (px < ax0 || py < ay0 || px >= ax1 || py >= ay1 || onInk(px, py)) {
+          continue;
+        }
+        var pick = 0;
+        if (phrases.length > 1) {
+          var mn = 1 << 30;
+          for (var i = 0; i < phrases.length; i++) {
+            if (useCount[i] < mn) mn = useCount[i];
+          }
+          var cnt = 0;
+          for (var i = 0; i < phrases.length; i++) {
+            if (useCount[i] == mn) cnt++;
+          }
+          var r = (fRnd() * cnt).toInt();
+          for (var i = 0; i < phrases.length; i++) {
+            if (useCount[i] == mn) {
+              if (r == 0) {
+                pick = i;
+                break;
+              }
+              r--;
+            }
+          }
+        }
+        const wt = 800;
+        final m = measurePhrase(wt, phrases[pick]);
+        final maxL = math.min(_maxLines, m.words.length);
+        for (final s in fSizes) {
+          var bF = 0.0;
+          var bLines = <_Line>[];
+          var bMw = 0.0, bHPer = 0.0;
+          for (var l = 1; l <= maxL; l++) {
+            final lns = _wrapToLines(m.words, m.widths, m.spaceW, l);
+            var mwid = 0.0;
+            for (final ln in lns) {
+              if (ln.w > mwid) mwid = ln.w;
+            }
+            final hPer = _lineInk + (lns.length - 1) * _lineStep;
+            final fF = s / math.max(mwid, hPer);
+            if (fF > bF) {
+              bF = fF;
+              bLines = lns;
+              bMw = mwid;
+              bHPer = hPer;
+            }
+          }
+          if (bF < 3) continue;
+          final margin = bF * _inkStroke * 0.5 + 1;
+          final hw = (bMw * bF) / 2 + margin, hh = (bHPer * bF) / 2 + margin;
+          if (px - hw < ax0 || py - hh < ay0 || px + hw > ax1 || py + hh > ay1) {
+            continue;
+          }
+          // The whole footprint must sit off the letters — sample the box.
+          var hitsInk = false;
+          for (var sy = -1; sy <= 1 && !hitsInk; sy++) {
+            for (var sx = -1; sx <= 1; sx++) {
+              if (onInk(px + sx * hw, py + sy * hh)) {
+                hitsInk = true;
+                break;
+              }
+            }
+          }
+          if (hitsInk) continue;
+          final obb = _Obb(px, py, hw, hh, 1, 0);
+          if (collidesExcept(obb, capBoxIdx)) continue;
+          insert(obb);
+          useCount[pick]++;
+          final fc = footprintColor(px, py, hw, hh);
+          var cr = fc[0], cg = fc[1], cb = fc[2];
+          if (palette != null) {
+            final pc = _nearest(palette, cr, cg, cb);
+            cr = pc[0];
+            cg = pc[1];
+            cb = pc[2];
+          }
+          placements.add(WordArtPlacement(
+            cx: px,
+            cy: py,
+            size: bF,
+            angle: 0,
+            weight: wt,
+            lines: [for (final ln in bLines) ln.text],
+            color: _inkColor(cr, cg, cb, vivid, 0.6, dark, bgLum, 0, boostSat,
+                boostBright, trueGround),
+          ));
+          break;
+        }
+      }
+    }
+  }
+
+  // DEFERRED TITLE: added LAST so it paints on top of its fill words (hides any
+  // letter/fill overlap from the app↔server rasteriser difference).
+  if (cap != null) {
+    Color capCol;
+    final chosen = _parseCssColor(p.captionColor);
+    if (chosen != null) {
+      capCol = chosen;
+    } else {
+      final cj = (by(cap.cy) * sw + bx(cap.cx)) * 4;
+      var ccr = base[cj].toDouble(),
+          ccg = base[cj + 1].toDouble(),
+          ccb = base[cj + 2].toDouble();
+      if (palette != null) {
+        final pc = _nearest(palette, ccr, ccg, ccb);
+        ccr = pc[0];
+        ccg = pc[1];
+        ccb = pc[2];
+      }
+      capCol = _inkColor(ccr, ccg, ccb, vivid, 1, dark, bgLum, 0, boostSat,
+          boostBright, trueGround);
+    }
+    placements.add(WordArtPlacement(
+      cx: cap.cx,
+      cy: cap.cy,
+      size: cap.size,
+      angle: 0,
+      weight: 900,
+      lines: [cap.text],
+      color: capCol,
+    ));
   }
 
   return WordArtGeometry(ground: ground, placements: placements);

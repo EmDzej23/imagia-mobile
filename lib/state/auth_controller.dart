@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -96,6 +98,7 @@ class AuthController extends Notifier<AuthState> {
       state = AuthState.signedIn(res.data!);
       // Register this device for render-done push notifications.
       PushService.instance.registerToken(ref.read(apiClientProvider));
+      _sendAttribution();
     } else {
       await _tokens.clear();
       state = const AuthState.signedOut();
@@ -103,6 +106,29 @@ class AuthController extends Notifier<AuthState> {
   }
 
   Future<void> refreshUser() => _loadUser();
+
+  static bool _attributionSent = false;
+
+  /// Tells the web which platform a NEW account signed up on (web `/api/attribution`;
+  /// it only records accounts created in the last 48 h, once, so later launches and
+  /// existing accounts change nothing). Once per app run, fire-and-forget.
+  void _sendAttribution() {
+    if (_attributionSent) return;
+    _attributionSent = true;
+    try {
+      unawaited(
+        ref
+            .read(apiClientProvider)
+            .post<dynamic>(
+              '/api/attribution',
+              body: {'client': Platform.isIOS ? 'ios' : 'android', 'source': 'app'},
+            )
+            .then((_) {}, onError: (_) {}),
+      );
+    } catch (_) {
+      /* never blocks sign-in */
+    }
+  }
 
   Future<void> signInEmail(String email, String password) async {
     final token = await _auth.signInEmail(email.trim(), password);

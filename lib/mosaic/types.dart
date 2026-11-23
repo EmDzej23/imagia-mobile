@@ -195,7 +195,10 @@ class MosaicSettings {
     this.wordartGround = 0,
     this.wordartVivid = 1,
     this.wordartEmpty = 1,
-    this.wordartCoverage = 0.5,
+    this.wordartCoverage = 1,
+    this.wordartSaturate = 1.5,
+    this.wordartBrightness = 1.5,
+    this.wordartTrueColor = true,
     this.wordartCaption = '',
     this.wordartTitleColor = '',
     this.collageFormat = 'portrait',
@@ -206,12 +209,13 @@ class MosaicSettings {
     this.collageKinds,
     this.collageHero,
     this.collageCuts,
-    this.outputSaturation = 1,
+    this.outputSaturation = 1.1,
     this.tileRecolor = 1,
     this.shapeMatch = 0.5,
     this.repeatSpacing = 2,
     this.optimalPlacement = true,
     this.fitLightToLibrary = false,
+    this.look = 'none',
     this.saBudgetFactor,
     this.signalWeights,
   });
@@ -269,6 +273,10 @@ class MosaicSettings {
   double wordartVivid; // 0..1 letter vividness
   double wordartEmpty; // 0..1 empty space (1 = leave dark areas bare)
   double wordartCoverage; // 0..1 pack whole phrases into gaps (denser subject)
+  double wordartSaturate; // word-colour saturation boost (1.25..1.75)
+  double wordartBrightness; // word-colour brightness boost (1..1.75)
+  // Words take the exact photo colour; saturate/brightness don't apply while on.
+  bool wordartTrueColor;
   String wordartCaption; // in-artwork photo title (upper-cased); '' = off
   String
   wordartTitleColor; // CSS colour ('#rrggbb'/'rgb(..)') for the title; '' = auto
@@ -321,6 +329,10 @@ class MosaicSettings {
   /// is persisted. Mirrors web `MosaicSettings.fitLightToLibrary`.
   bool fitLightToLibrary;
 
+  /// One colour "look" over photo and tiles (looks.dart): 'none' or 'cinematic' (the
+  /// app's switch); the web's admin looks are accepted too. Mirrors web `settings.look`.
+  String look;
+
   /// Admin override for the simulated-annealing iteration budget. Null = use the
   /// per-platform default in `buildGridLayout`.
   double? saBudgetFactor;
@@ -358,6 +370,9 @@ class MosaicSettings {
     double? wordartVivid,
     double? wordartEmpty,
     double? wordartCoverage,
+    double? wordartSaturate,
+    double? wordartBrightness,
+    bool? wordartTrueColor,
     String? wordartCaption,
     String? wordartTitleColor,
     String? collageFormat,
@@ -374,6 +389,7 @@ class MosaicSettings {
     int? repeatSpacing,
     bool? optimalPlacement,
     bool? fitLightToLibrary,
+    String? look,
     double? saBudgetFactor,
     SignalWeights? signalWeights,
   }) => MosaicSettings(
@@ -407,6 +423,9 @@ class MosaicSettings {
     wordartVivid: wordartVivid ?? this.wordartVivid,
     wordartEmpty: wordartEmpty ?? this.wordartEmpty,
     wordartCoverage: wordartCoverage ?? this.wordartCoverage,
+    wordartSaturate: wordartSaturate ?? this.wordartSaturate,
+    wordartBrightness: wordartBrightness ?? this.wordartBrightness,
+    wordartTrueColor: wordartTrueColor ?? this.wordartTrueColor,
     wordartCaption: wordartCaption ?? this.wordartCaption,
     wordartTitleColor: wordartTitleColor ?? this.wordartTitleColor,
     collageFormat: collageFormat ?? this.collageFormat,
@@ -426,6 +445,7 @@ class MosaicSettings {
     repeatSpacing: repeatSpacing ?? this.repeatSpacing,
     optimalPlacement: optimalPlacement ?? this.optimalPlacement,
     fitLightToLibrary: fitLightToLibrary ?? this.fitLightToLibrary,
+    look: look ?? this.look,
     saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
     signalWeights: signalWeights ?? this.signalWeights,
   );
@@ -459,8 +479,13 @@ class MosaicSettings {
     wordartGround: (j['wordartGround'] as num?)?.toDouble() ?? 0,
     wordartVivid: (j['wordartVivid'] as num?)?.toDouble() ?? 1,
     wordartEmpty: (j['wordartEmpty'] as num?)?.toDouble() ?? 1,
-    wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 0.5,
-    wordartCaption: j['wordartCaption'] as String? ?? '',
+    wordartCoverage: (j['wordartCoverage'] as num?)?.toDouble() ?? 1,
+    wordartSaturate: (j['wordartSaturate'] as num?)?.toDouble() ?? 1.5,
+    wordartBrightness: (j['wordartBrightness'] as num?)?.toDouble() ?? 1.5,
+    wordartTrueColor: j['wordartTrueColor'] as bool? ?? true,
+    // The web stores the title as `wordartTitle`; older app saves used `wordartCaption`.
+    wordartCaption:
+        j['wordartTitle'] as String? ?? j['wordartCaption'] as String? ?? '',
     wordartTitleColor: j['wordartTitleColor'] as String? ?? '',
     collageFormat: j['collageFormat'] as String? ?? 'portrait',
     collageRotation: (j['collageRotation'] as num?)?.toDouble() ?? 12,
@@ -483,6 +508,7 @@ class MosaicSettings {
     repeatSpacing: (j['repeatSpacing'] as num?)?.round() ?? 2,
     optimalPlacement: j['optimalPlacement'] as bool? ?? true,
     fitLightToLibrary: j['fitLightToLibrary'] == true,
+    look: j['look'] as String? ?? 'none',
     saBudgetFactor: (j['saBudgetFactor'] as num?)?.toDouble(),
     signalWeights: j['signalWeights'] == null
         ? null
@@ -521,6 +547,10 @@ class MosaicSettings {
     'wordartVivid': wordartVivid,
     'wordartEmpty': wordartEmpty,
     'wordartCoverage': wordartCoverage,
+    'wordartSaturate': wordartSaturate,
+    'wordartBrightness': wordartBrightness,
+    'wordartTrueColor': wordartTrueColor,
+    'wordartTitle': wordartCaption,
     'wordartCaption': wordartCaption,
     'wordartTitleColor': wordartTitleColor,
     'collageFormat': collageFormat,
@@ -535,6 +565,7 @@ class MosaicSettings {
     'outputSaturation': outputSaturation,
     'tileRecolor': tileRecolor,
     'fitLightToLibrary': fitLightToLibrary,
+    if (look != 'none') 'look': look,
     if (saBudgetFactor != null) 'saBudgetFactor': saBudgetFactor,
     // NOT persisted: engine tuning, not user content. See
     // ProjectsApi._parseSettings — writing these froze old tuning into saved
@@ -582,6 +613,28 @@ class TileDescriptor {
   LuminanceHistogram? tonalHistogram;
   SubregionEdgeOrientations? subregionEdgeOrientations;
 
+  /// The inverse of [TileDescriptor.fromJson], for the on-device analysis cache.
+  /// Doubles survive the round trip exactly (Dart prints the shortest exact form).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'width': width,
+    'height': height,
+    'aspectRatio': aspectRatio,
+    'orientation': orientation,
+    'averageColor': averageColor.toJson(),
+    'averageLabColor': averageLabColor.toJson(),
+    'detailScore': detailScore,
+    'subregionColors': subregionColors?.map((c) => c.toJson()).toList(),
+    'subregionEdges': subregionEdges,
+    'contrastMap': contrastMap,
+    'luminanceBalance': luminanceBalance?.toJson(),
+    'colorVariance': colorVariance,
+    'edgeOrientation': edgeOrientation,
+    'tonalHistogram': tonalHistogram,
+    'subregionEdgeOrientations': subregionEdgeOrientations,
+  };
+
   factory TileDescriptor.fromJson(Map<String, dynamic> j) => TileDescriptor(
     id: j['id'] as String,
     name: j['name'] as String,
@@ -615,10 +668,11 @@ List<LabColor>? _labList(dynamic v) => v == null
     ? null
     : (v as List)
           .map((e) => LabColor.fromJson((e as Map).cast<String, dynamic>()))
-          .toList();
+          .toList(growable: false);
 
-List<double>? _doubleList(dynamic v) =>
-    v == null ? null : (v as List).map((e) => (e as num).toDouble()).toList();
+List<double>? _doubleList(dynamic v) => v == null
+    ? null
+    : Float64List.fromList([for (final e in v as List) (e as num).toDouble()]);
 
 Float32List? _floatList(dynamic v) => v == null
     ? null
@@ -886,6 +940,7 @@ class SlimMosaicPlan {
     this.outputSaturation = 1.0,
     this.tileRecolor = 0,
     this.tileCrops = const {},
+    this.look = 'none',
   });
 
   double baseWidth;
@@ -926,6 +981,10 @@ class SlimMosaicPlan {
   /// preview is.
   Map<String, TileCrop> tileCrops;
 
+  /// The look (looks.dart) the finished picture is graded with — after the saturation
+  /// grade, by the preview here and by the server for the export.
+  String look;
+
   Map<String, dynamic> toJson() => {
     'baseWidth': baseWidth,
     'baseHeight': baseHeight,
@@ -937,6 +996,11 @@ class SlimMosaicPlan {
     if (hexagon) 'hexagon': true,
     'outputSaturation': outputSaturation,
     if (tileRecolor > 0) 'tileRecolor': tileRecolor,
+    // Which recolour this build previews (3 = tile contrast kept, brightening uncapped,
+    // half the colour shift). The server keeps each older recolour for older builds:
+    // 2 = 1.10.9+57, nothing = ≤ 1.10.8+56.
+    'recolorVersion': 3,
+    if (look != 'none') 'look': look,
     // Omitted when empty — the server treats absent as "all automatic".
     if (tileCrops.isNotEmpty)
       'tileCrops': {for (final e in tileCrops.entries) e.key: e.value.toJson()},

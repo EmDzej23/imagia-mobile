@@ -117,7 +117,9 @@ ImageAnalyzer toneFitAnalyzer(
       averageColor: RgbColor(rgb[0], rgb[1], rgb[2]),
       averageLabColor: lab,
       detailScore: r.detailScore,
-      subregionColors: [for (final c in r.subregionColors) fit(c)],
+      subregionColors: List.of([
+        for (final c in r.subregionColors) fit(c),
+      ], growable: false),
       subregionEdges: r.subregionEdges,
       contrastMap: r.contrastMap,
       luminanceBalance: r.luminanceBalance,

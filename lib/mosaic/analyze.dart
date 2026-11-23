@@ -18,51 +18,33 @@ const int tileAnalysisDimension = 200;
 /// Diagonal-vs-axial threshold: tan(67.5°) ≈ 2.4142.
 const double _orientAxialRatio = 2.4142;
 
+/// The photo's integral image: per position, 11 whole-number channels (red, green,
+/// blue, 8 brightness bins) in [ints] and 7 fractional ones (detail, edgeH, edgeV,
+/// 4 orientation bins) in [floats], each position's channels side by side.
+///
+/// Interleaved, not one array per channel: a rectangle sum reads 4 corners, and with
+/// 18 separate ~15 MB planes that was 72 reads from 72 places — on a phone nearly every
+/// one a cache (and TLB) miss, which made region sampling ~30× slower than on a laptop.
+/// Side by side, a corner's channels share one or two cache lines. Same numbers, same
+/// arithmetic, same results; same memory.
 class IntegralImage {
   IntegralImage({
     required this.width,
     required this.height,
-    required this.red,
-    required this.green,
-    required this.blue,
-    required this.detail,
-    required this.edgeH,
-    required this.edgeV,
-    required this.lumBin0,
-    required this.lumBin1,
-    required this.lumBin2,
-    required this.lumBin3,
-    required this.lumBin4,
-    required this.lumBin5,
-    required this.lumBin6,
-    required this.lumBin7,
-    required this.orientBin0,
-    required this.orientBin1,
-    required this.orientBin2,
-    required this.orientBin3,
+    required this.ints,
+    required this.floats,
   });
 
   final int width;
   final int height;
-  final Float64List red;
-  final Float64List green;
-  final Float64List blue;
-  final Float64List detail;
-  final Float64List edgeH;
-  final Float64List edgeV;
-  final Float64List lumBin0;
-  final Float64List lumBin1;
-  final Float64List lumBin2;
-  final Float64List lumBin3;
-  final Float64List lumBin4;
-  final Float64List lumBin5;
-  final Float64List lumBin6;
-  final Float64List lumBin7;
-  final Float64List orientBin0;
-  final Float64List orientBin1;
-  final Float64List orientBin2;
-  final Float64List orientBin3;
+  final Uint32List ints;
+  final Float64List floats;
 }
+
+/// Channels of [IntegralImage.ints] / [IntegralImage.floats].
+const int _nI = 11, _nF = 7;
+const int _cRed = 0, _cGreen = 1, _cBlue = 2, _cBin0 = 3;
+const int _cDetail = 0, _cEdgeH = 1, _cEdgeV = 2, _cOrient0 = 3;
 
 class ImageAnalyzer {
   ImageAnalyzer({
@@ -88,6 +70,15 @@ class ImageAnalyzer {
     integral: _integral,
     transform: transform,
   );
+
+  /// [withTransform] on top of the transform this analyzer already has (the look over
+  /// the light fit — web: lookAnalyzer(toneFitAnalyzer(...))).
+  ImageAnalyzer thenTransform(
+    RegionAnalysis Function(RegionAnalysis) next,
+  ) {
+    final prev = _transform;
+    return withTransform(prev == null ? next : (r) => next(prev(r)));
+  }
 
   RegionAnalysis sampleRegion({
     required double x,
@@ -159,24 +150,8 @@ class ImageAnalyzer {
 
 IntegralImage buildIntegralImage(Uint8List data, int width, int height) {
   final size = (width + 1) * (height + 1);
-  final red = Float64List(size);
-  final green = Float64List(size);
-  final blue = Float64List(size);
-  final detail = Float64List(size);
-  final edgeH = Float64List(size);
-  final edgeV = Float64List(size);
-  final lumBin0 = Float64List(size);
-  final lumBin1 = Float64List(size);
-  final lumBin2 = Float64List(size);
-  final lumBin3 = Float64List(size);
-  final lumBin4 = Float64List(size);
-  final lumBin5 = Float64List(size);
-  final lumBin6 = Float64List(size);
-  final lumBin7 = Float64List(size);
-  final orientBin0 = Float64List(size);
-  final orientBin1 = Float64List(size);
-  final orientBin2 = Float64List(size);
-  final orientBin3 = Float64List(size);
+  final ints = Uint32List(size * _nI);
+  final floats = Float64List(size * _nF);
   final luminance = Float64List(width * height);
 
   for (var y = 0; y < height; y += 1) {
@@ -190,17 +165,17 @@ IntegralImage buildIntegralImage(Uint8List data, int width, int height) {
   }
 
   for (var y = 0; y < height; y += 1) {
-    var rowRed = 0.0, rowGreen = 0.0, rowBlue = 0.0, rowDetail = 0.0;
-    var rowEdgeH = 0.0, rowEdgeV = 0.0;
-    var rowB0 = 0.0, rowB1 = 0.0, rowB2 = 0.0, rowB3 = 0.0;
-    var rowB4 = 0.0, rowB5 = 0.0, rowB6 = 0.0, rowB7 = 0.0;
+    var rowRed = 0, rowGreen = 0, rowBlue = 0;
+    var rowDetail = 0.0, rowEdgeH = 0.0, rowEdgeV = 0.0;
+    var rowB0 = 0, rowB1 = 0, rowB2 = 0, rowB3 = 0;
+    var rowB4 = 0, rowB5 = 0, rowB6 = 0, rowB7 = 0;
     var rowOr0 = 0.0, rowOr1 = 0.0, rowOr2 = 0.0, rowOr3 = 0.0;
 
     for (var x = 0; x < width; x += 1) {
       final offset = (y * width + x) * 4;
-      final r = data[offset].toDouble();
-      final g = data[offset + 1].toDouble();
-      final b = data[offset + 2].toDouble();
+      final r = data[offset];
+      final g = data[offset + 1];
+      final b = data[offset + 2];
       final currentLum = luminance[y * width + x];
       final rightLum = luminance[y * width + math.min(x + 1, width - 1)];
       final bottomLum = luminance[math.min(y + 1, height - 1) * width + x];
@@ -251,48 +226,34 @@ IntegralImage buildIntegralImage(Uint8List data, int width, int height) {
       }
 
       final prev = integralIndex - (width + 1);
-      red[integralIndex] = red[prev] + rowRed;
-      green[integralIndex] = green[prev] + rowGreen;
-      blue[integralIndex] = blue[prev] + rowBlue;
-      detail[integralIndex] = detail[prev] + rowDetail;
-      edgeH[integralIndex] = edgeH[prev] + rowEdgeH;
-      edgeV[integralIndex] = edgeV[prev] + rowEdgeV;
-      lumBin0[integralIndex] = lumBin0[prev] + rowB0;
-      lumBin1[integralIndex] = lumBin1[prev] + rowB1;
-      lumBin2[integralIndex] = lumBin2[prev] + rowB2;
-      lumBin3[integralIndex] = lumBin3[prev] + rowB3;
-      lumBin4[integralIndex] = lumBin4[prev] + rowB4;
-      lumBin5[integralIndex] = lumBin5[prev] + rowB5;
-      lumBin6[integralIndex] = lumBin6[prev] + rowB6;
-      lumBin7[integralIndex] = lumBin7[prev] + rowB7;
-      orientBin0[integralIndex] = orientBin0[prev] + rowOr0;
-      orientBin1[integralIndex] = orientBin1[prev] + rowOr1;
-      orientBin2[integralIndex] = orientBin2[prev] + rowOr2;
-      orientBin3[integralIndex] = orientBin3[prev] + rowOr3;
+      final pi = prev * _nI, ci = integralIndex * _nI;
+      ints[ci] = ints[pi] + rowRed;
+      ints[ci + 1] = ints[pi + 1] + rowGreen;
+      ints[ci + 2] = ints[pi + 2] + rowBlue;
+      ints[ci + 3] = ints[pi + 3] + rowB0;
+      ints[ci + 4] = ints[pi + 4] + rowB1;
+      ints[ci + 5] = ints[pi + 5] + rowB2;
+      ints[ci + 6] = ints[pi + 6] + rowB3;
+      ints[ci + 7] = ints[pi + 7] + rowB4;
+      ints[ci + 8] = ints[pi + 8] + rowB5;
+      ints[ci + 9] = ints[pi + 9] + rowB6;
+      ints[ci + 10] = ints[pi + 10] + rowB7;
+      final pf = prev * _nF, cf = integralIndex * _nF;
+      floats[cf] = floats[pf] + rowDetail;
+      floats[cf + 1] = floats[pf + 1] + rowEdgeH;
+      floats[cf + 2] = floats[pf + 2] + rowEdgeV;
+      floats[cf + 3] = floats[pf + 3] + rowOr0;
+      floats[cf + 4] = floats[pf + 4] + rowOr1;
+      floats[cf + 5] = floats[pf + 5] + rowOr2;
+      floats[cf + 6] = floats[pf + 6] + rowOr3;
     }
   }
 
   return IntegralImage(
     width: width,
     height: height,
-    red: red,
-    green: green,
-    blue: blue,
-    detail: detail,
-    edgeH: edgeH,
-    edgeV: edgeV,
-    lumBin0: lumBin0,
-    lumBin1: lumBin1,
-    lumBin2: lumBin2,
-    lumBin3: lumBin3,
-    lumBin4: lumBin4,
-    lumBin5: lumBin5,
-    lumBin6: lumBin6,
-    lumBin7: lumBin7,
-    orientBin0: orientBin0,
-    orientBin1: orientBin1,
-    orientBin2: orientBin2,
-    orientBin3: orientBin3,
+    ints: ints,
+    floats: floats,
   );
 }
 
@@ -340,7 +301,6 @@ RegionAnalysis sampleRegionFromIntegral(
   );
   final averageLabColor = rgbToLab(averageColor);
 
-  final w = integral.width;
   final regionW = x2 - x1;
   final regionH = y2 - y1;
 
@@ -350,15 +310,16 @@ RegionAnalysis sampleRegionFromIntegral(
 
   if (regionW < 5 || regionH < 5) {
     final uniformEdge = clampD(
-      _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount,
+      _sumF(integral, _cDetail, x1, y1, x2, y2) / pixelCount,
       0,
       1,
     );
     subregionColors = List<LabColor>.generate(
       25,
       (_) => LabColor(averageLabColor.L, averageLabColor.a, averageLabColor.b),
+      growable: false,
     );
-    subregionEdges = List<double>.filled(25, uniformEdge);
+    subregionEdges = Float64List(25)..fillRange(0, 25, uniformEdge);
     subregionEdgeOrientations = Float32List(100);
   } else {
     final xSplits = _compute5Splits(x1, x2);
@@ -376,24 +337,24 @@ RegionAnalysis sampleRegionFromIntegral(
   final luminanceBalance = _deriveLuminanceBalance(subregionColors);
   final colorVariance = _deriveColorVariance(averageLabColor, subregionColors);
 
-  final totalEdgeH = _sumIntegral(integral.edgeH, w, x1, y1, x2, y2);
-  final totalEdgeV = _sumIntegral(integral.edgeV, w, x1, y1, x2, y2);
+  final totalEdgeH = _sumF(integral, _cEdgeH, x1, y1, x2, y2);
+  final totalEdgeV = _sumF(integral, _cEdgeV, x1, y1, x2, y2);
   final edgeSum = totalEdgeH + totalEdgeV;
   final edgeOrientation = edgeSum > 0
       ? clampD((totalEdgeH - totalEdgeV) / edgeSum, -1, 1)
       : 0.0;
 
-  final b0 = _sumIntegral(integral.lumBin0, w, x1, y1, x2, y2);
-  final b1 = _sumIntegral(integral.lumBin1, w, x1, y1, x2, y2);
-  final b2 = _sumIntegral(integral.lumBin2, w, x1, y1, x2, y2);
-  final b3 = _sumIntegral(integral.lumBin3, w, x1, y1, x2, y2);
-  final b4 = _sumIntegral(integral.lumBin4, w, x1, y1, x2, y2);
-  final b5 = _sumIntegral(integral.lumBin5, w, x1, y1, x2, y2);
-  final b6 = _sumIntegral(integral.lumBin6, w, x1, y1, x2, y2);
-  final b7 = _sumIntegral(integral.lumBin7, w, x1, y1, x2, y2);
+  final b0 = _sumI(integral, _cBin0 + 0, x1, y1, x2, y2);
+  final b1 = _sumI(integral, _cBin0 + 1, x1, y1, x2, y2);
+  final b2 = _sumI(integral, _cBin0 + 2, x1, y1, x2, y2);
+  final b3 = _sumI(integral, _cBin0 + 3, x1, y1, x2, y2);
+  final b4 = _sumI(integral, _cBin0 + 4, x1, y1, x2, y2);
+  final b5 = _sumI(integral, _cBin0 + 5, x1, y1, x2, y2);
+  final b6 = _sumI(integral, _cBin0 + 6, x1, y1, x2, y2);
+  final b7 = _sumI(integral, _cBin0 + 7, x1, y1, x2, y2);
   var binTotal = b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7;
   if (binTotal == 0) binTotal = 1;
-  final tonalHistogram = <double>[
+  final tonalHistogram = Float64List.fromList([
     b0 / binTotal,
     b1 / binTotal,
     b2 / binTotal,
@@ -402,7 +363,7 @@ RegionAnalysis sampleRegionFromIntegral(
     b5 / binTotal,
     b6 / binTotal,
     b7 / binTotal,
-  ];
+  ]);
 
   return RegionAnalysis(
     x: regionX,
@@ -413,10 +374,7 @@ RegionAnalysis sampleRegionFromIntegral(
     averageLabColor: averageLabColor,
     detailScore: math.max(
       0,
-      math.min(
-        1,
-        _sumIntegral(integral.detail, w, x1, y1, x2, y2) / pixelCount,
-      ),
+      math.min(1, _sumF(integral, _cDetail, x1, y1, x2, y2) / pixelCount),
     ),
     subregionColors: subregionColors,
     subregionEdges: subregionEdges,
@@ -450,15 +408,9 @@ RgbColor _sampleAvgColor(
   double pixelCount,
 ) {
   return RgbColor(
-    roundChannel(
-      _sumIntegral(integral.red, integral.width, x1, y1, x2, y2) / pixelCount,
-    ),
-    roundChannel(
-      _sumIntegral(integral.green, integral.width, x1, y1, x2, y2) / pixelCount,
-    ),
-    roundChannel(
-      _sumIntegral(integral.blue, integral.width, x1, y1, x2, y2) / pixelCount,
-    ),
+    roundChannel(_sumI(integral, _cRed, x1, y1, x2, y2) / pixelCount),
+    roundChannel(_sumI(integral, _cGreen, x1, y1, x2, y2) / pixelCount),
+    roundChannel(_sumI(integral, _cBlue, x1, y1, x2, y2) / pixelCount),
   );
 }
 
@@ -472,7 +424,8 @@ SubregionColors _sampleSubregions5x5(
     return rgbToLab(_sampleAvgColor(integral, ax, ay, bx, by, n));
   }
 
-  return [
+  // Fixed-length, like every grid the scorer reads (see subregionWeights).
+  return List.of([
     q(xs[0], ys[0], xs[1], ys[1]),
     q(xs[1], ys[0], xs[2], ys[1]),
     q(xs[2], ys[0], xs[3], ys[1]),
@@ -498,7 +451,7 @@ SubregionColors _sampleSubregions5x5(
     q(xs[2], ys[4], xs[3], ys[5]),
     q(xs[3], ys[4], xs[4], ys[5]),
     q(xs[4], ys[4], xs[5], ys[5]),
-  ];
+  ], growable: false);
 }
 
 SubregionEdges _sampleSubregionEdges5x5(
@@ -506,13 +459,12 @@ SubregionEdges _sampleSubregionEdges5x5(
   List<int> xs,
   List<int> ys,
 ) {
-  final w = integral.width;
   double e(int ax, int ay, int bx, int by) {
     final n = math.max(1, (bx - ax) * (by - ay));
-    return clampD(_sumIntegral(integral.detail, w, ax, ay, bx, by) / n, 0, 1);
+    return clampD(_sumF(integral, _cDetail, ax, ay, bx, by) / n, 0, 1);
   }
 
-  return [
+  return Float64List.fromList([
     e(xs[0], ys[0], xs[1], ys[1]),
     e(xs[1], ys[0], xs[2], ys[1]),
     e(xs[2], ys[0], xs[3], ys[1]),
@@ -538,7 +490,7 @@ SubregionEdges _sampleSubregionEdges5x5(
     e(xs[2], ys[4], xs[3], ys[5]),
     e(xs[3], ys[4], xs[4], ys[5]),
     e(xs[4], ys[4], xs[5], ys[5]),
-  ];
+  ]);
 }
 
 SubregionEdgeOrientations _sampleSubregionOrientations5x5(
@@ -546,15 +498,14 @@ SubregionEdgeOrientations _sampleSubregionOrientations5x5(
   List<int> xs,
   List<int> ys,
 ) {
-  final w = integral.width;
   final out = Float32List(100);
   for (var r = 0; r < 5; r++) {
     for (var c = 0; c < 5; c++) {
       final ax = xs[c], bx = xs[c + 1], ay = ys[r], by = ys[r + 1];
-      final b0 = _sumIntegral(integral.orientBin0, w, ax, ay, bx, by);
-      final b1 = _sumIntegral(integral.orientBin1, w, ax, ay, bx, by);
-      final b2 = _sumIntegral(integral.orientBin2, w, ax, ay, bx, by);
-      final b3 = _sumIntegral(integral.orientBin3, w, ax, ay, bx, by);
+      final b0 = _sumF(integral, _cOrient0 + 0, ax, ay, bx, by);
+      final b1 = _sumF(integral, _cOrient0 + 1, ax, ay, bx, by);
+      final b2 = _sumF(integral, _cOrient0 + 2, ax, ay, bx, by);
+      final b3 = _sumF(integral, _cOrient0 + 3, ax, ay, bx, by);
       final total = b0 + b1 + b2 + b3;
       final idx = (r * 5 + c) * 4;
       if (total > 0) {
@@ -569,7 +520,7 @@ SubregionEdgeOrientations _sampleSubregionOrientations5x5(
 }
 
 ContrastMap computeLocalContrast(SubregionColors s) {
-  final contrast = List<double>.filled(25, 0);
+  final contrast = Float64List(25);
   for (var r = 0; r < 5; r++) {
     for (var c = 0; c < 5; c++) {
       final idx = r * 5 + c;
@@ -622,19 +573,26 @@ double _deriveColorVariance(LabColor avg, SubregionColors s) {
   return clampD(total / 25, 0, 1);
 }
 
-double _sumIntegral(
-  Float64List integral,
-  int width,
-  int x1,
-  int y1,
-  int x2,
-  int y2,
-) {
-  final stride = width + 1;
-  return integral[y2 * stride + x2] -
-      integral[y1 * stride + x2] -
-      integral[y2 * stride + x1] +
-      integral[y1 * stride + x1];
+/// Sum of integer channel [ch] over [x1,x2)×[y1,y2). Whole numbers, so exact.
+double _sumI(IntegralImage integral, int ch, int x1, int y1, int x2, int y2) {
+  final a = integral.ints;
+  final stride = integral.width + 1;
+  return (a[(y2 * stride + x2) * _nI + ch] -
+          a[(y1 * stride + x2) * _nI + ch] -
+          a[(y2 * stride + x1) * _nI + ch] +
+          a[(y1 * stride + x1) * _nI + ch])
+      .toDouble();
+}
+
+/// Sum of fractional channel [ch] over [x1,x2)×[y1,y2) — the same four terms in the
+/// same order as ever, so the same value.
+double _sumF(IntegralImage integral, int ch, int x1, int y1, int x2, int y2) {
+  final a = integral.floats;
+  final stride = integral.width + 1;
+  return a[(y2 * stride + x2) * _nF + ch] -
+      a[(y1 * stride + x2) * _nF + ch] -
+      a[(y2 * stride + x1) * _nF + ch] +
+      a[(y1 * stride + x1) * _nF + ch];
 }
 
 void preprocessPixels(

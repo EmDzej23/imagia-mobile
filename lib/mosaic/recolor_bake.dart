@@ -7,8 +7,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'hires_tiles.dart';
+import 'looks.dart';
 import 'local_recolor.dart';
-import 'preview_painter.dart' show drawPlanWindow;
+import 'preview_painter.dart' show drawPlanWindow, sharperTile;
 import 'shared.dart' show saturationColorFilter;
 import 'types.dart';
 
@@ -63,6 +64,9 @@ Future<ui.Image?> bakeMosaicWindow({
   // 2. Recolour (+ the grade when nothing is drawn in between), off the UI thread.
   final tinted = tintStrength > 0 && overlay != null;
   final strength = tileRecolor, sat = tinted ? 1.0 : outputSaturation;
+  // The look (looks.dart) goes over the finished, graded picture — right here when
+  // nothing is drawn after the grade, else after the tint below. Web order.
+  final look = tinted ? 'none' : plan.look;
   final input = bd.buffer.asUint8List();
   final Uint8List out;
   if (cells.length < 64 && outW * outH < 600 * 600) {
@@ -74,6 +78,7 @@ Future<ui.Image?> bakeMosaicWindow({
       strength,
       outputSaturation: sat,
     );
+    applyLookToPixels(input, 4, look);
     out = input;
   } else {
     out = await Isolate.run(() {
@@ -85,6 +90,7 @@ Future<ui.Image?> bakeMosaicWindow({
         strength,
         outputSaturation: sat,
       );
+      applyLookToPixels(input, 4, look);
       return input;
     });
   }
@@ -118,7 +124,18 @@ Future<ui.Image?> bakeMosaicWindow({
   final img = await pic2.toImage(outW, outH);
   pic2.dispose();
   recolored.dispose();
-  return img;
+  if (!hasLook(plan.look)) return img;
+  // 4. The look over everything (after the tint and the grade).
+  final bd2 = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+  img.dispose();
+  if (bd2 == null || (cancelled?.call() ?? false)) return null;
+  final px = bd2.buffer.asUint8List();
+  final look2 = plan.look;
+  final graded = await Isolate.run(() {
+    applyLookToPixels(px, 4, look2);
+    return px;
+  });
+  return _imageFromRgba(graded, outW, outH);
 }
 
 Future<ui.Image> _imageFromRgba(Uint8List rgba, int w, int h) async {
@@ -160,7 +177,8 @@ class HrRecolorCache extends ChangeNotifier {
     required double tintStrength,
     ui.Image? overlay,
   }) {
-    if (!(tileRecolor > 0)) {
+    // A look needs the baked picture too (it is a per-pixel grade).
+    if (!(tileRecolor > 0) && !hasLook(plan.look)) {
       if (image != null || _key != null) {
         image = null;
         _key = null;
@@ -394,13 +412,22 @@ class _RecoloredMosaicViewState extends State<RecoloredMosaicView> {
 
   void _scheduleSharp() {
     _idle?.cancel();
-    if (!(widget.tileRecolor > 0)) return;
+    if (!(widget.tileRecolor > 0) && !hasLook(widget.plan.look)) return;
     _idle = Timer(const Duration(milliseconds: 280), _bakeSharp);
   }
 
+  /// A request that came in while a bake was running (e.g. sharp photos arriving):
+  /// served by one more bake when it finishes, instead of being dropped.
+  bool _again = false;
+
   Future<void> _bakeSharp() async {
-    if (!mounted || _running || !_needsSharper) return;
+    if (!mounted || !_needsSharper) return;
+    if (_running) {
+      _again = true;
+      return;
+    }
     _running = true;
+    _again = false;
     final win = widget.window;
     final content = _content;
     var outW = (_size.width * _dpr).round(),
@@ -423,11 +450,7 @@ class _RecoloredMosaicViewState extends State<RecoloredMosaicView> {
           final shapeK = p.quad != null
               ? 2.0
               : (widget.plan.hexagon ? 1.6 : 1.0);
-          final need = needPx * shapeK;
-          if (need <= math.max(thumb.width, thumb.height) * 1.25) return thumb;
-          final sharp = hr.get(p.tileId, need);
-          if (sharp == null) hr.want(p.tileId, need);
-          return sharp ?? thumb;
+          return sharperTile(hr, p.tileId, thumb, needPx * shapeK);
         },
         win: win,
         outW: outW,
@@ -454,12 +477,13 @@ class _RecoloredMosaicViewState extends State<RecoloredMosaicView> {
       }
     } finally {
       _running = false;
+      if (_again && mounted) _scheduleSharp();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final on = widget.tileRecolor > 0;
+    final on = widget.tileRecolor > 0 || hasLook(widget.plan.look);
     return LayoutBuilder(
       builder: (context, c) {
         final size = c.biggest;

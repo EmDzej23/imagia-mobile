@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'hexagon.dart' show hexFromRect;
 import 'rhombille.dart' show faceShade;
 import 'tile_recolor.dart'
-    show effectiveRecolorStrength, tileToning, toneMatrix;
+    show chromaScale, effectiveRecolorStrength, tileToning, toneChroma, toneMatrix;
 
 /// LOCAL (in-cell) tile recolouring — the exact Dart port of `applyLocalRecolor` /
 /// `recolorCellLocal` in foto-mozaik/lib/mosaic/render.ts (the web studio preview).
@@ -34,6 +34,11 @@ const double recolorMisfitSlope = 0.7;
 double recolorLumaCapBack(double delta) {
   final mag = delta.abs();
   if (mag <= 0.5) return 0;
+  // Brightening is not capped (2026-11-10): with a dark library the photo's light areas
+  // need lifts of 40–60 levels, and capping them left the face ~25–30 levels too dark —
+  // the main reason a competitor's mosaic of the same photos read clearer. Darkening
+  // keeps the cap (over-darkened tiles were what the cap was added for).
+  if (delta > 0) return 0;
   // Misfit-aware: past [recolorMisfitKnee] the photo is clearly in the wrong brightness
   // and is moved again at [recolorMisfitSlope] (web parity).
   final capped =
@@ -105,15 +110,18 @@ class RecolorCell {
 
 /// Uint8ClampedArray assignment: clamp to 0..255, round half to EVEN (what the
 /// browser does on every canvas write — needed for byte-exact parity).
+///
+/// Rounds to nearest, then moves an exact tie (x.5) to the even neighbour. The old
+/// above/below-half test was a coin toss per channel — a mispredicted branch on half
+/// of every pixel's values; an exact tie is rare, so this one is almost never taken.
+@pragma('vm:prefer-inline')
 int _u8(double v) {
   if (!(v > 0)) return 0; // also NaN
   if (v >= 255) return 255;
-  final f = v.floorToDouble();
-  final d = v - f;
-  if (d > 0.5) return f.toInt() + 1;
-  if (d < 0.5) return f.toInt();
-  final fi = f.toInt();
-  return fi.isEven ? fi : fi + 1;
+  final r = v.roundToDouble(); // nearest, ties away from zero (v > 0: up)
+  final ri = r.toInt();
+  // r − v is exact here (both under 256, less than 1 apart).
+  return (r - v == 0.5 && ri.isOdd) ? ri - 1 : ri;
 }
 
 /// The photo's 5×5 Lab samples as an RGB grid (web: labToRgb per block).
@@ -146,7 +154,8 @@ List<double> labToRgb(double L, double a, double b) {
   double enc(double v) {
     final c = v <= 0.0031308
         ? 12.92 * v
-        : 1.055 * math.pow(math.max(0, v), 1 / 2.4) - 0.055;
+        // 0.0, not 0: an int here made every max a slow mixed int/double compare.
+        : 1.055 * math.pow(math.max(0.0, v), 1 / 2.4) - 0.055;
     return math.max(0, math.min(255, c * 255));
   }
 
@@ -169,6 +178,7 @@ void applyLocalRecolor(
   if (s0 > 0 && cells.isNotEmpty) {
     final toning = tileToning(s0);
     final m = toneMatrix(toning.saturation);
+    final t = _TermTables(m);
     // Same order as the web: by top row, ties keep their order (JS sort is stable).
     final entries = <(RecolorCell, int, int)>[];
     for (var i = 0; i < cells.length; i++) {
@@ -180,7 +190,17 @@ void applyLocalRecolor(
     }
     entries.sort((a, b) => a.$2 != b.$2 ? a.$2 - b.$2 : a.$3 - b.$3);
     for (final e in entries) {
-      _recolorCell(data, width, height, e.$1, s0, toning.contrast, m, detail);
+      _recolorCell(
+        data,
+        width,
+        height,
+        e.$1,
+        s0,
+        toning.contrast,
+        m,
+        t,
+        detail,
+      );
     }
   }
   applySaturation(data, outputSaturation.clamp(1.0, 1.5));
@@ -189,15 +209,34 @@ void applyLocalRecolor(
 /// The web's applySaturation (luminance-preserving matrix), canvas rounding.
 void applySaturation(Uint8List data, double s) {
   if (s == 1) return;
-  final m = toneMatrix(s);
+  final t = _TermTables(toneMatrix(s));
+  final t0 = t.t0, t1 = t.t1, t2 = t.t2;
+  final t3 = t.t3, t4 = t.t4, t5 = t.t5;
+  final t6 = t.t6, t7 = t.t7, t8 = t.t8;
   for (var i = 0; i < data.length; i += 4) {
-    final r = data[i].toDouble(),
-        g = data[i + 1].toDouble(),
-        b = data[i + 2].toDouble();
-    data[i] = _u8(m[0] * r + m[1] * g + m[2] * b);
-    data[i + 1] = _u8(m[3] * r + m[4] * g + m[5] * b);
-    data[i + 2] = _u8(m[6] * r + m[7] * g + m[8] * b);
+    final r = data[i], g = data[i + 1], b = data[i + 2];
+    data[i] = _u8(t0[r] + t1[g] + t2[b]);
+    data[i + 1] = _u8(t3[r] + t4[g] + t5[b]);
+    data[i + 2] = _u8(t6[r] + t7[g] + t8[b]);
   }
+}
+
+/// A 3×3 colour matrix as 9 tables of coefficient × byte value. A channel has 256
+/// values, so each product is a lookup — the same product, so the same sums and bytes.
+class _TermTables {
+  _TermTables(List<double> m)
+    : t0 = _term(m[0]),
+      t1 = _term(m[1]),
+      t2 = _term(m[2]),
+      t3 = _term(m[3]),
+      t4 = _term(m[4]),
+      t5 = _term(m[5]),
+      t6 = _term(m[6]),
+      t7 = _term(m[7]),
+      t8 = _term(m[8]);
+  final Float64List t0, t1, t2, t3, t4, t5, t6, t7, t8;
+  static Float64List _term(double k) =>
+      Float64List.fromList([for (var v = 0; v < 256; v++) k * v.toDouble()]);
 }
 
 void _recolorCell(
@@ -208,8 +247,12 @@ void _recolorCell(
   double s0,
   double k,
   List<double> mt,
+  _TermTables tt,
   double detail,
 ) {
+  final t0 = tt.t0, t1 = tt.t1, t2 = tt.t2;
+  final t3 = tt.t3, t4 = tt.t4, t5 = tt.t5;
+  final t6 = tt.t6, t7 = tt.t7, t8 = tt.t8;
   const n5 = _grid;
   final x0 = math.max(0, cell.x.floor()),
       x1 = math.min(width, (cell.x + cell.w).ceil());
@@ -248,17 +291,15 @@ void _recolorCell(
     var i = (y * width + x0) * 4;
     for (var c = 0; c < cw; c++, i += 4) {
       if (mask != null && !mask.contains(x0 + c + 0.5, y + 0.5)) continue;
-      final r = data[i].toDouble(),
-          g = data[i + 1].toDouble(),
-          b = data[i + 2].toDouble();
-      mr += r;
-      mg += g;
-      mb += b;
+      final ri = data[i], gi = data[i + 1], bi8 = data[i + 2];
+      mr += ri;
+      mg += gi;
+      mb += bi8;
       n++;
       final bi = gy + colBlock[c], b3 = bi * 3;
-      sums[b3] += m00 * r + m01 * g + m02 * b;
-      sums[b3 + 1] += m10 * r + m11 * g + m12 * b;
-      sums[b3 + 2] += m20 * r + m21 * g + m22 * b;
+      sums[b3] += t0[ri] + t1[gi] + t2[bi8];
+      sums[b3 + 1] += t3[ri] + t4[gi] + t5[bi8];
+      sums[b3 + 2] += t6[ri] + t7[gi] + t8[bi8];
       counts[bi]++;
     }
   }
@@ -313,9 +354,14 @@ void _recolorCell(
     final pLr = avg[0] + d * (rr - avg[0]),
         pLg = avg[1] + d * (rg - avg[1]),
         pLb = avg[2] + d * (rb - avg[2]);
-    gField[bIdx * 3] = (1 - k) * tl0 + s * (pLr - tLr);
-    gField[bIdx * 3 + 1] = (1 - k) * tl1 + s * (pLg - tLg);
-    gField[bIdx * 3 + 2] = (1 - k) * tl2 + s * (pLb - tLb);
+    // Only toneChroma of the shift's colour, all of its brightness (web parity).
+    gField[bIdx * 3] = s * (pLr - tLr);
+    gField[bIdx * 3 + 1] = s * (pLg - tLg);
+    gField[bIdx * 3 + 2] = s * (pLb - tLb);
+    if (toneChroma < 1) chromaScale(gField, toneChroma, bIdx * 3);
+    gField[bIdx * 3] = (1 - k) * tl0 + gField[bIdx * 3];
+    gField[bIdx * 3 + 1] = (1 - k) * tl1 + gField[bIdx * 3 + 1];
+    gField[bIdx * 3 + 2] = (1 - k) * tl2 + gField[bIdx * 3 + 2];
   }
   {
     // Brightness cap — same as web `applyLocalRecolor`: the cell-wide lift or darkening
@@ -350,25 +396,23 @@ void _recolorCell(
       final p00 = (ra + colA[c]) * 3, p01 = (ra + colB[c]) * 3;
       final p10 = (rb + colA[c]) * 3, p11 = (rb + colB[c]) * 3;
       final w00 = wx1 * wy1, w01 = wx * wy1, w10 = wx1 * wy, w11 = wx * wy;
-      final r = data[i].toDouble(),
-          g = data[i + 1].toDouble(),
-          b = data[i + 2].toDouble();
+      final r = data[i], g = data[i + 1], b = data[i + 2];
       data[i] = _u8(
-        k * (m00 * r + m01 * g + m02 * b) +
+        k * (t0[r] + t1[g] + t2[b]) +
             gField[p00] * w00 +
             gField[p01] * w01 +
             gField[p10] * w10 +
             gField[p11] * w11,
       );
       data[i + 1] = _u8(
-        k * (m10 * r + m11 * g + m12 * b) +
+        k * (t3[r] + t4[g] + t5[b]) +
             gField[p00 + 1] * w00 +
             gField[p01 + 1] * w01 +
             gField[p10 + 1] * w10 +
             gField[p11 + 1] * w11,
       );
       data[i + 2] = _u8(
-        k * (m20 * r + m21 * g + m22 * b) +
+        k * (t6[r] + t7[g] + t8[b]) +
             gField[p00 + 2] * w00 +
             gField[p01 + 2] * w01 +
             gField[p10 + 2] * w10 +

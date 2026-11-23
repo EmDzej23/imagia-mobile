@@ -20,10 +20,19 @@ const double _previewLong = 1400;
 /// look-setting change — packs the words and RASTERISES to a single [ui.Image].
 /// The widget then just displays that static bitmap (like [AncientPreview]).
 class WordArtPreview extends StatefulWidget {
-  const WordArtPreview({super.key, required this.base, required this.params});
+  const WordArtPreview({
+    super.key,
+    required this.base,
+    required this.params,
+    this.placeholderWords = false,
+  });
 
   final BaseImage base;
   final WordArtParams params;
+
+  /// No words added yet — the picture is drawn from a placeholder. Say so, or it
+  /// reads as what word art looks like.
+  final bool placeholderWords;
 
   @override
   State<WordArtPreview> createState() => _WordArtPreviewState();
@@ -82,7 +91,7 @@ class _WordArtPreviewState extends State<WordArtPreview> {
     if (rgba == null || _w < 2 || _h < 2) return;
     if (!_building) setState(() => _building = true);
     final token = ++_token;
-    final geo = buildWordArtGeometry(
+    final geo = await buildWordArtGeometryAsync(
       rgba,
       _sw,
       _sh,
@@ -126,6 +135,35 @@ class _WordArtPreviewState extends State<WordArtPreview> {
                     : (crop, outW, outH) =>
                           renderWordArtCrop(_geo!, _w, _h, crop, outW, outH),
               ),
+            if (widget.placeholderWords && img != null && !_building)
+              Positioned(
+                left: 12,
+                right: 12,
+                top: 12,
+                child: IgnorePointer(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xCC0A0B0F),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0x4DF2D28B)),
+                    ),
+                    child: const Text(
+                      'These are placeholder words — add yours in the panel to '
+                      'make it personal.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Color(0xFFF7E7C0),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (img == null || _building)
               Container(
                 color: img == null
@@ -157,9 +195,8 @@ class _WordArtPreviewState extends State<WordArtPreview> {
 /// the old text mode did).
 WordArtParams wordartParamsFromState(StudioState studio) {
   final s = studio.settings;
-  final phrases = parseTextPhrases(
-    studio.textInput,
-    uppercase: studio.textUppercase,
+  final phrases = usablePhrases(
+    parseTextPhrases(studio.textInput, uppercase: studio.textUppercase),
   );
   final titleColor = s.wordartTitleColor.trim();
   return WordArtParams(
@@ -175,5 +212,8 @@ WordArtParams wordartParamsFromState(StudioState studio) {
     seedNonce: studio.wordartSeedNonce,
     caption: s.wordartCaption.trim(),
     captionColor: titleColor.isEmpty ? null : titleColor,
+    saturate: s.wordartTrueColor ? 1 : s.wordartSaturate,
+    brightness: s.wordartTrueColor ? 1 : s.wordartBrightness,
+    trueColor: s.wordartTrueColor,
   );
 }

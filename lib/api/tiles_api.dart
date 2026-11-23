@@ -73,10 +73,14 @@ class TilesApi {
   /// server-side) and returns each resized to [maxSize] as base64 JPEG. Far
   /// fewer round-trips than per-tile fetches; used to speed up project restore.
   /// Returns a map of blobUrl → decoded JPEG bytes (missing entries omitted).
+  ///
+  /// [keep]: the server stores the thumbnail it made, so the next request (another
+  /// phone, a reinstall) reads it instead of resizing the full photo again. For
+  /// project covers only — not for tile restores, which would store hundreds.
   Future<Map<String, Uint8List>> tileThumbBatch(List<String> urls,
-      {int maxSize = 256}) async {
+      {int maxSize = 256, bool keep = false}) async {
     final res = await _client.post<Map<String, dynamic>>('/api/tile-thumb-batch',
-        body: {'urls': urls, 'maxSize': maxSize});
+        body: {'urls': urls, 'maxSize': maxSize, if (keep) 'keep': true});
     final out = <String, Uint8List>{};
     if (res.isOk && res.data != null) {
       for (final r in (res.data!['results'] as List? ?? const [])) {

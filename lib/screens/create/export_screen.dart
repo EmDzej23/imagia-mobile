@@ -8,9 +8,11 @@ import 'package:go_router/go_router.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../api/funnel_api.dart';
 import '../../core/config.dart';
 import '../../state/auth_controller.dart';
 import '../../state/render_controller.dart';
+import '../../state/studio_controller.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -135,6 +137,11 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   @override
   Widget build(BuildContext context) {
     final render = ref.watch(renderControllerProvider);
+    ref.listen(renderControllerProvider, (prev, next) {
+      if (prev?.phase != RenderPhase.completed && next.phase == RenderPhase.completed) {
+        trackFunnel(ref, 'export_done', mode: ref.read(studioControllerProvider).settings.mosaicMode);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(title: const Text('Export')),

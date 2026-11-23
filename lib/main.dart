@@ -9,6 +9,7 @@ import 'services/install_ping.dart';
 import 'services/notifications.dart';
 import 'services/push_service.dart';
 import 'services/thumb_cache.dart';
+import 'services/tile_analysis_cache.dart';
 import 'theme/app_theme.dart';
 import 'widgets/render_indicator.dart';
 
@@ -20,6 +21,7 @@ Future<void> main() async {
   // Not awaited: housekeeping must never delay first paint, and a failure here is
   // harmless — a stale cover is still a cover.
   unawaited(ThumbCache.evictStale());
+  unawaited(TileAnalysisCache.evictStale());
   // Not awaited: one-time anonymous install count; retries next launch on failure.
   unawaited(InstallPing.run());
   runApp(const ProviderScope(child: ImagiaApp()));

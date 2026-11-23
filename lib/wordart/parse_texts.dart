@@ -54,3 +54,17 @@ List<String> parseTextPhrases(String raw, {bool uppercase = false}) {
   }
   return out;
 }
+
+/// Longest phrase word art accepts. Longer ones only ever fit at tiny sizes and read
+/// as noise; older projects may still hold them — they're kept (flagged in the panel)
+/// but left out of the picture. Same rule as the web (parse-texts.ts).
+const int maxPhraseWords = 5;
+
+int phraseWordCount(String phrase) =>
+    phrase.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+
+bool isPhraseTooLong(String phrase) => phraseWordCount(phrase) > maxPhraseWords;
+
+/// The phrases that go into the picture (drops the too-long ones).
+List<String> usablePhrases(List<String> phrases) =>
+    phrases.where((p) => !isPhraseTooLong(p)).toList();

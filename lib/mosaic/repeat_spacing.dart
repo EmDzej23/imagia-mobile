@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'matching.dart';
 import 'shared.dart';
@@ -38,23 +39,42 @@ List<List<int>> buildNeighbourLists(
   double cx(MosaicPlacement p) => p.x + p.width / 2;
   double cy(MosaicPlacement p) => p.y + p.height / 2;
   final bucket = math.max(cw, ch);
-  final grid = <String, List<int>>{};
-  for (var i = 0; i < placements.length; i++) {
+  // Buckets in a flat array over the occupied range (was a map keyed by "x,y" strings —
+  // a string built per lookup). Same buckets, same order, so the same lists.
+  final n = placements.length;
+  final bx = Int32List(n), by = Int32List(n);
+  var minX = 0, minY = 0, maxX = 0, maxY = 0;
+  for (var i = 0; i < n; i++) {
     final p = placements[i];
-    final k = '${(cx(p) / bucket).floor()},${(cy(p) / bucket).floor()}';
-    (grid[k] ??= []).add(i);
+    bx[i] = (cx(p) / bucket).floor();
+    by[i] = (cy(p) / bucket).floor();
+    if (i == 0 || bx[i] < minX) minX = bx[i];
+    if (i == 0 || bx[i] > maxX) maxX = bx[i];
+    if (i == 0 || by[i] < minY) minY = by[i];
+    if (i == 0 || by[i] > maxY) maxY = by[i];
+  }
+  final gw = maxX - minX + 1, gh = maxY - minY + 1;
+  final grid = List<List<int>?>.filled(n == 0 ? 0 : gw * gh, null);
+  for (var i = 0; i < n; i++) {
+    (grid[(by[i] - minY) * gw + (bx[i] - minX)] ??= <int>[]).add(i);
   }
   final span = (math.max(reachX, reachY) / bucket).ceil();
   return [
-    for (var i = 0; i < placements.length; i++)
+    for (var i = 0; i < n; i++)
       () {
         final p = placements[i];
         final x = cx(p), y = cy(p);
-        final gx = (x / bucket).floor(), gy = (y / bucket).floor();
+        final gx = bx[i], gy = by[i];
         final out = <int>[];
         for (var dy = -span; dy <= span; dy++) {
+          final ry = gy + dy - minY;
+          if (ry < 0 || ry >= gh) continue;
           for (var dx = -span; dx <= span; dx++) {
-            for (final j in grid['${gx + dx},${gy + dy}'] ?? const <int>[]) {
+            final rx = gx + dx - minX;
+            if (rx < 0 || rx >= gw) continue;
+            final cell = grid[ry * gw + rx];
+            if (cell == null) continue;
+            for (final j in cell) {
               if (j == i) continue;
               final q = placements[j];
               if ((cx(q) - x).abs() <= reachX && (cy(q) - y).abs() <= reachY)
@@ -85,18 +105,33 @@ RepeatSpacingResult enforceRepeatSpacing(
     final id = getBaseTileId(p.tileId);
     usageCounts[id] = (usageCounts[id] ?? 0) + 1;
   }
+  // Photos as ints, and "near this cell" as a stamp per photo — the same membership
+  // test as a set of ids built per cell, without hashing strings for every neighbour.
+  final idNum = <String, int>{};
+  int num(String baseId) => idNum.putIfAbsent(baseId, () => idNum.length);
+  final cellId = Int32List(placements.length);
+  for (var i = 0; i < placements.length; i++) {
+    cellId[i] = num(getBaseTileId(placements[i].tileId));
+  }
+  final tileId = Int32List.fromList([
+    for (final t in tiles) num(getBaseTileId(t.id)),
+  ]);
+  var nearMark = Int32List(idNum.length + 1);
+  var stamp = 0;
   var violations = 0, reassigned = 0;
   for (var i = 0; i < placements.length; i++) {
     final p = placements[i];
     final mine = getBaseTileId(p.tileId);
-    final nearIds = {
-      for (final j in nb[i]) getBaseTileId(placements[j].tileId),
-    };
-    if (!nearIds.contains(mine)) continue;
+    stamp++;
+    for (final j in nb[i]) {
+      nearMark[cellId[j]] = stamp;
+    }
+    if (nearMark[cellId[i]] != stamp) continue;
     violations++;
-    final allowed = tiles
-        .where((t) => !nearIds.contains(getBaseTileId(t.id)))
-        .toList();
+    final allowed = <TileDescriptor>[
+      for (var t = 0; t < tiles.length; t++)
+        if (nearMark[tileId[t]] != stamp) tiles[t],
+    ];
     if (allowed.isEmpty) continue;
     final match = selectBestTileMatch(
       MatchInput(
@@ -114,6 +149,11 @@ RepeatSpacingResult enforceRepeatSpacing(
     p.tileId = match.tile.id;
     p.tileName = match.tile.name;
     p.score = match.score;
+    cellId[i] = num(next);
+    if (nearMark.length < idNum.length) {
+      nearMark = Int32List(idNum.length * 2)
+        ..setRange(0, nearMark.length, nearMark);
+    }
     reassigned++;
   }
   return RepeatSpacingResult(radius, violations, reassigned);

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'analyze.dart';
+import 'fine_placement.dart';
 import 'hexagon.dart';
 import 'layout_batch.dart';
 import 'matching.dart';
@@ -615,6 +616,7 @@ class CandidatesJob {
 /// Everything the passes after the annealing need.
 class _GridStage {
   _GridStage({
+    required this.analyzer,
     required this.placements,
     required this.tiles,
     required this.eligibleTiles,
@@ -626,6 +628,7 @@ class _GridStage {
     required this.isMobile,
     required this.seeded,
   });
+  final ImageAnalyzer analyzer;
   final List<MosaicPlacement> placements;
   final List<TileDescriptor> tiles;
   final List<TileDescriptor> eligibleTiles;
@@ -848,7 +851,7 @@ List<MosaicPlacement> _optimiseAndFinish(
     );
   }
 
-  // no-touch experiment: LAST, so it cannot be undone by a later pass — and after
+  // no-touch experiment: after every pass that could bring a twin back — and after
   // coverage specifically, because coverage places rare photos wherever it can and is
   // the one pass that can reintroduce a twin. It only ever swaps two cells' tiles, so
   // the coverage guarantee it just established survives intact.
@@ -862,6 +865,22 @@ List<MosaicPlacement> _optimiseAndFinish(
       resolveMaxTileUses(settings.maxTileUses, tiles.length, placements.length),
     );
   }
+
+  // And exchange photos once more, judged by pixels (fine_placement.dart). Last of all: it
+  // never adds a touching or close repeat, and a pass after it would undo its choices.
+  final mode = settings.mosaicMode;
+  if (settings.finePlacement && mode != 'hexagon' && mode != 'rhombille') {
+    refineFinePlacement(
+      placements,
+      eligibleTiles,
+      settings,
+      saliency,
+      adjacency,
+      spacingRadius,
+      stage.analyzer,
+    );
+  }
+  gridLayoutTrace?.call('fine');
 
   return placements;
 }
@@ -1367,6 +1386,7 @@ Iterable<LayoutBatch> _prepareGridLayoutSteps({
   }
   gridLayoutTrace?.call('vogel');
   out.value = _GridStage(
+    analyzer: analyzer,
     placements: placements,
     tiles: tiles,
     eligibleTiles: eligibleTiles,

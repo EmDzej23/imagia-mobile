@@ -41,6 +41,9 @@ Future<bool> showExportPaywall(BuildContext context, WidgetRef ref) async {
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
+    // Leave a strip of the screen above the sheet: the content is taller than the
+    // screen now (the inspector), so without it there is nothing to tap to close.
+    constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.9),
     backgroundColor: AppColors.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -317,6 +320,32 @@ class _ExportPaywallState extends ConsumerState<_ExportPaywall> {
         : const ['Full-resolution file', 'Saved to Photos and to your downloads'];
     final rich = _wordArt || _photo;
 
+    // The content scrolls (and the inspector takes drags), so swipe-down can't close the
+    // sheet — a close button that stays put does.
+    return Stack(
+      children: [
+        _content(price: price, what: what, title: title, subtitle: subtitle, perks: perks, rich: rich),
+        Positioned(
+          top: 4,
+          right: 4,
+          child: IconButton(
+            tooltip: 'Close',
+            onPressed: () => Navigator.of(context).pop(false),
+            icon: const Icon(Icons.close_rounded, color: AppColors.textMuted),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _content({
+    required String? price,
+    required String what,
+    required String title,
+    required String subtitle,
+    required List<String> perks,
+    required bool rich,
+  }) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(AppSpacing.x6, AppSpacing.x3, AppSpacing.x6, AppSpacing.x6),
       child: Column(
@@ -379,19 +408,6 @@ class _ExportPaywallState extends ConsumerState<_ExportPaywall> {
             ),
           ],
           const SizedBox(height: AppSpacing.x4),
-          for (final p in perks)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.check_rounded, size: 18, color: AppColors.accent),
-                  const SizedBox(width: AppSpacing.x2),
-                  Expanded(child: Text(p, style: AppTypography.body)),
-                ],
-              ),
-            ),
-          const SizedBox(height: AppSpacing.x4),
           PrimaryButton(
             label: price != null ? 'Get $what · $price' : (_iapReady ? 'Get $what' : 'Get $what…'),
             loading: _buying,
@@ -404,6 +420,20 @@ class _ExportPaywallState extends ConsumerState<_ExportPaywall> {
             style: AppTypography.caption.copyWith(color: AppColors.textMuted),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: AppSpacing.x2),
+          for (final p in perks)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.check_rounded, size: 18, color: AppColors.accent),
+                  const SizedBox(width: AppSpacing.x2),
+                  Expanded(child: Text(p, style: AppTypography.body)),
+                ],
+              ),
+            ),
+          const SizedBox(height: AppSpacing.x2),
           TextButton(
             onPressed: _buying
                 ? null

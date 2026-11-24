@@ -128,7 +128,7 @@ ImageAnalyzer toneFitAnalyzer(
       tonalHistogram: r.tonalHistogram,
       subregionEdgeOrientations: r.subregionEdgeOrientations,
     );
-  });
+  }, fine: fit);
 }
 
 /// Put the TRUE photo colours back on every placement (the plan's recolour targets).

@@ -305,6 +305,7 @@ MosaicSettings sanitizeSettings(MosaicSettings input) {
     shapeMatch: clampD(input.shapeMatch, 0, 5),
     repeatSpacing: input.repeatSpacing.clamp(0, 3),
     optimalPlacement: input.optimalPlacement,
+    finePlacement: input.finePlacement,
     fitLightToLibrary: input.fitLightToLibrary,
     look: const ['bw', 'sepia', 'duotone', 'cinematic', 'pop'].contains(input.look)
         ? input.look
@@ -453,8 +454,9 @@ TileDescriptor createTileDescriptor(
   double colorVariance,
   double edgeOrientation,
   LuminanceHistogram? tonalHistogram,
-  SubregionEdgeOrientations? subregionEdgeOrientations,
-) {
+  SubregionEdgeOrientations? subregionEdgeOrientations, {
+  Uint8List? fine,
+}) {
   return TileDescriptor(
     id: id,
     name: name,
@@ -473,6 +475,7 @@ TileDescriptor createTileDescriptor(
     edgeOrientation: edgeOrientation,
     tonalHistogram: tonalHistogram,
     subregionEdgeOrientations: subregionEdgeOrientations,
+    fine: fine,
   );
 }
 

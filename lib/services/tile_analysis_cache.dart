@@ -21,7 +21,8 @@ class TileAnalysisCache {
   /// Bump when the tile analysis changes, so old results are not reused.
   /// 2: server thumbnails now honour EXIF orientation — v1 entries of phone photos
   /// were analysed (and cached) sideways.
-  static const int _version = 2;
+  /// 3: the analysis carries the fine-placement thumbnail.
+  static const int _version = 3;
   static const Duration _maxAge = Duration(days: 30);
 
   static Directory? _dir;

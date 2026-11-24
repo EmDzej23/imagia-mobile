@@ -52,32 +52,73 @@ class ImageAnalyzer {
     required this.sourceHeight,
     required IntegralImage integral,
     RegionAnalysis Function(RegionAnalysis)? transform,
+    LabColor Function(LabColor)? fineTransform,
   }) : _integral = integral,
-       _transform = transform;
+       _transform = transform,
+       _fineTransform = fineTransform;
 
   final double sourceWidth;
   final double sourceHeight;
   final IntegralImage _integral;
   final RegionAnalysis Function(RegionAnalysis)? _transform;
 
+  /// The same change for one colour of [sampleFine].
+  final LabColor Function(LabColor)? _fineTransform;
+
   /// The same image, with every sampled region passed through [transform] (used by
   /// tone_fit.dart so only the matcher sees the light-fitted photo).
   ImageAnalyzer withTransform(
-    RegionAnalysis Function(RegionAnalysis) transform,
-  ) => ImageAnalyzer(
+    RegionAnalysis Function(RegionAnalysis) transform, {
+    required LabColor Function(LabColor) fine,
+  }) => ImageAnalyzer(
     sourceWidth: sourceWidth,
     sourceHeight: sourceHeight,
     integral: _integral,
     transform: transform,
+    fineTransform: fine,
   );
 
   /// [withTransform] on top of the transform this analyzer already has (the look over
   /// the light fit — web: lookAnalyzer(toneFitAnalyzer(...))).
   ImageAnalyzer thenTransform(
-    RegionAnalysis Function(RegionAnalysis) next,
+    RegionAnalysis Function(RegionAnalysis) next, {
+    required LabColor Function(LabColor) fine,
+  }) {
+    final prev = _transform, prevFine = _fineTransform;
+    return withTransform(
+      prev == null ? next : (r) => next(prev(r)),
+      fine: prevFine == null ? fine : (c) => fine(prevFine(c)),
+    );
+  }
+
+  /// grid×grid Lab samples of a region (row by row, L a b) — see fine_placement.dart.
+  Float64List sampleFine(
+    double x,
+    double y,
+    double width,
+    double height,
+    int grid,
   ) {
-    final prev = _transform;
-    return withTransform(prev == null ? next : (r) => next(prev(r)));
+    final f = _sampleFineFromIntegral(
+      x,
+      y,
+      width,
+      height,
+      sourceWidth,
+      sourceHeight,
+      _integral,
+      grid,
+    );
+    final t = _fineTransform;
+    if (t != null) {
+      for (var i = 0; i < f.length; i += 3) {
+        final c = t(LabColor(f[i], f[i + 1], f[i + 2]));
+        f[i] = c.L;
+        f[i + 1] = c.a;
+        f[i + 2] = c.b;
+      }
+    }
+    return f;
   }
 
   RegionAnalysis sampleRegion({
@@ -255,6 +296,73 @@ IntegralImage buildIntegralImage(Uint8List data, int width, int height) {
     ints: ints,
     floats: floats,
   );
+}
+
+/// Side of the RGB thumbnail kept with every photo ([TileDescriptor.fine]).
+const int fineThumbSize = 32;
+
+/// The whole image as a [fineThumbSize]² RGB thumbnail (box averages, rounded to bytes).
+Uint8List fineThumb(IntegralImage integral) {
+  const F = fineThumbSize;
+  final out = Uint8List(F * F * 3);
+  for (var y = 0; y < F; y++) {
+    final y1 = (y * integral.height) ~/ F;
+    final y2 = math.max(y1 + 1, ((y + 1) * integral.height) ~/ F);
+    for (var x = 0; x < F; x++) {
+      final x1 = (x * integral.width) ~/ F;
+      final x2 = math.max(x1 + 1, ((x + 1) * integral.width) ~/ F);
+      final n = (x2 - x1) * (y2 - y1), o = (y * F + x) * 3;
+      out[o] = (_sumI(integral, _cRed, x1, y1, x2, y2) / n + 0.5).floor();
+      out[o + 1] = (_sumI(integral, _cGreen, x1, y1, x2, y2) / n + 0.5).floor();
+      out[o + 2] = (_sumI(integral, _cBlue, x1, y1, x2, y2) / n + 0.5).floor();
+    }
+  }
+  return out;
+}
+
+Float64List _sampleFineFromIntegral(
+  double regionX,
+  double regionY,
+  double regionWidth,
+  double regionHeight,
+  double sourceWidth,
+  double sourceHeight,
+  IntegralImage integral,
+  int grid,
+) {
+  final W = integral.width, H = integral.height;
+  final x0 = _clampInt(((regionX / sourceWidth) * W).floor(), 0, W - 1);
+  final y0 = _clampInt(((regionY / sourceHeight) * H).floor(), 0, H - 1);
+  final w =
+      _clampInt((((regionX + regionWidth) / sourceWidth) * W).ceil(), x0 + 1, W) -
+      x0;
+  final h =
+      _clampInt(
+        (((regionY + regionHeight) / sourceHeight) * H).ceil(),
+        y0 + 1,
+        H,
+      ) -
+      y0;
+  final out = Float64List(grid * grid * 3);
+  final rgb = RgbColor(0, 0, 0);
+  for (var gy = 0; gy < grid; gy++) {
+    final ya = y0 + (gy * h) ~/ grid;
+    final yb = math.max(ya + 1, y0 + ((gy + 1) * h) ~/ grid);
+    for (var gx = 0; gx < grid; gx++) {
+      final xa = x0 + (gx * w) ~/ grid;
+      final xb = math.max(xa + 1, x0 + ((gx + 1) * w) ~/ grid);
+      final n = (xb - xa) * (yb - ya), o = (gy * grid + gx) * 3;
+      rgb
+        ..r = _sumI(integral, _cRed, xa, ya, xb, yb) / n
+        ..g = _sumI(integral, _cGreen, xa, ya, xb, yb) / n
+        ..b = _sumI(integral, _cBlue, xa, ya, xb, yb) / n;
+      final lab = rgbToLab(rgb);
+      out[o] = lab.L;
+      out[o + 1] = lab.a;
+      out[o + 2] = lab.b;
+    }
+  }
+  return out;
 }
 
 int _clampInt(int value, int min, int max) =>

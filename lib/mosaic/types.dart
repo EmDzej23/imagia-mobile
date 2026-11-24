@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 /// Dart port of `foto-mozaik/lib/mosaic/types.ts`.
@@ -214,6 +215,7 @@ class MosaicSettings {
     this.shapeMatch = 0.5,
     this.repeatSpacing = 2,
     this.optimalPlacement = true,
+    this.finePlacement = true,
     this.fitLightToLibrary = false,
     this.look = 'none',
     this.saBudgetFactor,
@@ -324,6 +326,9 @@ class MosaicSettings {
   int repeatSpacing;
   bool optimalPlacement;
 
+  /// The fine-placement pass (fine_placement.dart). Always on; not a user choice, not saved.
+  bool finePlacement;
+
   /// "Fit light to your photos": the matcher sees the photo's brightness ends squeezed
   /// into the library's range (tone_fit.dart). Opt-in, default off; a user choice, so it
   /// is persisted. Mirrors web `MosaicSettings.fitLightToLibrary`.
@@ -388,6 +393,7 @@ class MosaicSettings {
     double? shapeMatch,
     int? repeatSpacing,
     bool? optimalPlacement,
+    bool? finePlacement,
     bool? fitLightToLibrary,
     String? look,
     double? saBudgetFactor,
@@ -444,6 +450,7 @@ class MosaicSettings {
     shapeMatch: shapeMatch ?? this.shapeMatch,
     repeatSpacing: repeatSpacing ?? this.repeatSpacing,
     optimalPlacement: optimalPlacement ?? this.optimalPlacement,
+    finePlacement: finePlacement ?? this.finePlacement,
     fitLightToLibrary: fitLightToLibrary ?? this.fitLightToLibrary,
     look: look ?? this.look,
     saBudgetFactor: saBudgetFactor ?? this.saBudgetFactor,
@@ -593,6 +600,7 @@ class TileDescriptor {
     required this.edgeOrientation,
     required this.tonalHistogram,
     required this.subregionEdgeOrientations,
+    this.fine,
   });
 
   String id;
@@ -612,6 +620,9 @@ class TileDescriptor {
   double edgeOrientation;
   LuminanceHistogram? tonalHistogram;
   SubregionEdgeOrientations? subregionEdgeOrientations;
+
+  /// RGB thumbnail of the whole photo, for fine_placement.dart (null: not analysed).
+  Uint8List? fine;
 
   /// The inverse of [TileDescriptor.fromJson], for the on-device analysis cache.
   /// Doubles survive the round trip exactly (Dart prints the shortest exact form).
@@ -633,6 +644,7 @@ class TileDescriptor {
     'edgeOrientation': edgeOrientation,
     'tonalHistogram': tonalHistogram,
     'subregionEdgeOrientations': subregionEdgeOrientations,
+    if (fine != null) 'fine': base64Encode(fine!),
   };
 
   factory TileDescriptor.fromJson(Map<String, dynamic> j) => TileDescriptor(
@@ -661,6 +673,7 @@ class TileDescriptor {
     edgeOrientation: (j['edgeOrientation'] as num).toDouble(),
     tonalHistogram: _doubleList(j['tonalHistogram']),
     subregionEdgeOrientations: _floatList(j['subregionEdgeOrientations']),
+    fine: j['fine'] is String ? base64Decode(j['fine'] as String) : null,
   );
 }
 

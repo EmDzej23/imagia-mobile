@@ -218,6 +218,7 @@ Future<TileDescriptor> _analyzeFromProbe(
     region.edgeOrientation,
     region.tonalHistogram,
     region.subregionEdgeOrientations,
+    fine: fineThumb(integral),
   );
 }
 

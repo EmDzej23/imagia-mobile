@@ -91,7 +91,7 @@ List<double> lookRgb(String look, double r, double g, double b) {
   }
 }
 
-LabColor _lookLab(String look, LabColor c) {
+LabColor lookLab(String look, LabColor c) {
   final rgb = labToRgb(c.L, c.a, c.b);
   final o = lookRgb(look, rgb[0], rgb[1], rgb[2]);
   return rgbToLab(RgbColor(o[0], o[1], o[2]));
@@ -114,10 +114,10 @@ ImageAnalyzer lookAnalyzer(ImageAnalyzer base, String? look) {
       width: r.width,
       height: r.height,
       averageColor: _lookAvgRgb(l, r.averageColor),
-      averageLabColor: _lookLab(l, r.averageLabColor),
+      averageLabColor: lookLab(l, r.averageLabColor),
       detailScore: r.detailScore,
       subregionColors: List<LabColor>.of([
-        for (final c in r.subregionColors) _lookLab(l, c),
+        for (final c in r.subregionColors) lookLab(l, c),
       ], growable: false),
       subregionEdges: r.subregionEdges,
       contrastMap: r.contrastMap,
@@ -127,6 +127,7 @@ ImageAnalyzer lookAnalyzer(ImageAnalyzer base, String? look) {
       tonalHistogram: r.tonalHistogram,
       subregionEdgeOrientations: r.subregionEdgeOrientations,
     ),
+    fine: (c) => lookLab(l, c),
   );
 }
 
@@ -146,12 +147,12 @@ List<TileDescriptor> lookTiles(List<TileDescriptor> tiles, String? look) {
         aspectRatio: t.aspectRatio,
         orientation: t.orientation,
         averageColor: _lookAvgRgb(l, t.averageColor),
-        averageLabColor: _lookLab(l, t.averageLabColor),
+        averageLabColor: lookLab(l, t.averageLabColor),
         detailScore: t.detailScore,
         subregionColors: t.subregionColors == null
             ? null
             : List<LabColor>.of([
-                for (final c in t.subregionColors!) _lookLab(l, c),
+                for (final c in t.subregionColors!) lookLab(l, c),
               ], growable: false),
         subregionEdges: t.subregionEdges,
         contrastMap: t.contrastMap,
@@ -160,6 +161,7 @@ List<TileDescriptor> lookTiles(List<TileDescriptor> tiles, String? look) {
         edgeOrientation: t.edgeOrientation,
         tonalHistogram: t.tonalHistogram,
         subregionEdgeOrientations: t.subregionEdgeOrientations,
+        fine: t.fine,
       ),
   ];
 }
